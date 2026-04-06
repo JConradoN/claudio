@@ -38,9 +38,10 @@ type BotController struct {
 	albums           *albumBuffer
 	bridgeFailures   bridgeFailureTracker
 	orchestrator     *orchestrator.Orchestrator
+	nudgeBuffer      *session.NudgeBuffer
 	dreamer          interface {
 		AfterTurn()
-		ExtractMemories(userMessage string, assistantResponse string, cwd string)
+		AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
 	}
 }
 
@@ -103,6 +104,7 @@ func NewBotController(
 		sessions:         sessions,
 		tracker:          tracker,
 		resolver:         resolver,
+		nudgeBuffer:      session.NewNudgeBuffer(),
 		personasDir:      personasDir,
 		memoryDir:        memoryDir,
 		exePath:          exePath,
@@ -123,7 +125,7 @@ func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 // SetDreamer injects the dream system after construction.
 func (bc *BotController) SetDreamer(d interface {
 	AfterTurn()
-	ExtractMemories(userMessage string, assistantResponse string, cwd string)
+	AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
 }) {
 	bc.dreamer = d
 }

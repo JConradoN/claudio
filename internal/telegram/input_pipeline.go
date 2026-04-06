@@ -403,7 +403,9 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 			}
 			if bc.dreamer != nil {
 				bc.dreamer.AfterTurn()
-				bc.dreamer.ExtractMemories(userText, finalText, bc.sessions.GetCwd(chat.ID))
+				cwd := bc.sessions.GetCwd(chat.ID)
+				bc.nudgeBuffer.AddTurn(chat.ID, userText, finalText)
+				bc.dreamer.AfterTurnNudge(chat.ID, cwd, bc.nudgeBuffer)
 			}
 			return outcomeSuccess
 

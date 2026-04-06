@@ -103,13 +103,22 @@ func bootstrapApp() (*app, error) {
 	})
 	bot.SetOrchestrator(orch)
 
-	// Wire dreamer — background memory consolidation + extraction
+	// Wire dreamer — background memory consolidation + nudge review
 	dreamCfg := dream.DefaultConfig()
 	if cfg.DreamModel != "" {
 		dreamCfg.Model = cfg.DreamModel
 	}
 	if cfg.ExtractModel != "" {
 		dreamCfg.ExtractModel = cfg.ExtractModel
+	}
+	if cfg.NudgeEnabled != nil {
+		dreamCfg.NudgeEnabled = *cfg.NudgeEnabled
+	}
+	if cfg.NudgeTurns > 0 {
+		dreamCfg.NudgeTurns = cfg.NudgeTurns
+	}
+	if cfg.NudgeModel != "" {
+		dreamCfg.NudgeModel = cfg.NudgeModel
 	}
 	dreamer := dream.New(resolver.Memory(), resolver, br, dreamCfg)
 	bot.SetDreamer(dreamer)

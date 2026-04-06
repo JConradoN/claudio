@@ -72,6 +72,10 @@ type AppConfig struct {
 
 	DreamModel   string `json:"dream_model,omitempty"`
 	ExtractModel string `json:"extract_model,omitempty"`
+
+	NudgeEnabled *bool  `json:"nudge_enabled,omitempty"` // nil = default true
+	NudgeTurns   int    `json:"nudge_turns,omitempty"`
+	NudgeModel   string `json:"nudge_model,omitempty"`
 }
 
 // ProviderAPIKey returns the API key for the given provider, or empty string.

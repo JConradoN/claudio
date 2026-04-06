@@ -16,7 +16,10 @@ type DreamConfig struct {
 	MinInterval  time.Duration // minimum time between dreams
 	MinTurns     int           // minimum user turns before a dream can fire
 	Model        string        // model to use for consolidation (dream)
-	ExtractModel string        // model to use for memory extraction (after each turn)
+	ExtractModel string        // model to use for memory extraction (legacy, unused with nudge)
+	NudgeEnabled bool          // enable periodic nudge review
+	NudgeTurns   int           // turns between nudge reviews
+	NudgeModel   string        // model for nudge review
 }
 
 // DefaultConfig returns sensible defaults.
@@ -27,18 +30,22 @@ func DefaultConfig() DreamConfig {
 		MinTurns:     5,
 		Model:        "claude-sonnet-4-6",
 		ExtractModel: "claude-haiku-4-5",
+		NudgeEnabled: true,
+		NudgeTurns:   10,
+		NudgeModel:   "claude-haiku-4-5",
 	}
 }
 
-// Dreamer runs background memory consolidation.
+// Dreamer runs background memory consolidation and periodic nudge reviews.
 type Dreamer struct {
 	memoryDir string // global memory dir (~/.aurelia/memory)
 	resolver  *runtime.PathResolver
 	bridge    *bridge.Bridge
 	config    DreamConfig
 
-	turns   atomic.Int32
-	running atomic.Bool
+	turns        atomic.Int32
+	running      atomic.Bool
+	nudgeRunning atomic.Bool
 }
 
 // New creates a Dreamer.
