@@ -313,9 +313,10 @@ func (bc *BotController) executeAsync(chatID int64, messageID int, req bridge.Re
 	// Second attempt — no more retries
 	outcome = bc.processBridgeEventsAsync(chat, ch, progress, userText, messageID)
 
-	if outcome == outcomeSuccess {
+	switch outcome {
+	case outcomeSuccess:
 		bc.bridgeFailures.reset()
-	} else if outcome == outcomeProcessDeath {
+	case outcomeProcessDeath:
 		bc.bridgeFailures.record()
 		_ = SendError(bc.bot, chat, "Processador reiniciado mas não conseguiu completar. Tente novamente.")
 	}
@@ -833,7 +834,7 @@ IMPORTANT: Unlike standard Claude Code, you DO have persistent memory across con
 		teamDir := bc.resolver.ProjectTeamMemoryDir(cwd)
 		projectName := filepath.Base(cwd)
 
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
 
 ### Memory Layers
 
@@ -850,16 +851,16 @@ When something meaningful happens, save it using the Write tool to the correct l
 1. Write/update a topic file in the appropriate directory
 2. Update the MEMORY.md index in that directory: one line per file as - [Title](file.md) — summary
 
-Do NOT just promise to save — actually call Write before your response ends.`, bc.memoryDir, projectDir, projectName, teamDir, projectName))
+Do NOT just promise to save — actually call Write before your response ends.`, bc.memoryDir, projectDir, projectName, teamDir, projectName)
 	} else {
-		sb.WriteString(fmt.Sprintf(`
+		fmt.Fprintf(&sb, `
 
 ### Saving memory
 When something meaningful happens (project work, decisions, personal facts, preferences), save it using the Write tool:
 1. Write/update a topic file in %s/ (e.g. project_xyz.md, preferences.md)
 2. Update %s/MEMORY.md index: one line per file as - [Title](file.md) — summary
 
-Do NOT just promise to save — actually call Write before your response ends.`, bc.memoryDir, bc.memoryDir))
+Do NOT just promise to save — actually call Write before your response ends.`, bc.memoryDir, bc.memoryDir)
 	}
 
 	sb.WriteString(`
@@ -900,14 +901,14 @@ func (bc *BotController) loadMemoryContents(chatID int64) string {
 		projectDir := bc.resolver.ProjectMemoryDir(cwd)
 		projectContent := loadMemoryDir(projectDir)
 		if projectContent != "" {
-			sb.WriteString(fmt.Sprintf("\n\n#### Project: %s (private)\n\n", projectName))
+			fmt.Fprintf(&sb, "\n\n#### Project: %s (private)\n\n", projectName)
 			sb.WriteString(projectContent)
 		}
 
 		teamDir := bc.resolver.ProjectTeamMemoryDir(cwd)
 		teamContent := loadMemoryDir(teamDir)
 		if teamContent != "" {
-			sb.WriteString(fmt.Sprintf("\n\n#### Project: %s (team)\n\n", projectName))
+			fmt.Fprintf(&sb, "\n\n#### Project: %s (team)\n\n", projectName)
 			sb.WriteString(teamContent)
 		}
 	}

@@ -52,14 +52,14 @@ func acquireLock(memoryDir string) error {
 
 // releaseLock removes the lock file.
 func releaseLock(memoryDir string) {
-	os.Remove(lockPath(memoryDir))
+	_ = os.Remove(lockPath(memoryDir))
 }
 
 // touchLock updates the lock file mtime to now, recording when
 // the last dream completed.
 func touchLock(memoryDir string) {
 	now := time.Now()
-	os.Chtimes(lockPath(memoryDir), now, now)
+	_ = os.Chtimes(lockPath(memoryDir), now, now)
 }
 
 // isProcessAlive checks if a process with the given PID exists.

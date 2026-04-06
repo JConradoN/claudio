@@ -291,7 +291,7 @@ func TestDueJobsIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	var count int
 	err = store.db.QueryRow(
@@ -310,7 +310,7 @@ func TestWithTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Verify WithTx commits on success
 	err = store.WithTx(context.Background(), func(tx *sql.Tx) error {

@@ -25,7 +25,7 @@ func TestEnsureClaudeMd_CreatesWhenMissing(t *testing.T) {
 func TestEnsureClaudeMd_DoesNotOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
-	os.WriteFile(path, []byte("# My Custom CLAUDE.md"), 0o644)
+	_ = os.WriteFile(path, []byte("# My Custom CLAUDE.md"), 0o644)
 
 	if err := EnsureClaudeMd(dir); err != nil {
 		t.Fatalf("EnsureClaudeMd: %v", err)

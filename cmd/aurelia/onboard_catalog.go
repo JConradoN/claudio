@@ -7,14 +7,6 @@ import (
 	"github.com/kocar/aurelia/internal/config"
 )
 
-func loadModelOptions(cfg config.EditableConfig) []ModelOption {
-	options, _ := llmModelCatalog(context.Background(), cfg.LLMProvider, modelCatalogCredentials(cfg))
-	if len(options) != 0 {
-		return options
-	}
-	return fallbackModelList(cfg.LLMProvider)
-}
-
 func resolveModelOptions(cfg config.EditableConfig) ([]ModelOption, string) {
 	options, err := llmModelCatalog(context.Background(), cfg.LLMProvider, modelCatalogCredentials(cfg))
 	if err == nil && len(options) != 0 {

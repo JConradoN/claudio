@@ -119,15 +119,6 @@ func provider(name string) (ProviderSpec, bool) {
 	return ProviderSpec{}, false
 }
 
-// defaultModelForProvider returns the default model for the given provider.
-func defaultModelForProvider(p string) string {
-	spec, ok := provider(p)
-	if !ok {
-		return "kimi-k2-thinking"
-	}
-	return spec.DefaultModel
-}
-
 // providerChoices returns the list of provider IDs.
 func providerChoices() []string {
 	specs := providers()
@@ -198,7 +189,7 @@ func fetchOpenRouterModels(ctx context.Context, apiKey string) ([]ModelOption, e
 	if err != nil {
 		return nil, fmt.Errorf("openrouter models request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("openrouter models API returned %d", resp.StatusCode)

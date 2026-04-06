@@ -204,7 +204,7 @@ func TestCron_ScheduledAgentsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCronStore() error = %v", err)
 	}
-	defer cronStore.Close()
+	defer func() { _ = cronStore.Close() }()
 
 	ctx := context.Background()
 	job := cron.CronJob{
@@ -301,7 +301,7 @@ func TestCommandLayer_CronListIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCronStore() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 	job := cron.CronJob{

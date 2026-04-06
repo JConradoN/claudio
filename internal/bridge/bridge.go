@@ -17,7 +17,7 @@ const eventChannelBuffer = 16
 
 // safeClose closes a channel, recovering from panic if already closed.
 func safeClose(ch chan Event) {
-	defer func() { recover() }()
+	defer func() { _ = recover() }()
 	close(ch)
 }
 

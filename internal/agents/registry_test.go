@@ -416,7 +416,7 @@ Prompt.
 
 func TestClassify(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "coder.md"), []byte("---\nname: coder\ndescription: writes code\n---\nYou write code."), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "coder.md"), []byte("---\nname: coder\ndescription: writes code\n---\nYou write code."), 0644)
 	reg, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +433,7 @@ func TestClassify(t *testing.T) {
 
 func TestClassifyNone(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "coder.md"), []byte("---\nname: coder\ndescription: writes code\n---\nYou write code."), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "coder.md"), []byte("---\nname: coder\ndescription: writes code\n---\nYou write code."), 0644)
 	reg, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)

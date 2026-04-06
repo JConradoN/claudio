@@ -311,8 +311,8 @@ func setProviderEnv(cfg *config.AppConfig) {
 
 	// Subscription mode (Anthropic Max): SDK uses OAuth from ~/.claude/.credentials.json
 	if provider == "anthropic" && authMode == "subscription" {
-		os.Unsetenv("ANTHROPIC_API_KEY")
-		os.Unsetenv("ANTHROPIC_BASE_URL")
+		_ = os.Unsetenv("ANTHROPIC_API_KEY")
+		_ = os.Unsetenv("ANTHROPIC_BASE_URL")
 		home, _ := os.UserHomeDir()
 		credPath := filepath.Join(home, ".claude", ".credentials.json")
 		if _, err := os.Stat(credPath); os.IsNotExist(err) {
@@ -339,11 +339,11 @@ func setProviderEnv(cfg *config.AppConfig) {
 	}
 
 	if apiKey != "" {
-		os.Setenv("ANTHROPIC_API_KEY", apiKey)
+		_ = os.Setenv("ANTHROPIC_API_KEY", apiKey)
 	}
 	if baseURL != "" {
-		os.Setenv("ANTHROPIC_BASE_URL", baseURL)
-		os.Setenv("ENABLE_TOOL_SEARCH", "false")
+		_ = os.Setenv("ANTHROPIC_BASE_URL", baseURL)
+		_ = os.Setenv("ENABLE_TOOL_SEARCH", "false")
 	}
 }
 
