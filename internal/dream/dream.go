@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/kocar/aurelia/internal/runtime"
 )
 
 // DreamConfig holds tuning parameters for the dreamer.
@@ -31,7 +32,8 @@ func DefaultConfig() DreamConfig {
 
 // Dreamer runs background memory consolidation.
 type Dreamer struct {
-	memoryDir string
+	memoryDir string // global memory dir (~/.aurelia/memory)
+	resolver  *runtime.PathResolver
 	bridge    *bridge.Bridge
 	config    DreamConfig
 
@@ -40,9 +42,10 @@ type Dreamer struct {
 }
 
 // New creates a Dreamer.
-func New(memoryDir string, br *bridge.Bridge, cfg DreamConfig) *Dreamer {
+func New(memoryDir string, resolver *runtime.PathResolver, br *bridge.Bridge, cfg DreamConfig) *Dreamer {
 	return &Dreamer{
 		memoryDir: memoryDir,
+		resolver:  resolver,
 		bridge:    br,
 		config:    cfg,
 	}

@@ -9,7 +9,7 @@ import (
 	"github.com/kocar/aurelia/internal/bridge"
 )
 
-const extractionPrompt = `You are a memory extraction agent. Analyze a conversation snippet and update memory files with any new information.
+const extractionPromptGlobalOnly = `You are a memory extraction agent. Analyze a conversation snippet and update memory files with any new information.
 
 Memory directory: the current working directory.
 
@@ -49,17 +49,61 @@ If the user asked to forget or remove something, DELETE the memory file with Bas
 - If nothing worth saving happened, make no changes
 `
 
+// buildExtractionPrompt returns the extraction system prompt.
+// When cwd is set, it includes instructions to classify facts into 3 layers.
+// Uses short aliases (GLOBAL, PROJECT, TEAM) with a path mapping to keep things clear.
+func buildExtractionPrompt(globalDir, projectDir, teamDir string) string {
+	return `You are a memory extraction agent. Save information to the correct memory layer.
+
+## Directory mapping
+- GLOBAL = ` + globalDir + `
+- PROJECT = ` + projectDir + `
+- TEAM = ` + teamDir + `
+
+## Where to save each type of fact
+
+GLOBAL — personal facts, preferences, language, hobbies (cross-project)
+TEAM — stack, conventions, architecture, bugs, workarounds (shared with team)
+PROJECT — personal notes, work log, task state (only you)
+
+## How to save
+1. Read MEMORY.md in the target directory
+2. Update existing files or create new ones — one fact per line
+3. Update MEMORY.md index if needed
+
+File format:
+` + "```" + `
+---
+name: Topic Name
+description: One-line description
+type: user|feedback|project|reference
+---
+Content here. One fact per line.
+` + "```" + `
+
+## Rules
+- Use ALL 3 directories — classify each fact into the right one
+- Update existing facts, don't duplicate
+- Delete files with Bash (rm) if user asks to forget
+- Do NOT save conversation transcripts or code
+- Do NOT modify anything in personas/ subdirectory
+- If nothing worth saving, make no changes
+`
+}
+
 // ExtractMemories runs a background agent that analyzes the last user interaction
 // and saves relevant information to memory files.
-func (d *Dreamer) ExtractMemories(userMessage string, assistantResponse string) {
+// When cwd is non-empty and a resolver is available, facts are classified into
+// global, project-private, and project-team layers.
+func (d *Dreamer) ExtractMemories(userMessage string, assistantResponse string, cwd string) {
 	if !d.config.Enabled || d.memoryDir == "" {
 		return
 	}
 
-	go d.runExtraction(userMessage, assistantResponse)
+	go d.runExtraction(userMessage, assistantResponse, cwd)
 }
 
-func (d *Dreamer) runExtraction(userMessage string, assistantResponse string) {
+func (d *Dreamer) runExtraction(userMessage string, assistantResponse string, cwd string) {
 	// Truncate to avoid huge prompts but keep enough for context
 	if len(userMessage) > 1000 {
 		userMessage = userMessage[:1000] + "..."
@@ -71,6 +115,18 @@ func (d *Dreamer) runExtraction(userMessage string, assistantResponse string) {
 	prompt := fmt.Sprintf("Analyze this conversation and save any important information to memory.\n\n**User:** %s\n\n**Assistant:** %s",
 		userMessage, assistantResponse)
 
+	// Determine system prompt and cwd based on whether project context is available
+	sysPrompt := extractionPromptGlobalOnly
+	extractCwd := d.memoryDir
+
+	if cwd != "" && d.resolver != nil {
+		projectDir := d.resolver.ProjectMemoryDir(cwd)
+		teamDir := d.resolver.ProjectTeamMemoryDir(cwd)
+		sysPrompt = buildExtractionPrompt(d.memoryDir, projectDir, teamDir)
+		// Use global dir as cwd so agent can access all 3 directories via absolute paths
+		extractCwd = d.memoryDir
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -79,8 +135,8 @@ func (d *Dreamer) runExtraction(userMessage string, assistantResponse string) {
 		Prompt:  prompt,
 		Options: bridge.RequestOptions{
 			Model:          d.config.ExtractModel,
-			SystemPrompt:   extractionPrompt,
-			Cwd:            d.memoryDir,
+			SystemPrompt:   sysPrompt,
+			Cwd:            extractCwd,
 			MaxTurns:       10,
 			PermissionMode: "bypassPermissions",
 			AllowedTools:   []string{"Read", "Glob", "Grep", "Write", "Edit", "Bash"},

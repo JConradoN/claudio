@@ -75,4 +75,38 @@ func TestProjectHelpers(t *testing.T) {
 	}
 }
 
+func TestSanitizeCwd(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"/media/rafael/projetos/app", "-media-rafael-projetos-app"},
+		{"/home/user/code", "-home-user-code"},
+		{"/", "-"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := SanitizeCwd(c.input); got != c.want {
+			t.Errorf("SanitizeCwd(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
+
+func TestProjectMemoryDirs(t *testing.T) {
+	r := &PathResolver{root: "/tmp/aurelia"}
+	cwd := "/home/user/myproject"
+
+	gotPrivate := r.ProjectMemoryDir(cwd)
+	wantPrivate := filepath.Join("/tmp/aurelia", "projects", "-home-user-myproject", "memory")
+	if gotPrivate != wantPrivate {
+		t.Errorf("ProjectMemoryDir() = %q, want %q", gotPrivate, wantPrivate)
+	}
+
+	gotTeam := r.ProjectTeamMemoryDir(cwd)
+	wantTeam := filepath.Join(wantPrivate, "team")
+	if gotTeam != wantTeam {
+		t.Errorf("ProjectTeamMemoryDir() = %q, want %q", gotTeam, wantTeam)
+	}
+}
+
 

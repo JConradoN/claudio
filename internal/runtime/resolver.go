@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const envKey = "AURELIA_HOME"
@@ -53,3 +54,22 @@ func (r *PathResolver) Agents() string { return filepath.Join(r.root, "agents") 
 
 // DBPath returns the path to a named database file inside the data/ subdirectory.
 func (r *PathResolver) DBPath(name string) string { return filepath.Join(r.Data(), name) }
+
+// SanitizeCwd converts an absolute path to a Claude Code-style sanitized key.
+// Slashes become dashes, drive prefixes are stripped.
+// Example: /media/rafael/projetos/app → -media-rafael-projetos-app
+func SanitizeCwd(cwd string) string {
+	return strings.ReplaceAll(filepath.ToSlash(cwd), "/", "-")
+}
+
+// ProjectMemoryDir returns the per-project private memory directory:
+// ~/.aurelia/projects/<sanitized-cwd>/memory/
+func (r *PathResolver) ProjectMemoryDir(cwd string) string {
+	return filepath.Join(r.root, "projects", SanitizeCwd(cwd), "memory")
+}
+
+// ProjectTeamMemoryDir returns the per-project team (shared) memory directory:
+// ~/.aurelia/projects/<sanitized-cwd>/memory/team/
+func (r *PathResolver) ProjectTeamMemoryDir(cwd string) string {
+	return filepath.Join(r.ProjectMemoryDir(cwd), "team")
+}

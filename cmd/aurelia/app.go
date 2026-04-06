@@ -87,7 +87,7 @@ func bootstrapApp() (*app, error) {
 
 	bot, err := telegram.NewBotController(
 		cfg, br, agentReg, personaSvc, transcriber,
-		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker,
+		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker, resolver,
 	)
 	if err != nil {
 		if closeErr := cronStore.Close(); closeErr != nil {
@@ -111,7 +111,7 @@ func bootstrapApp() (*app, error) {
 	if cfg.ExtractModel != "" {
 		dreamCfg.ExtractModel = cfg.ExtractModel
 	}
-	dreamer := dream.New(resolver.Memory(), br, dreamCfg)
+	dreamer := dream.New(resolver.Memory(), resolver, br, dreamCfg)
 	bot.SetDreamer(dreamer)
 
 	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory())

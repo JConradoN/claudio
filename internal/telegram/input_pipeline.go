@@ -15,6 +15,7 @@ import (
 	"github.com/kocar/aurelia/internal/agents"
 	"github.com/kocar/aurelia/internal/bridge"
 	"github.com/kocar/aurelia/internal/orchestrator"
+	"github.com/kocar/aurelia/internal/runtime"
 )
 
 func (bc *BotController) processInput(c telebot.Context, text string) error {
@@ -56,6 +57,11 @@ func (bc *BotController) processInput(c telebot.Context, text string) error {
 		if detected := bc.detectProjectPath(userText); detected != "" {
 			bc.sessions.SetCwd(chatID, detected)
 			log.Printf("cwd: auto-detected %s for chat=%d", detected, chatID)
+			if bc.resolver != nil {
+				if err := runtime.BootstrapProjectMemory(bc.resolver, detected); err != nil {
+					log.Printf("cwd: failed to bootstrap project memory for %s: %v", detected, err)
+				}
+			}
 		}
 	}
 
@@ -397,7 +403,7 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 			}
 			if bc.dreamer != nil {
 				bc.dreamer.AfterTurn()
-				bc.dreamer.ExtractMemories(userText, finalText)
+				bc.dreamer.ExtractMemories(userText, finalText, bc.sessions.GetCwd(chat.ID))
 			}
 			return outcomeSuccess
 
@@ -447,9 +453,9 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 		sections = append(sections, agentSection)
 	}
 
-	// Orchestrator TLC methodology (always active when orchestrator is wired)
+	// Orchestrator TLC methodology — only when user signals planning/implementation intent
 	var orchLen int
-	if bc.orchestrator != nil {
+	if bc.orchestrator != nil && looksLikePlanningIntent(userText) {
 		agentSummaries := bc.buildAgentSummaries()
 		orchSection := orchestrator.BuildOrchestratorPrompt("", agentSummaries)
 		orchLen = len(orchSection)
@@ -468,7 +474,7 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 
 	// Auto-memory instructions (SDK auto-memory doesn't activate via programmatic API,
 	// so we instruct the model explicitly)
-	memorySection := bc.buildMemoryInstructions()
+	memorySection := bc.buildMemoryInstructions(chatID)
 	sections = append(sections, memorySection)
 
 	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
@@ -486,6 +492,7 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 // detectProjectPath tries to find a project path from the user message.
 // 1. Looks for absolute paths in the text
 // 2. Searches memory files for project names mentioned in the text
+// 3. Scans the user's home directory for directories matching words in the text
 func (bc *BotController) detectProjectPath(text string) string {
 	// 1. Absolute path in text (must be deep enough to be a real project)
 	for _, word := range strings.Fields(text) {
@@ -504,9 +511,22 @@ func (bc *BotController) detectProjectPath(text string) string {
 	}
 
 	// 2. Match project names from memory files
-	if bc.memoryDir == "" {
-		return ""
+	if bc.memoryDir != "" {
+		if found := bc.detectFromMemoryFiles(text); found != "" {
+			return found
+		}
 	}
+
+	// 3. Scan disk for directory name match
+	if found := scanForProject(text); found != "" {
+		return found
+	}
+
+	return ""
+}
+
+// detectFromMemoryFiles searches memory files for projects mentioned in text.
+func (bc *BotController) detectFromMemoryFiles(text string) string {
 	entries, err := os.ReadDir(bc.memoryDir)
 	if err != nil {
 		return ""
@@ -558,8 +578,175 @@ func (bc *BotController) detectProjectPath(text string) string {
 			}
 		}
 	}
+	return ""
+}
+
+// skipDirs contains directory names to skip during disk scan.
+var skipDirs = map[string]bool{
+	"node_modules": true, ".git": true, ".cache": true, ".local": true,
+	".npm": true, ".cargo": true, ".rustup": true, "vendor": true,
+	".vscode": true, ".idea": true, "__pycache__": true, ".tox": true,
+	"dist": true, "build": true, ".next": true, ".nuxt": true,
+	".gradle": true, ".m2": true, "target": true, ".docker": true,
+	".virtualenvs": true, ".pyenv": true, ".nvm": true, ".sdkman": true,
+}
+
+// scanForProject walks the user's home directory (and mounted volumes) looking
+// for a directory whose name fuzzy-matches a word from the user's message.
+// Depth is limited and heavy directories are skipped for performance.
+func scanForProject(text string) string {
+	// Extract candidate words that look like project names.
+	// A candidate must contain a hyphen, underscore, or digit — plain words are too ambiguous.
+	var candidates []string
+	for _, word := range strings.Fields(strings.ToLower(text)) {
+		clean := strings.Trim(word, ".,!?;:()\"'/")
+		if len(clean) < 3 || isStopWord(clean) {
+			continue
+		}
+		if looksLikeProjectName(clean) {
+			candidates = append(candidates, clean)
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// Roots to scan: home + mounted media volumes
+	var roots []string
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		roots = append(roots, home)
+	}
+	// Common mount points for external drives
+	for _, media := range []string{"/media", "/mnt"} {
+		if userDirs, err := os.ReadDir(media); err == nil {
+			for _, u := range userDirs {
+				if u.IsDir() {
+					roots = append(roots, filepath.Join(media, u.Name()))
+				}
+			}
+		}
+	}
+
+	const maxDepth = 4
+
+	for _, root := range roots {
+		rootDepth := strings.Count(root, string(filepath.Separator))
+		var result string
+
+		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				if err != nil && d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			name := d.Name()
+
+			// Skip hidden dirs (except the root itself) and known heavy dirs
+			if path != root {
+				if strings.HasPrefix(name, ".") || skipDirs[name] {
+					return filepath.SkipDir
+				}
+			}
+
+			// Depth limit
+			depth := strings.Count(path, string(filepath.Separator)) - rootDepth
+			if depth > maxDepth {
+				return filepath.SkipDir
+			}
+
+			// Skip root dirs themselves and depth-1 dirs (too shallow to be projects)
+			if depth < 2 {
+				return nil
+			}
+
+			// Skip the home directory itself
+			if home != "" && path == home {
+				return nil
+			}
+
+			// Check if directory name matches any candidate
+			lowerName := strings.ToLower(name)
+			for _, c := range candidates {
+				if lowerName == c || strings.Contains(lowerName, c) || strings.Contains(c, lowerName) {
+					// Verify it looks like a project (has at least some files)
+					entries, readErr := os.ReadDir(path)
+					if readErr != nil || len(entries) < 2 {
+						continue
+					}
+					result = path
+					return filepath.SkipAll
+				}
+			}
+			return nil
+		})
+
+		if result != "" {
+			return result
+		}
+	}
 
 	return ""
+}
+
+// isStopWord returns true for common words that shouldn't match project names.
+var stopWords = map[string]bool{
+	"the": true, "and": true, "for": true, "with": true, "from": true,
+	"that": true, "this": true, "into": true, "have": true, "been": true,
+	"will": true, "can": true, "are": true, "was": true, "were": true,
+	"uma": true, "que": true, "com": true, "para": true,
+	"por": true, "como": true, "mas": true, "mais": true, "esse": true,
+	"essa": true, "isto": true, "isso": true, "aqui": true, "ali": true,
+	"nos": true, "vou": true, "vamos": true, "dar": true, "olhada": true,
+	"olhar": true, "ver": true, "projeto": true, "project": true,
+	"look": true, "let": true, "check": true, "open": true,
+}
+
+func isStopWord(w string) bool {
+	return stopWords[w]
+}
+
+// looksLikeProjectName returns true if the word looks like a project/repo name
+// rather than a plain natural-language word. Indicators: hyphens, underscores,
+// digits, dots, or camelCase transitions.
+func looksLikeProjectName(w string) bool {
+	if strings.ContainsAny(w, "-_.0123456789") {
+		return true
+	}
+	// camelCase: lowercase followed by uppercase (e.g. "myProject")
+	for i := 1; i < len(w); i++ {
+		if w[i-1] >= 'a' && w[i-1] <= 'z' && w[i] >= 'A' && w[i] <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+// planningKeywords triggers orchestrator injection when present in user text.
+var planningKeywords = []string{
+	// Portuguese
+	"implementa", "implemente", "implanta", "crie", "criar", "construa", "construir",
+	"planejar", "planeje", "planeja", "plano", "spec", "design", "tarefa",
+	"refatorar", "refatore", "migrar", "migre", "reescrever", "reescreva",
+	"adicionar", "adicione", "feature", "funcionalidade",
+	"aprovado", "pode fazer", "manda ver", "bora", "execute",
+	// English
+	"implement", "build", "create", "plan", "refactor", "migrate", "rewrite",
+	"add feature", "approved", "execute", "ship it",
+}
+
+// looksLikePlanningIntent returns true when the user message suggests they want
+// to plan, implement, or execute something — not just chat or ask questions.
+func looksLikePlanningIntent(text string) bool {
+	lower := strings.ToLower(text)
+	for _, kw := range planningKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractFrontmatterField extracts a field value from YAML frontmatter.
@@ -621,32 +808,63 @@ IMPORTANT rules about the working directory:
 }
 
 // buildMemoryInstructions returns the system prompt section for persistent memory.
-// It reads MEMORY.md and referenced memory files, injecting their contents directly
-// so the model always has context — even after SDK context compaction.
-func (bc *BotController) buildMemoryInstructions() string {
+// It reads memory files from up to 3 layers (global + project-private + project-team)
+// and injects their contents so the model always has context — even after SDK context compaction.
+func (bc *BotController) buildMemoryInstructions(chatID int64) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf(`## Persistent Memory — YOU HAVE MEMORY
+	cwd := bc.sessions.GetCwd(chatID)
+	hasProject := cwd != "" && bc.resolver != nil
 
-IMPORTANT: Unlike standard Claude Code, you DO have persistent memory across conversations. Your memory contents are loaded below. NEVER say you "don't have memory" or that "each session starts from zero" — that is FALSE. Always check your memory contents below before answering questions about past conversations.
+	sb.WriteString(`## Persistent Memory — YOU HAVE MEMORY
 
-Memory directory: %s
+IMPORTANT: Unlike standard Claude Code, you DO have persistent memory across conversations. Your memory contents are loaded below. NEVER say you "don't have memory" or that "each session starts from zero" — that is FALSE. Always check your memory contents below before answering questions about past conversations.`)
+
+	// Saving instructions depend on whether project context is active
+	if hasProject {
+		projectDir := bc.resolver.ProjectMemoryDir(cwd)
+		teamDir := bc.resolver.ProjectTeamMemoryDir(cwd)
+		projectName := filepath.Base(cwd)
+
+		sb.WriteString(fmt.Sprintf(`
+
+### Memory Layers
+
+You have 3 memory layers. Save each fact in the correct one:
+
+| Layer | Directory | What to save |
+|---|---|---|
+| **Global** | %s | Personal facts, preferences, communication style — applies across all projects |
+| **Project Private** | %s | Your personal notes, work log, individual decisions for project "%s" |
+| **Project Team** | %s | Stack, conventions, architecture, known bugs — useful for any team member on "%s" |
+
+### Saving memory
+When something meaningful happens, save it using the Write tool to the correct layer:
+1. Write/update a topic file in the appropriate directory
+2. Update the MEMORY.md index in that directory: one line per file as - [Title](file.md) — summary
+
+Do NOT just promise to save — actually call Write before your response ends.`, bc.memoryDir, projectDir, projectName, teamDir, projectName))
+	} else {
+		sb.WriteString(fmt.Sprintf(`
 
 ### Saving memory
 When something meaningful happens (project work, decisions, personal facts, preferences), save it using the Write tool:
 1. Write/update a topic file in %s/ (e.g. project_xyz.md, preferences.md)
 2. Update %s/MEMORY.md index: one line per file as - [Title](file.md) — summary
 
-Do NOT just promise to save — actually call Write before your response ends.
+Do NOT just promise to save — actually call Write before your response ends.`, bc.memoryDir, bc.memoryDir))
+	}
+
+	sb.WriteString(`
 
 ### Forgetting/removing memories
 If the user asks to forget or remove something, delete the file with Bash (rm) and remove its entry from MEMORY.md. Do NOT just say you removed it — actually delete the file.
 
 ### Project configuration files
-Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversation. Only reference them when a working directory is set AND the user asks about project configuration.`, bc.memoryDir, bc.memoryDir, bc.memoryDir))
+Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversation. Only reference them when a working directory is set AND the user asks about project configuration.`)
 
-	// Inject actual memory contents so model always has context
-	memoryContent := bc.loadMemoryContents()
+	// Inject actual memory contents
+	memoryContent := bc.loadMemoryContents(chatID)
 	if memoryContent != "" {
 		sb.WriteString("\n\n### Current Memory Contents\n\n")
 		sb.WriteString(memoryContent)
@@ -655,15 +873,48 @@ Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversati
 	return sb.String()
 }
 
-// loadMemoryContents reads MEMORY.md and all referenced .md files from the memory
-// directory, returning their contents for injection into the system prompt.
-func (bc *BotController) loadMemoryContents() string {
-	if bc.memoryDir == "" {
+// loadMemoryContents reads memory files from all available layers and returns
+// their contents for injection into the system prompt.
+func (bc *BotController) loadMemoryContents(chatID int64) string {
+	var sb strings.Builder
+
+	// Layer 1: Global memory (always)
+	globalContent := loadMemoryDir(bc.memoryDir)
+	if globalContent != "" {
+		sb.WriteString("#### Global (cross-project)\n\n")
+		sb.WriteString(globalContent)
+	}
+
+	// Layers 2 & 3: Project memory (only when cwd is set)
+	cwd := bc.sessions.GetCwd(chatID)
+	if cwd != "" && bc.resolver != nil {
+		projectName := filepath.Base(cwd)
+
+		projectDir := bc.resolver.ProjectMemoryDir(cwd)
+		projectContent := loadMemoryDir(projectDir)
+		if projectContent != "" {
+			sb.WriteString(fmt.Sprintf("\n\n#### Project: %s (private)\n\n", projectName))
+			sb.WriteString(projectContent)
+		}
+
+		teamDir := bc.resolver.ProjectTeamMemoryDir(cwd)
+		teamContent := loadMemoryDir(teamDir)
+		if teamContent != "" {
+			sb.WriteString(fmt.Sprintf("\n\n#### Project: %s (team)\n\n", projectName))
+			sb.WriteString(teamContent)
+		}
+	}
+
+	return sb.String()
+}
+
+// loadMemoryDir reads MEMORY.md and all .md files from a directory.
+func loadMemoryDir(dir string) string {
+	if dir == "" {
 		return ""
 	}
 
-	// Read MEMORY.md index
-	indexPath := filepath.Join(bc.memoryDir, "MEMORY.md")
+	indexPath := filepath.Join(dir, "MEMORY.md")
 	indexData, err := os.ReadFile(indexPath)
 	if err != nil || len(indexData) == 0 {
 		return ""
@@ -673,8 +924,7 @@ func (bc *BotController) loadMemoryContents() string {
 	sb.WriteString("**MEMORY.md (index):**\n")
 	sb.WriteString(string(indexData))
 
-	// Read all .md files in memory dir (excluding MEMORY.md and personas/)
-	entries, err := os.ReadDir(bc.memoryDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return sb.String()
 	}
@@ -684,7 +934,7 @@ func (bc *BotController) loadMemoryContents() string {
 		if entry.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(bc.memoryDir, name))
+		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil || len(data) == 0 {
 			continue
 		}
@@ -738,38 +988,18 @@ func (bc *BotController) buildCronInstructions(chatID int64) string {
 	}
 	chatFlag := fmt.Sprintf("--chat-id %d", chatID)
 
-	return fmt.Sprintf(`## Scheduling Tasks — MANDATORY
+	return fmt.Sprintf(`## Scheduling Tasks
 
-CRITICAL: You MUST use the Aurelia cron CLI for ALL scheduling. NEVER use your internal scheduling tools — they die with the session. The Aurelia cron is persistent and delivers results to Telegram automatically.
+Use the Aurelia cron CLI for ALL scheduling. Internal scheduling tools die with the session — only the CLI persists.
 
-Recurring schedule:
-`+"```bash\n%s cron add \"<cron-expression>\" \"<prompt>\" %s\n```"+`
+- Recurring: `+"`%s cron add \"<cron-expr>\" \"<prompt>\" %s`"+`
+- One-time: `+"`%s cron once \"<ISO-timestamp>\" \"<prompt>\" %s`"+`
+- List: `+"`%s cron list %s`"+` | Delete: `+"`%s cron del <id>`"+` | Pause/Resume: `+"`%s cron pause|resume <id>`"+`
 
-One-time schedule:
-`+"```bash\n%s cron once \"<ISO-timestamp>\" \"<prompt>\" %s\n```"+`
-
-List schedules:
-`+"```bash\n%s cron list %s\n```"+`
-
-Delete: `+"`%s cron del <job-id>`"+`
-Pause: `+"`%s cron pause <job-id>`"+`
-Resume: `+"`%s cron resume <job-id>`"+`
-
-Cron expressions: "30 8 * * *" = daily 8:30 | "0 9 * * 1" = Monday 9:00 | "0 */2 * * *" = every 2h
-
-The --chat-id flag is REQUIRED — it ensures results are delivered to this Telegram chat.
-
-CRITICAL RULES FOR CRON PROMPTS:
-1. The prompt is an INSTRUCTION, not content. It tells the agent WHAT TO DO when the job fires.
-2. It executes in an isolated session with NO conversation history.
-3. The agent will execute the prompt and its text output is delivered directly to Telegram.
-4. NEVER paste content/data into the prompt. Write an ACTION instruction.
-5. Bad: "Envie esta newsletter: [conteúdo colado aqui]"
-6. Good: "Pesquise as principais notícias de tech e IA da última semana usando WebSearch. Para cada notícia inclua título, resumo de 1 linha e link. Formate como newsletter com emojis e seções: IA, Hardware, Dev, Segurança, Regulação. Encerre com um insight da semana e hashtags."`,
+Cron prompts are ACTION instructions (not content). They run in isolated sessions with no history. The --chat-id flag is required.`,
 		bin, chatFlag,
 		bin, chatFlag,
 		bin, chatFlag,
-		bin,
 		bin, bin,
 	)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/kocar/aurelia/internal/config"
 	"github.com/kocar/aurelia/internal/orchestrator"
 	"github.com/kocar/aurelia/internal/persona"
+	"github.com/kocar/aurelia/internal/runtime"
 	"github.com/kocar/aurelia/internal/session"
 	"github.com/kocar/aurelia/pkg/stt"
 )
@@ -28,6 +29,7 @@ type BotController struct {
 	cronHandler      *CronCommandHandler
 	sessions         *session.Store
 	tracker          *session.Tracker
+	resolver         *runtime.PathResolver
 	personasDir      string
 	memoryDir        string // path to ~/.aurelia/memory for SDK auto-memory
 	exePath          string // path to aurelia binary for CLI instructions in system prompt
@@ -38,7 +40,7 @@ type BotController struct {
 	orchestrator     *orchestrator.Orchestrator
 	dreamer          interface {
 		AfterTurn()
-		ExtractMemories(userMessage string, assistantResponse string)
+		ExtractMemories(userMessage string, assistantResponse string, cwd string)
 	}
 }
 
@@ -77,6 +79,7 @@ func NewBotController(
 	exePath string,
 	sessions *session.Store,
 	tracker *session.Tracker,
+	resolver *runtime.PathResolver,
 ) (*BotController, error) {
 
 	pref := telebot.Settings{
@@ -99,6 +102,7 @@ func NewBotController(
 		cronHandler:      cronHandler,
 		sessions:         sessions,
 		tracker:          tracker,
+		resolver:         resolver,
 		personasDir:      personasDir,
 		memoryDir:        memoryDir,
 		exePath:          exePath,
@@ -119,7 +123,7 @@ func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 // SetDreamer injects the dream system after construction.
 func (bc *BotController) SetDreamer(d interface {
 	AfterTurn()
-	ExtractMemories(userMessage string, assistantResponse string)
+	ExtractMemories(userMessage string, assistantResponse string, cwd string)
 }) {
 	bc.dreamer = d
 }

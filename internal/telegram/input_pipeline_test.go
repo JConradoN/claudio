@@ -20,6 +20,7 @@ func TestBuildSystemPrompt_WithoutDependencies(t *testing.T) {
 		config: &config.AppConfig{
 			Providers:        map[string]config.ProviderConfig{},
 		},
+		sessions: session.NewStore(),
 	}
 
 	prompt, err := bc.buildSystemPrompt("hello", nil, 0, 0)
@@ -38,6 +39,7 @@ func TestBuildSystemPrompt_WithAgent(t *testing.T) {
 		config: &config.AppConfig{
 			Providers:        map[string]config.ProviderConfig{},
 		},
+		sessions: session.NewStore(),
 	}
 
 	agent := &agents.Agent{
@@ -64,6 +66,7 @@ func TestBuildSystemPrompt_AgentWithEmptyPrompt(t *testing.T) {
 		config: &config.AppConfig{
 			Providers:        map[string]config.ProviderConfig{},
 		},
+		sessions: session.NewStore(),
 	}
 
 	agent := &agents.Agent{

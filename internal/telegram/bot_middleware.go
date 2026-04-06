@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/telebot.v3"
+
+	"github.com/kocar/aurelia/internal/runtime"
 )
 
 func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
@@ -95,6 +97,11 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		return SendText(bc.bot, c.Chat(), fmt.Sprintf("Diretório atual: %s", cwd))
 	}
 	bc.sessions.SetCwd(c.Chat().ID, args)
+	if bc.resolver != nil {
+		if err := runtime.BootstrapProjectMemory(bc.resolver, args); err != nil {
+			log.Printf("cwd: failed to bootstrap project memory for %s: %v", args, err)
+		}
+	}
 	return SendText(bc.bot, c.Chat(), fmt.Sprintf("Diretório configurado: %s", args))
 }
 

@@ -78,6 +78,47 @@ func TestBootstrapProject_CreatesLocalSkillsDirectory(t *testing.T) {
 	}
 }
 
+func TestBootstrapProjectMemory_CreatesDirectoriesAndIndex(t *testing.T) {
+	root := t.TempDir()
+	r := &PathResolver{root: root}
+	cwd := "/home/user/myproject"
+
+	if err := BootstrapProjectMemory(r, cwd); err != nil {
+		t.Fatalf("BootstrapProjectMemory() error: %v", err)
+	}
+
+	privateDir := r.ProjectMemoryDir(cwd)
+	teamDir := r.ProjectTeamMemoryDir(cwd)
+
+	for _, dir := range []string{privateDir, teamDir} {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			t.Errorf("directory not created: %s (err=%v)", dir, err)
+		}
+		indexPath := filepath.Join(dir, "MEMORY.md")
+		if _, err := os.Stat(indexPath); err != nil {
+			t.Errorf("MEMORY.md not created in %s: %v", dir, err)
+		}
+	}
+
+	// Idempotent: running again should not fail or overwrite
+	if err := BootstrapProjectMemory(r, cwd); err != nil {
+		t.Fatalf("second BootstrapProjectMemory() error: %v", err)
+	}
+}
+
+func TestBootstrapProjectMemory_EmptyCwd(t *testing.T) {
+	root := t.TempDir()
+	r := &PathResolver{root: root}
+
+	if err := BootstrapProjectMemory(r, ""); err != nil {
+		t.Fatalf("BootstrapProjectMemory('') should be no-op, got: %v", err)
+	}
+	if err := BootstrapProjectMemory(r, "  "); err != nil {
+		t.Fatalf("BootstrapProjectMemory('  ') should be no-op, got: %v", err)
+	}
+}
+
 func TestBootstrap_PermissionsUnix(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits are no-op on Windows (ACL-based)")
