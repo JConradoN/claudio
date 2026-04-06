@@ -84,6 +84,7 @@ func TestMatch(t *testing.T) {
 
 			if got == nil {
 				t.Fatalf("MatchCommand(%q) = nil, want %v", tt.text, *tt.want)
+				return
 			}
 			if got.Type != *tt.want {
 				t.Fatalf("MatchCommand(%q).Type = %v, want %v", tt.text, got.Type, *tt.want)

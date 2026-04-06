@@ -17,6 +17,7 @@ Vou começar agora.`
 	}
 	if plan == nil {
 		t.Fatal("expected plan, got nil")
+		return
 	}
 	if len(plan.Tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(plan.Tasks))

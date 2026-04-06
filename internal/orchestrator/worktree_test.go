@@ -63,7 +63,7 @@ func TestWorktreeManager_CreateAndCleanup(t *testing.T) {
 
 	// Create a file in the worktree
 	testFile := filepath.Join(wt.Path, "test.txt")
-	os.WriteFile(testFile, []byte("hello"), 0o644)
+	_ = os.WriteFile(testFile, []byte("hello"), 0o644)
 	run(t, wt.Path, "git", "add", ".")
 	run(t, wt.Path, "git", "commit", "-m", "add test file")
 

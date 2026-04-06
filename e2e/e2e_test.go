@@ -64,6 +64,7 @@ func TestWiring_AllComponentsInitialize(t *testing.T) {
 	agent := agentReg.Get("helper")
 	if agent == nil {
 		t.Fatal("expected agent 'helper' to exist")
+		return
 	}
 	if agent.Model != "claude-sonnet-4-6" {
 		t.Fatalf("expected model 'claude-sonnet-4-6', got %q", agent.Model)
@@ -107,6 +108,7 @@ func TestRouting_BuildsCorrectPrompt(t *testing.T) {
 	agent := reg.Route("@helper analyze this")
 	if agent == nil {
 		t.Fatal("expected routing to match 'helper'")
+		return
 	}
 	if agent.Name != "helper" {
 		t.Fatalf("expected agent 'helper', got %q", agent.Name)
@@ -116,6 +118,7 @@ func TestRouting_BuildsCorrectPrompt(t *testing.T) {
 	agent = reg.Route("@coder fix the bug")
 	if agent == nil {
 		t.Fatal("expected routing to match 'coder'")
+		return
 	}
 	if agent.Name != "coder" {
 		t.Fatalf("expected agent 'coder', got %q", agent.Name)

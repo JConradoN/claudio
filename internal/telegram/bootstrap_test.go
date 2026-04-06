@@ -110,6 +110,7 @@ func TestBootstrapStartResponse_WhenBootstrapNeeded(t *testing.T) {
 	}
 	if menu == nil {
 		t.Fatal("expected bootstrap menu")
+		return
 	}
 	if len(menu.InlineKeyboard) != 2 {
 		t.Fatalf("expected two inline rows, got %d", len(menu.InlineKeyboard))

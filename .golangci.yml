@@ -1,0 +1,9 @@
+version: "2"
+
+linters:
+  settings:
+    staticcheck:
+      checks:
+        - "all"
+        - "-SA5011"  # false positive: t.Fatal stops execution but analyzer doesn't see it
+        - "-ST1000"  # package comments — not enforced in this project

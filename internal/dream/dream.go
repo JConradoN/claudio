@@ -1,3 +1,4 @@
+// Package dream provides background memory consolidation and nudge review.
 package dream
 
 import (
