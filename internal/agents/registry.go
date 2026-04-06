@@ -87,6 +87,11 @@ func (r *Registry) Scheduled() []*Agent {
 	return result
 }
 
+// NewTestRegistry creates a Registry from a pre-built map. For testing only.
+func NewTestRegistry(agentMap map[string]*Agent) *Registry {
+	return &Registry{agents: agentMap}
+}
+
 // Route checks if message starts with @agentname (case-insensitive)
 // and returns the matching agent, or nil if no match.
 func (r *Registry) Route(message string) *Agent {

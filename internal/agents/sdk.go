@@ -20,6 +20,12 @@ func BuildSDKAgents(r *Registry) map[string]any {
 		if len(a.AllowedTools) > 0 {
 			def["tools"] = a.AllowedTools
 		}
+		if len(a.DisallowedTools) > 0 {
+			def["disallowedTools"] = a.DisallowedTools
+		}
+		if a.MaxTurns > 0 {
+			def["maxTurns"] = a.MaxTurns
+		}
 		result[a.Name] = def
 	}
 	return result

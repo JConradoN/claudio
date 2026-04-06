@@ -64,4 +64,42 @@ func TestBuildSDKAgents_OmitsEmptyFields(t *testing.T) {
 	if _, ok := m["tools"]; ok {
 		t.Error("tools should be omitted when empty")
 	}
+	if _, ok := m["disallowedTools"]; ok {
+		t.Error("disallowedTools should be omitted when empty")
+	}
+	if _, ok := m["maxTurns"]; ok {
+		t.Error("maxTurns should be omitted when zero")
+	}
+}
+
+func TestBuildSDKAgents_DisallowedToolsAndMaxTurns(t *testing.T) {
+	r := &Registry{agents: map[string]*Agent{
+		"reviewer": {
+			Name:            "reviewer",
+			Description:     "reviews code",
+			Prompt:          "You review code.",
+			AllowedTools:    []string{"Read", "Grep", "Glob"},
+			DisallowedTools: []string{"Bash", "Write"},
+			MaxTurns:        10,
+		},
+	}}
+	got := BuildSDKAgents(r)
+	m := got["reviewer"].(map[string]any)
+
+	dt, ok := m["disallowedTools"]
+	if !ok {
+		t.Fatal("missing 'disallowedTools' key")
+	}
+	dtSlice := dt.([]string)
+	if len(dtSlice) != 2 || dtSlice[0] != "Bash" {
+		t.Errorf("disallowedTools = %v", dtSlice)
+	}
+
+	mt, ok := m["maxTurns"]
+	if !ok {
+		t.Fatal("missing 'maxTurns' key")
+	}
+	if mt.(int) != 10 {
+		t.Errorf("maxTurns = %v, want 10", mt)
+	}
 }

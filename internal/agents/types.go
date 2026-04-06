@@ -8,6 +8,8 @@ type Agent struct {
 	Schedule     string         `yaml:"schedule,omitempty"`
 	Cwd          string         `yaml:"cwd,omitempty"`
 	MCPServers   map[string]any `yaml:"mcp_servers,omitempty"`
-	AllowedTools []string       `yaml:"allowed_tools,omitempty"`
-	Prompt       string         `yaml:"-"` // body after frontmatter
+	AllowedTools    []string       `yaml:"allowed_tools,omitempty"`
+	DisallowedTools []string       `yaml:"disallowed_tools,omitempty"`
+	MaxTurns        int            `yaml:"max_turns,omitempty"`
+	Prompt          string         `yaml:"-"` // body after frontmatter
 }

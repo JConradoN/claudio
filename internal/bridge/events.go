@@ -22,9 +22,11 @@ type Event struct {
 	Message string `json:"message,omitempty"`
 
 	// result event
-	CostUSD    float64 `json:"cost_usd,omitempty"`
-	DurationMs int64   `json:"duration_ms,omitempty"`
-	NumTurns   int     `json:"num_turns,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+	DurationMs   int64   `json:"duration_ms,omitempty"`
+	NumTurns     int     `json:"num_turns,omitempty"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
 }
 
 // IsTerminal returns true if the event signals the end of a request stream.

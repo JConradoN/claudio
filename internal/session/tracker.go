@@ -52,11 +52,20 @@ func (t *Tracker) Add(chatID int64, inputTokens, outputTokens, numTurns int, cos
 	return u.TotalTokens()
 }
 
-// RecordUsage estimates tokens from turns, tracks them, and returns true
-// if the session should be reset (threshold exceeded).
-func (t *Tracker) RecordUsage(chatID int64, numTurns int, costUSD float64, maxTokens int) bool {
-	estimatedTokens := numTurns * estimatedTokensPerTurn
-	totalTokens := t.Add(chatID, estimatedTokens, 0, numTurns, costUSD)
+// RecordUsage tracks real token usage from the bridge result event.
+// Uses real input/output tokens when available (from SDK usage field),
+// falls back to turn-based estimation only when real tokens are zero.
+// Returns true if the session should be reset (threshold exceeded).
+func (t *Tracker) RecordUsage(chatID int64, numTurns int, costUSD float64, maxTokens int, inputTokens int, outputTokens int) bool {
+	realTokens := inputTokens + outputTokens
+	if realTokens > 0 {
+		// Use real token counts from the SDK
+		totalTokens := t.Add(chatID, inputTokens, outputTokens, numTurns, costUSD)
+		return maxTokens > 0 && totalTokens >= maxTokens
+	}
+	// Fallback: estimate from turns (legacy behavior)
+	estimated := numTurns * estimatedTokensPerTurn
+	totalTokens := t.Add(chatID, estimated, 0, numTurns, costUSD)
 	return maxTokens > 0 && totalTokens >= maxTokens
 }
 

@@ -282,6 +282,7 @@ async function handleQuery(req: Request): Promise<void> {
         case "result": {
           const subtype = msg.subtype as string | undefined;
           if (subtype === "success") {
+            const usage = msg.usage as Record<string, number> | undefined;
             emitReq({
               event: "result",
               content: msg.result as string,
@@ -289,6 +290,8 @@ async function handleQuery(req: Request): Promise<void> {
               session_id: msg.session_id as string,
               duration_ms: msg.duration_ms as number,
               num_turns: msg.num_turns as number,
+              input_tokens: usage?.input_tokens ?? 0,
+              output_tokens: usage?.output_tokens ?? 0,
             });
           } else {
             // error_max_turns, error_during_execution, etc.

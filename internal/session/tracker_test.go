@@ -18,16 +18,54 @@ func TestTracker_AddAndGet(t *testing.T) {
 	}
 }
 
-func TestTracker_RecordUsage(t *testing.T) {
+func TestTracker_RecordUsage_WithRealTokens(t *testing.T) {
 	tr := NewTracker()
-	shouldReset := tr.RecordUsage(1, 5, 0.10, 100000)
+	// Real tokens: 8000 input + 2000 output = 10000 total
+	shouldReset := tr.RecordUsage(1, 5, 0.10, 100000, 8000, 2000)
 	if shouldReset {
-		t.Fatal("should not reset below threshold")
+		t.Fatal("should not reset at 10000 tokens (threshold 100000)")
 	}
-	tr.Add(1, 100000, 0, 0, 0)
-	shouldReset = tr.RecordUsage(1, 1, 0.01, 100000)
+	usage := tr.Get(1)
+	if usage.InputTokens != 8000 {
+		t.Fatalf("expected 8000 input tokens, got %d", usage.InputTokens)
+	}
+	if usage.OutputTokens != 2000 {
+		t.Fatalf("expected 2000 output tokens, got %d", usage.OutputTokens)
+	}
+
+	// Add more to cross threshold
+	shouldReset = tr.RecordUsage(1, 10, 0.50, 100000, 80000, 15000)
 	if !shouldReset {
-		t.Fatal("should reset when over threshold")
+		t.Fatal("should reset at 105000 tokens (threshold 100000)")
+	}
+}
+
+func TestTracker_RecordUsage_FallbackEstimate(t *testing.T) {
+	tr := NewTracker()
+	// No real tokens (zero) → falls back to numTurns * 3000
+	shouldReset := tr.RecordUsage(1, 5, 0.10, 100000, 0, 0)
+	if shouldReset {
+		t.Fatal("should not reset at 15000 estimated tokens")
+	}
+	usage := tr.Get(1)
+	// Fallback: 5 turns * 3000 = 15000 estimated as input tokens
+	if usage.TotalTokens() != 15000 {
+		t.Fatalf("expected 15000 estimated tokens, got %d", usage.TotalTokens())
+	}
+}
+
+func TestTracker_RecordUsage_RealTokensPreventsPrematureReset(t *testing.T) {
+	tr := NewTracker()
+	// With estimation: 30 turns * 3000 = 90000 (close to threshold)
+	// With real tokens: only 20000 actually used
+	// This proves real tokens prevent premature reset
+	shouldReset := tr.RecordUsage(1, 30, 1.50, 100000, 15000, 5000)
+	if shouldReset {
+		t.Fatal("should NOT reset — real tokens are 20000, not 90000 estimated")
+	}
+	usage := tr.Get(1)
+	if usage.TotalTokens() != 20000 {
+		t.Fatalf("expected 20000 real tokens, got %d", usage.TotalTokens())
 	}
 }
 
@@ -43,7 +81,7 @@ func TestTracker_Clear(t *testing.T) {
 
 func TestTracker_RecordUsageZeroThreshold(t *testing.T) {
 	tr := NewTracker()
-	shouldReset := tr.RecordUsage(1, 10, 0.50, 0)
+	shouldReset := tr.RecordUsage(1, 10, 0.50, 0, 5000, 3000)
 	if shouldReset {
 		t.Fatal("should not reset when maxTokens is 0 (disabled)")
 	}
