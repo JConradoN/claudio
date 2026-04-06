@@ -68,7 +68,18 @@ func (d *Dreamer) runNudge(messages []session.NudgeMessage, cwd string) {
 	// Build system prompt with memory directories
 	sysPrompt := d.buildNudgePrompt(cwd)
 
-	prompt := fmt.Sprintf("Review this conversation and save important information to the correct memory layer.\n\n## Conversation\n\n%s", transcript.String())
+	prompt := fmt.Sprintf(`TASK: Extract facts from the conversation below and save them using the Write tool.
+
+STEP 1: Read the conversation.
+STEP 2: List facts worth remembering (user preferences, decisions, topics discussed, work done, plans mentioned).
+STEP 3: For EACH fact, call the Write tool to save it. Use one file per topic (e.g. conversation_topics.md, user_preferences.md).
+STEP 4: If MEMORY.md exists, update it with an index entry for each file you created.
+
+IMPORTANT: You MUST call the Write tool at least once. If the conversation has any content at all, there is something worth saving — at minimum, what topics were discussed.
+
+## Conversation
+
+%s`, transcript.String())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -110,55 +121,73 @@ func (d *Dreamer) runNudge(messages []session.NudgeMessage, cwd string) {
 func (d *Dreamer) buildNudgePrompt(cwd string) string {
 	// When no project context, use global-only prompt
 	if cwd == "" || d.resolver == nil {
-		return `You are a memory review agent. Save important information from the conversation.
+		return `You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
 
-Memory directory: ` + d.memoryDir + `
+SAVE DIRECTORY: ` + d.memoryDir + `
 
-## What to save
-- Facts the user revealed (name, preferences, workflow habits)
-- Decisions made or preferences expressed
-- Work completed and current state
-- Problems encountered and solutions found
+## What to save (extract ALL of these)
+- What topics were discussed (always save this)
+- What the user asked for or wanted to do
+- Facts about the user (name, role, preferences, habits)
+- Decisions made or opinions expressed
+- Work completed, plans mentioned, next steps
+- Problems encountered and how they were solved
 
-## How to save
-1. Read MEMORY.md to see existing files
-2. Update existing files or create new ones — one fact per line
-3. Update MEMORY.md index if needed
+## How to save — follow these steps exactly
+1. Use the Write tool to create or update a .md file in the save directory. Example: Write to ` + d.memoryDir + `/conversation_log.md
+2. Each file should have a clear topic name
+3. Write one fact per line, prefixed with "- "
+4. After saving files, update ` + d.memoryDir + `/MEMORY.md with one index line per file: "- [Title](filename.md) — short description"
+
+## Format example for a memory file
+` + "```" + `
+- User asked to list projects in D:/projetos
+- User wants to pick a project to work on tomorrow
+- User prefers casual conversation style (pt-BR)
+` + "```" + `
 
 ## Rules
-- Update existing facts, don't duplicate
-- Delete files with Bash (rm) if user asks to forget
-- Do NOT save conversation transcripts or code
-- Do NOT modify anything in personas/ subdirectory
-- If nothing worth saving, make no changes`
+- You MUST use the Write tool — do not just describe what you would save
+- Do NOT touch anything in personas/ subdirectory
+- Do NOT copy full conversation text — only extract facts
+- If a file already exists with the same topic, append new facts to it`
 	}
 
 	globalDir := d.memoryDir
 	projectDir := d.resolver.ProjectMemoryDir(cwd)
 	teamDir := d.resolver.ProjectTeamMemoryDir(cwd)
 
-	return `You are a memory review agent. Save important information to the correct layer.
+	return `You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
 
-## Directory mapping
-- GLOBAL = ` + globalDir + `
-- PROJECT = ` + projectDir + `
-- TEAM = ` + teamDir + `
+## Save directories (use the correct one for each fact)
+- GLOBAL (` + globalDir + `) — personal facts, preferences, language, hobbies
+- PROJECT (` + projectDir + `) — work log, task state, personal decisions for this project
+- TEAM (` + teamDir + `) — stack, conventions, architecture, bugs (useful for any team member)
 
-## Where to save
-GLOBAL — personal facts, preferences, language, hobbies (cross-project)
-TEAM — stack, conventions, architecture, bugs, workarounds (shared with team)
-PROJECT — personal notes, work log, task state (only you)
+## What to save (extract ALL of these)
+- What topics were discussed (always save this)
+- What the user asked for or wanted to do
+- Facts about the user (name, role, preferences, habits)
+- Decisions made or opinions expressed
+- Work completed, plans mentioned, next steps
+- Problems encountered and how they were solved
 
-## How to save
-1. Read MEMORY.md in the target directory
-2. Update existing files or create new ones — one fact per line
-3. Update MEMORY.md index if needed
+## How to save — follow these steps exactly
+1. Use the Write tool to create or update a .md file in the correct directory. Example: Write to ` + globalDir + `/conversation_log.md
+2. Each file should have a clear topic name
+3. Write one fact per line, prefixed with "- "
+4. After saving files, update MEMORY.md in each directory you wrote to
+
+## Format example for a memory file
+` + "```" + `
+- User asked to list projects in D:/projetos
+- User wants to pick a project to work on tomorrow
+- User prefers casual conversation style (pt-BR)
+` + "```" + `
 
 ## Rules
-- Use ALL 3 directories — classify each fact into the right one
-- Update existing facts, don't duplicate
-- Delete files with Bash (rm) if user asks to forget
-- Do NOT save conversation transcripts or code
-- Do NOT modify anything in personas/ subdirectory
-- If nothing worth saving, make no changes`
+- You MUST use the Write tool — do not just describe what you would save
+- Do NOT touch anything in personas/ subdirectory
+- Do NOT copy full conversation text — only extract facts
+- If a file already exists with the same topic, READ it first then append new facts`
 }

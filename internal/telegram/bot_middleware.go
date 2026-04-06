@@ -107,6 +107,11 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 
 func (bc *BotController) handleResetCommand(c telebot.Context) error {
 	chatID := c.Chat().ID
+	// Flush pending nudge buffer so conversation memories are saved.
+	if bc.dreamer != nil {
+		cwd := bc.sessions.GetCwd(chatID)
+		bc.dreamer.FlushNudge(chatID, cwd, bc.nudgeBuffer)
+	}
 	bc.sessions.Clear(chatID)
 	bc.tracker.Clear(chatID)
 	return SendText(bc.bot, c.Chat(), "Sessão resetada. Próxima mensagem inicia conversa nova.")

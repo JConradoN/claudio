@@ -3,6 +3,8 @@ package dream
 import (
 	"context"
 	"log"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -86,8 +88,32 @@ func (d *Dreamer) AfterTurn() {
 	go d.run()
 }
 
+// hasMemoryFiles checks if the memory directory contains any .md files
+// besides MEMORY.md itself. Without real memories, consolidation would
+// hallucinate content.
+func hasMemoryFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == "MEMORY.md" || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (d *Dreamer) run() {
 	defer d.running.Store(false)
+
+	// Skip consolidation if there are no memory files to consolidate.
+	// Running on an empty directory causes the model to hallucinate content.
+	if !hasMemoryFiles(d.memoryDir) {
+		log.Println("[dream] skipped: no memory files to consolidate")
+		return
+	}
 
 	log.Println("[dream] starting memory consolidation...")
 	start := time.Now()
