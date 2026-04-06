@@ -54,6 +54,8 @@ type onboardingUI struct {
 	cfg             config.EditableConfig
 	step            onboardStep
 	menuIndex       int
+	scrollOffset    int
+	termHeight      int
 	input           string
 	message         string
 	modelSource     string
@@ -161,6 +163,11 @@ func runOnboardTUI(stdin *os.File, stdout *os.File, resolver *runtime.PathResolv
 	reader := bufio.NewReader(stdin)
 
 	for {
+		_, h, _ := term.GetSize(int(stdout.Fd()))
+		if h <= 0 {
+			h = 24
+		}
+		ui.termHeight = h
 		if _, err := io.WriteString(stdout, rawTerminalFrame(ui.View(resolver))); err != nil {
 			return err
 		}

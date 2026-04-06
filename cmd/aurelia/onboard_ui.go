@@ -11,9 +11,16 @@ import (
 func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 	var b strings.Builder
 	b.WriteString("\x1b[2J\x1b[H")
-	b.WriteString(renderOnboardingHeader())
-	_, _ = fmt.Fprintf(&b, "Config file: %s\n", resolver.AppConfig())
-	_, _ = fmt.Fprintf(&b, "Step %d/11\n\n", int(u.step)+1)
+
+	// Use a compact header on the model step so the viewport has room.
+	if u.step == stepLLMModel {
+		b.WriteString(colorize("AURELIA", colorBlue))
+		_, _ = fmt.Fprintf(&b, " — Step %d/11\n", int(u.step)+1)
+	} else {
+		b.WriteString(renderOnboardingHeader())
+		_, _ = fmt.Fprintf(&b, "Config file: %s\n", resolver.AppConfig())
+		_, _ = fmt.Fprintf(&b, "Step %d/11\n\n", int(u.step)+1)
+	}
 	if u.message != "" {
 		b.WriteString(colorize("! "+u.message, colorBlue))
 		b.WriteString("\n\n")
@@ -40,7 +47,19 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 		}
 		_, _ = fmt.Fprintf(&b, "Capability filter: %s\n", u.modelCapabilityLabel())
 		_, _ = fmt.Fprintf(&b, "Showing %d of %d models\n\n", len(u.modelOptions), len(u.allModelOptions))
-		b.WriteString(renderModelMenu(u.modelOptions, u.menuIndex))
+
+		// Calculate viewport: terminal height minus fixed chrome lines.
+		// Fixed chrome above the list: banner (~18) + config/step (3) + message (0-2) + model header (6-7).
+		// Fixed chrome below: catalog source + help text (~4-5).
+		// Instead of guessing, count what we've already written + the footer.
+		linesAbove := strings.Count(b.String(), "\n")
+		linesBelow := 5 // "\nCatalog source: ...\n\nType to filter...\n"
+		viewportHeight := u.termHeight - linesAbove - linesBelow
+		if viewportHeight < 5 {
+			viewportHeight = 5
+		}
+
+		b.WriteString(renderModelMenuViewport(u.modelOptions, u.menuIndex, &u.scrollOffset, viewportHeight))
 		_, _ = fmt.Fprintf(&b, "\nCatalog source: %s\n", u.modelSource)
 		if usesProviderModelSearch(u.cfg) {
 			b.WriteString("\nType to filter by model or provider. Use right to cycle capability filters. Use arrows and Enter. Backspace removes filter. Use left to go back.\n")
@@ -304,6 +323,7 @@ func (u *onboardingUI) refreshModelOptions() {
 
 func (u *onboardingUI) applyModelFilter() {
 	u.modelOptions = filterModelOptions(u.cfg, u.allModelOptions, u.modelFilter, u.modelCapability)
+	u.scrollOffset = 0
 	if len(u.modelOptions) == 0 {
 		u.menuIndex = 0
 		return
@@ -379,6 +399,71 @@ func renderModelMenu(options []ModelOption, selected int) string {
 		labels = append(labels, option.Label())
 	}
 	return renderMenu(labels, selected)
+}
+
+// renderModelMenuViewport renders a scrollable window of model options.
+// It adjusts scrollOffset so the selected item is always visible,
+// and shows scroll indicators when there are items above/below the viewport.
+func renderModelMenuViewport(options []ModelOption, selected int, scrollOffset *int, viewportHeight int) string {
+	if len(options) == 0 {
+		return "  No models available.\n"
+	}
+
+	// If the list fits entirely, no scrolling needed.
+	if len(options) <= viewportHeight {
+		*scrollOffset = 0
+		return renderModelMenu(options, selected)
+	}
+
+	// Adjust scroll offset to keep selected item visible.
+	if selected < *scrollOffset {
+		*scrollOffset = selected
+	}
+	if selected >= *scrollOffset+viewportHeight {
+		*scrollOffset = selected - viewportHeight + 1
+	}
+	// Clamp.
+	if *scrollOffset < 0 {
+		*scrollOffset = 0
+	}
+	maxOffset := len(options) - viewportHeight
+	if *scrollOffset > maxOffset {
+		*scrollOffset = maxOffset
+	}
+
+	var b strings.Builder
+
+	if *scrollOffset > 0 {
+		_, _ = fmt.Fprintf(&b, "  %s(%d more above)%s\n", colorBlue, *scrollOffset, colorReset)
+	}
+
+	end := *scrollOffset + viewportHeight
+	if *scrollOffset > 0 {
+		end-- // make room for the "more above" indicator
+	}
+	remaining := len(options) - end
+	if remaining > 0 {
+		end-- // make room for the "more below" indicator
+	}
+	if end > len(options) {
+		end = len(options)
+	}
+
+	for i := *scrollOffset; i < end; i++ {
+		prefix := "  "
+		if i == selected {
+			prefix = colorize("> ", colorBlue)
+		}
+		b.WriteString(prefix)
+		b.WriteString(options[i].Label())
+		b.WriteString("\n")
+	}
+
+	if remaining > 0 {
+		_, _ = fmt.Fprintf(&b, "  %s(%d more below)%s\n", colorBlue, remaining, colorReset)
+	}
+
+	return b.String()
 }
 
 func usesProviderModelSearch(cfg config.EditableConfig) bool {

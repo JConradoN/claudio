@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kocar/aurelia/internal/config"
 )
@@ -146,17 +149,96 @@ func providerLabels() []string {
 }
 
 // listModels returns the available model options for a provider.
-// Remote discovery was removed — returns curated fallback models only.
-func listModels(_ context.Context, p string, creds ModelCatalogCredentials) ([]ModelOption, error) {
-	_ = creds
-
+// For OpenRouter, fetches live models from the API when an API key is available.
+func listModels(ctx context.Context, p string, creds ModelCatalogCredentials) ([]ModelOption, error) {
 	p = config.NormalizeProvider(p)
+
+	if p == "openrouter" && creds.OpenRouterAPIKey != "" {
+		models, err := fetchOpenRouterModels(ctx, creds.OpenRouterAPIKey)
+		if err == nil && len(models) > 0 {
+			return models, nil
+		}
+		// Fall through to curated list on error.
+	}
 
 	models := fallbackModels(p)
 	if models == nil {
 		return nil, fmt.Errorf("unsupported llm provider %q", p)
 	}
 	return models, nil
+}
+
+// openRouterModel mirrors the relevant fields from the OpenRouter /api/v1/models response.
+type openRouterModel struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	ContextLen   int    `json:"context_length"`
+	Architecture struct {
+		InputModalities  []string `json:"input_modalities"`
+		OutputModalities []string `json:"output_modalities"`
+	} `json:"architecture"`
+	Pricing struct {
+		Prompt     string `json:"prompt"`
+		Completion string `json:"completion"`
+	} `json:"pricing"`
+}
+
+// fetchOpenRouterModels calls the OpenRouter models API and returns parsed ModelOptions.
+func fetchOpenRouterModels(ctx context.Context, apiKey string) ([]ModelOption, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openrouter models request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openrouter models API returned %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Data []openRouterModel `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("openrouter models decode: %w", err)
+	}
+
+	// Prepend the meta-routing options.
+	options := []ModelOption{
+		{ID: "openrouter/auto", Name: "OpenRouter Auto (router)", SupportsTools: true},
+		{ID: "openrouter/free", Name: "OpenRouter Free Router", IsFree: true},
+	}
+
+	for _, m := range body.Data {
+		if m.ID == "" {
+			continue
+		}
+		opt := ModelOption{
+			ID:   m.ID,
+			Name: m.Name,
+		}
+		for _, mod := range m.Architecture.InputModalities {
+			if mod == "image" {
+				opt.SupportsImageInput = true
+				break
+			}
+		}
+		// Models with $0 prompt+completion pricing are free.
+		if m.Pricing.Prompt == "0" && m.Pricing.Completion == "0" {
+			opt.IsFree = true
+		}
+		options = append(options, opt)
+	}
+
+	return options, nil
 }
 
 // fallbackModelList returns curated default models when discovery is unavailable.

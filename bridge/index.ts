@@ -199,10 +199,24 @@ async function buildSDKOptions(opts: RequestOptions | undefined) {
     sdkOpts.persistSession = false;
   }
 
-  // Set context window — SDK defaults to 192K which is too small for large-context models
-  sdkOpts.settings = {
-    autoCompactWindow: 1000000,
-  };
+  // Detect whether this is an Anthropic-served model. The Claude Agent SDK CLI
+  // always adds `context-management-2025-06-27` beta header for "firstParty" provider
+  // when the model is not claude-3-*. For non-Anthropic models on OpenRouter this
+  // causes a 400 error. We disable experimental betas for those models.
+  const model = (opts.model ?? "").toLowerCase();
+  const isAnthropicModel =
+    model.startsWith("claude") ||
+    model.startsWith("anthropic/") ||
+    model === "" ||
+    model === "openrouter/auto";
+
+  if (isAnthropicModel) {
+    sdkOpts.settings = { autoCompactWindow: 1000000 };
+    delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+  } else {
+    // Prevent the SDK from sending Anthropic-only beta headers to non-Anthropic models.
+    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
+  }
 
   // Capture stderr from the SDK process for debugging
   sdkOpts.stderr = (data: string) => {

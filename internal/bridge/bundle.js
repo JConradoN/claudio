@@ -9320,9 +9320,14 @@ async function buildSDKOptions(opts) {
   if (opts.persist_session === false) {
     sdkOpts.persistSession = false;
   }
-  sdkOpts.settings = {
-    autoCompactWindow: 1e6
-  };
+  const model = (opts.model ?? "").toLowerCase();
+  const isAnthropicModel = model.startsWith("claude") || model.startsWith("anthropic/") || model === "" || model === "openrouter/auto";
+  if (isAnthropicModel) {
+    sdkOpts.settings = { autoCompactWindow: 1e6 };
+    delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+  } else {
+    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
+  }
   sdkOpts.stderr = (data) => {
     log(`sdk-stderr: ${data.trimEnd()}`);
   };
