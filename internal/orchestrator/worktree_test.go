@@ -39,7 +39,7 @@ func TestWorktreeManager_CreateAndCleanup(t *testing.T) {
 
 	// Need at least one commit for worktree to work
 	dummyFile := filepath.Join(repoDir, "README.md")
-	os.WriteFile(dummyFile, []byte("# test"), 0o644)
+	_ = os.WriteFile(dummyFile, []byte("# test"), 0o644)
 	run(t, repoDir, "git", "add", ".")
 	run(t, repoDir, "git", "commit", "-m", "init")
 

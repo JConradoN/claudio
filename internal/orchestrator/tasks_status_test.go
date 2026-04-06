@@ -25,7 +25,7 @@ func TestUpdateTasksStatus_MarksCompleted(t *testing.T) {
 - [ ] Implements interface
 - [ ] Tests pass
 `
-	os.WriteFile(path, []byte(initial), 0o644)
+	_ = os.WriteFile(path, []byte(initial), 0o644)
 
 	results := []TaskResult{
 		{TaskID: "T1", Success: true, DurationMs: 5000},

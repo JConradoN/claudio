@@ -947,7 +947,7 @@ func loadMemoryDir(dir string) string {
 		if err != nil || len(data) == 0 {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("\n\n**%s:**\n%s", name, strings.TrimSpace(string(data))))
+		fmt.Fprintf(&sb, "\n\n**%s:**\n%s", name, strings.TrimSpace(string(data)))
 	}
 
 	return sb.String()

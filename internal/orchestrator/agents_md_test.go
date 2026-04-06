@@ -75,7 +75,7 @@ func TestReadFileContent_Missing(t *testing.T) {
 func TestReadFileContent_Exists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("hello"), 0o644)
+	_ = os.WriteFile(path, []byte("hello"), 0o644)
 
 	got := ReadFileContent(path)
 	if got != "hello" {

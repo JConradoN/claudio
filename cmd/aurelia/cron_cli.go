@@ -24,7 +24,7 @@ func runCronCLI(args []string) error {
 	if err != nil {
 		return fmt.Errorf("open cron store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	svc := cron.NewService(store, nil)
 	ctx := context.Background()
