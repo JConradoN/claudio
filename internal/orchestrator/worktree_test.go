@@ -35,6 +35,8 @@ func TestWorktreeManager_CreateAndCleanup(t *testing.T) {
 	// Create a temp git repo
 	repoDir := t.TempDir()
 	run(t, repoDir, "git", "init")
+	run(t, repoDir, "git", "config", "user.email", "test@test.com")
+	run(t, repoDir, "git", "config", "user.name", "Test")
 	run(t, repoDir, "git", "checkout", "-b", "main")
 
 	// Need at least one commit for worktree to work
