@@ -14,6 +14,8 @@ import (
 
 func nextOnboardStep(cfg config.EditableConfig, step onboardStep) onboardStep {
 	switch step {
+	case stepDependencies:
+		return stepLLMProvider
 	case stepLLMProvider:
 		if config.NormalizeProvider(cfg.LLMProvider) == "anthropic" {
 			return stepAnthropicAuthMode
@@ -45,6 +47,8 @@ func nextOnboardStep(cfg config.EditableConfig, step onboardStep) onboardStep {
 
 func previousOnboardStep(cfg config.EditableConfig, step onboardStep) onboardStep {
 	switch step {
+	case stepLLMProvider:
+		return stepDependencies
 	case stepAnthropicAuthMode:
 		return stepLLMProvider
 	case stepLLMKey:
@@ -70,7 +74,7 @@ func previousOnboardStep(cfg config.EditableConfig, step onboardStep) onboardSte
 	case stepReview:
 		return stepRuntimeMaxIterations
 	default:
-		return stepLLMProvider
+		return stepDependencies
 	}
 }
 

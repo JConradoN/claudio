@@ -7,19 +7,24 @@ import (
 	"os"
 
 	"github.com/kocar/aurelia/internal/config"
+	"github.com/kocar/aurelia/internal/deps"
 	"github.com/kocar/aurelia/internal/runtime"
 	"golang.org/x/term"
 )
 
 const (
-	colorBlue  = "\x1b[94m"
-	colorReset = "\x1b[0m"
+	colorBlue   = "\x1b[94m"
+	colorGreen  = "\x1b[92m"
+	colorYellow = "\x1b[93m"
+	colorRed    = "\x1b[91m"
+	colorReset  = "\x1b[0m"
 )
 
 type onboardStep int
 
 const (
-	stepLLMProvider onboardStep = iota
+	stepDependencies onboardStep = iota
+	stepLLMProvider
 	stepAnthropicAuthMode
 	stepLLMKey
 	stepLLMModel
@@ -65,6 +70,7 @@ type onboardingUI struct {
 	modelCapability modelCapabilityFilter
 	reviewOptions   []string
 	pendingAction   string
+	depsResult      *deps.CheckResult
 }
 
 type modelCapabilityFilter int
@@ -113,6 +119,24 @@ func runOnboardPrompt(stdin io.Reader, stdout io.Writer, resolver *runtime.PathR
 	if err := writef(stdout, "Config file: %s\n", resolver.AppConfig()); err != nil {
 		return err
 	}
+
+	// Dependency check (plain text, no ANSI colors).
+	result := deps.CheckAll()
+	if err := writeln(stdout, "Checking dependencies..."); err != nil {
+		return err
+	}
+	for _, d := range result.Deps {
+		if err := writef(stdout, "  %s\n", d.FormatStatus()); err != nil {
+			return err
+		}
+	}
+	if err := writeln(stdout, ""); err != nil {
+		return err
+	}
+	if !result.AllOK {
+		return fmt.Errorf("required dependencies are missing — install them and try again")
+	}
+
 	if err := writeln(stdout, "Press Enter to keep the current value."); err != nil {
 		return err
 	}
@@ -220,7 +244,7 @@ func newOnboardingUI(cfg config.EditableConfig) *onboardingUI {
 		allModelOptions: append([]ModelOption(nil), modelOptions...),
 		modelOptions:    append([]ModelOption(nil), modelOptions...),
 		modelSource:     modelSource,
-		step:            stepLLMProvider,
+		step:            stepDependencies,
 		reviewOptions:   []string{"Save config", "Back", "Cancel"},
 	}
 }

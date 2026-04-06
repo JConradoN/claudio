@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kocar/aurelia/internal/config"
+	"github.com/kocar/aurelia/internal/deps"
 	"github.com/kocar/aurelia/internal/runtime"
 )
 
@@ -15,11 +16,11 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 	// Use a compact header on the model step so the viewport has room.
 	if u.step == stepLLMModel {
 		b.WriteString(colorize("AURELIA", colorBlue))
-		_, _ = fmt.Fprintf(&b, " — Step %d/11\n", int(u.step)+1)
+		_, _ = fmt.Fprintf(&b, " — Step %d/12\n", int(u.step)+1)
 	} else {
 		b.WriteString(renderOnboardingHeader())
 		_, _ = fmt.Fprintf(&b, "Config file: %s\n", resolver.AppConfig())
-		_, _ = fmt.Fprintf(&b, "Step %d/11\n\n", int(u.step)+1)
+		_, _ = fmt.Fprintf(&b, "Step %d/12\n\n", int(u.step)+1)
 	}
 	if u.message != "" {
 		b.WriteString(colorize("! "+u.message, colorBlue))
@@ -27,6 +28,19 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 	}
 
 	switch u.step {
+	case stepDependencies:
+		b.WriteString("Dependencies\n\n")
+		if u.depsResult == nil {
+			r := deps.CheckAll()
+			u.depsResult = &r
+		}
+		b.WriteString(renderDepsCheck(*u.depsResult))
+		if u.depsResult.AllOK {
+			b.WriteString("\nPress Enter to continue.\n")
+		} else {
+			b.WriteString("\n" + colorize("Install missing required dependencies before continuing.", colorRed) + "\n")
+			b.WriteString("Press Ctrl+R to re-check. Press Ctrl+C to cancel.\n")
+		}
 	case stepLLMProvider:
 		b.WriteString("LLM Provider\n")
 		b.WriteString("Select the main chat model provider.\n\n")
@@ -124,6 +138,8 @@ func (u *onboardingUI) HandleKey(ev keyEvent) (saved bool, cancelled bool, err e
 	u.message = ""
 
 	switch u.step {
+	case stepDependencies:
+		return u.handleDepsKey(ev)
 	case stepLLMProvider:
 		return u.handleMenuKey(ev, llmProviderChoices(), nextOnboardStep(u.cfg, stepLLMProvider), stepLLMProvider)
 	case stepAnthropicAuthMode:
@@ -137,6 +153,34 @@ func (u *onboardingUI) HandleKey(ev keyEvent) (saved bool, cancelled bool, err e
 	default:
 		return u.handleInputKey(ev)
 	}
+}
+
+func (u *onboardingUI) ensureDepsChecked() {
+	if u.depsResult == nil {
+		r := deps.CheckAll()
+		u.depsResult = &r
+	}
+}
+
+func (u *onboardingUI) handleDepsKey(ev keyEvent) (bool, bool, error) {
+	u.ensureDepsChecked()
+	switch ev.code {
+	case keyEnter:
+		if u.depsResult.AllOK {
+			u.setStep(stepLLMProvider)
+		} else {
+			u.message = "required dependencies are missing"
+		}
+	case keyRune:
+		// Ctrl+R is rune 18, but in raw mode it comes as byte 18 which won't match keyRune.
+		// We handle re-check via the 'r' key as a convenience.
+		if ev.r == 'r' || ev.r == 'R' {
+			u.depsResult = nil // force re-check on next render
+		}
+	case keyQuit:
+		return false, true, nil
+	}
+	return false, false, nil
 }
 
 func (u *onboardingUI) handleMenuKey(ev keyEvent, values []string, next onboardStep, prev onboardStep) (bool, bool, error) {
@@ -463,6 +507,32 @@ func renderModelMenuViewport(options []ModelOption, selected int, scrollOffset *
 		_, _ = fmt.Fprintf(&b, "  %s(%d more below)%s\n", colorBlue, remaining, colorReset)
 	}
 
+	return b.String()
+}
+
+func renderDepsCheck(result deps.CheckResult) string {
+	var b strings.Builder
+	for _, d := range result.Deps {
+		switch {
+		case d.Found && d.VersionOK:
+			if d.Version != "" {
+				_, _ = fmt.Fprintf(&b, "  %s %s v%s", colorize("[ok]", colorGreen), d.Name, d.Version)
+			} else {
+				_, _ = fmt.Fprintf(&b, "  %s %s", colorize("[ok]", colorGreen), d.Name)
+			}
+			if d.MinVersion != "" {
+				_, _ = fmt.Fprintf(&b, " (requires >= %s)", d.MinVersion)
+			}
+			b.WriteString("\n")
+		case d.Found && !d.VersionOK:
+			_, _ = fmt.Fprintf(&b, "  %s %s v%s (requires >= %s)\n", colorize("[!!]", colorRed), d.Name, d.Version, d.MinVersion)
+		case !d.Found && d.Required:
+			_, _ = fmt.Fprintf(&b, "  %s %s — not found\n", colorize("[!!]", colorRed), d.Name)
+			_, _ = fmt.Fprintf(&b, "        Install: %s\n", d.InstallURL)
+		default: // !Found && !Required
+			_, _ = fmt.Fprintf(&b, "  %s %s — not found (optional)\n", colorize("[--]", colorYellow), d.Name)
+		}
+	}
 	return b.String()
 }
 

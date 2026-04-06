@@ -12,6 +12,7 @@ import (
 
 	"github.com/kocar/aurelia/internal/agents"
 	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/kocar/aurelia/internal/deps"
 	"github.com/kocar/aurelia/internal/config"
 	"github.com/kocar/aurelia/internal/cron"
 	"github.com/kocar/aurelia/internal/dream"
@@ -48,6 +49,20 @@ func bootstrapApp() (*app, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 	setProviderEnv(cfg)
+
+	// Check runtime dependencies before touching the bridge.
+	checkResult := deps.CheckAll()
+	for _, d := range checkResult.Deps {
+		if d.Required && !d.Found {
+			log.Fatalf("%s is required but not found. Install: %s", d.Name, d.InstallURL)
+		}
+		if d.Required && d.Found && !d.VersionOK {
+			log.Fatalf("%s v%s found but >= %s required. Update: %s", d.Name, d.Version, d.MinVersion, d.InstallURL)
+		}
+		if !d.Required && !d.Found {
+			log.Printf("Warning: %s not found — some features may be limited", d.Name)
+		}
+	}
 
 	br := setupBridge()
 	personaSvc := setupPersona(resolver)

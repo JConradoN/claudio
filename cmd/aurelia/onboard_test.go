@@ -175,7 +175,20 @@ func TestRawTerminalFrame_DoesNotDuplicateExistingCRLF(t *testing.T) {
 func TestOnboardingUI_MenuFlowAndBack(t *testing.T) {
 	ui := newOnboardingUI(config.DefaultEditableConfig())
 
+	// Step 0: Dependencies — press Enter to advance (deps are OK in dev env).
+	if ui.step != stepDependencies {
+		t.Fatalf("initial step = %v, want %v", ui.step, stepDependencies)
+	}
 	_, _, err := ui.HandleKey(keyEvent{code: keyEnter})
+	if err != nil {
+		t.Fatalf("HandleKey() error = %v", err)
+	}
+	if ui.step != stepLLMProvider {
+		t.Fatalf("step after deps = %v, want %v", ui.step, stepLLMProvider)
+	}
+
+	// Step 1: LLM Provider — press Enter to advance.
+	_, _, err = ui.HandleKey(keyEvent{code: keyEnter})
 	if err != nil {
 		t.Fatalf("HandleKey() error = %v", err)
 	}
