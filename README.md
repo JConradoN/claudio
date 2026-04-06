@@ -12,7 +12,7 @@ One persistent daemon, many projects, many agents.
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Runtime](https://img.shields.io/badge/Runtime-Local--First-0F172A)](#runtime-model)
-[![Architecture](https://img.shields.io/badge/Architecture-Modular_Monolith-1F2937)](docs/ARCHITECTURE.md)
+[![Architecture](https://img.shields.io/badge/Architecture-Modular_Monolith-1F2937)](.specs/codebase/ARCHITECTURE.md)
 [![Storage](https://img.shields.io/badge/Storage-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org/)
 [![Telegram](https://img.shields.io/badge/Interface-Telegram-26A5E4?logo=telegram)](https://core.telegram.org/bots/api)
 [![Bridge](https://img.shields.io/badge/Brain-Claude_Code_SDK-6E56CF)](https://platform.claude.com/docs/en/agent-sdk)
@@ -25,29 +25,33 @@ Aurelia is an autonomous agent operating system accessible via Telegram. Talk na
 
 It is built around a practical execution model:
 
-- Go daemon (24/7, lightweight)
+- Go daemon (24/7, lightweight, cross-platform)
 - TypeScript Bridge wrapping the Claude Agent SDK
 - Claude Code CLI as the brain (tools, MCPs, skills, subagents)
 - Session management with token tracking and auto-reset
-- Configurable agents in markdown
-- Persistent cron scheduler with Telegram delivery
-- Multi-provider: Anthropic, Kimi, OpenRouter, Z.ai, Alibaba
+- Persistent 3-layer memory system with automatic extraction
+- Configurable agents in markdown with cron scheduling
+- Multi-provider: Anthropic, Kimi, OpenRouter (live model catalog), Z.ai, Alibaba
+- Bridge recovery with automatic retry on crash
 
 The goal is not to reimplement what Claude Code already does.
-The goal is to orchestrate it — adding persistence, scheduling, multi-project support, and a natural Telegram interface on top.
+The goal is to orchestrate it — adding persistence, memory, scheduling, multi-project support, and a natural Telegram interface on top.
 
 ## Core Capabilities
 
 - **Natural conversation** via Telegram with text, photos, voice, and documents
 - **Autonomous coding** — reads, writes, edits files, runs commands, searches code
 - **Multi-project** — work on different projects simultaneously with isolated contexts
-- **Async execution** — messages process in parallel, responses arrive when ready
+- **Persistent memory** — 3-layer memory system (global, project-private, project-team) that survives across sessions
+- **Learning nudge** — automatic memory extraction from conversations on session reset
+- **Dream consolidation** — periodic background review that organizes and deduplicates memories
+- **Multi-provider** — Anthropic, Kimi, OpenRouter (with live model catalog), Z.ai, Alibaba
 - **Session continuity** — conversation context persists across messages via session resume with auto-reset on token threshold
 - **Smart routing** — LLM-based classification routes messages to the right agent
 - **Persistent scheduling** — create cron jobs via natural conversation, results delivered to Telegram
+- **Bridge recovery** — automatic retry with session resume when the Bridge process crashes
 - **Tool progress** — see what Claude Code is doing in real-time (reading files, running commands...)
 - **Reply-to** — responses quote the original message for async conversation clarity
-- **Reactions** — contextual emoji reactions via CLI
 - **Photo analysis** — images downloaded and passed to Claude Code for visual analysis
 - **Voice transcription** — Groq STT converts voice messages to text
 - **Inherits your setup** — MCPs, skills, plugins, and hooks from your Claude Code account
@@ -103,14 +107,16 @@ flowchart LR
 
 ```text
 cmd/aurelia/              CLI entry point, onboarding, cron CLI, telegram CLI
-internal/bridge/          Go ↔ Bridge client (long-lived, multiplexed, bundle embedded via go:embed)
-internal/telegram/        Telegram I/O, async pipeline, progress, reactions
-internal/session/         Session store and token tracking with auto-reset
+internal/bridge/          Go <> Bridge client (long-lived, multiplexed, bundle embedded via go:embed)
+internal/telegram/        Telegram I/O, async pipeline, progress, reactions, commands
+internal/session/         Session store, token tracking, nudge buffer
 internal/agents/          Agent registry (markdown definitions, LLM classification)
 internal/persona/         Persona loader (IDENTITY / SOUL / USER)
+internal/dream/           Memory consolidation (dream) and extraction (nudge)
 internal/cron/            Persistent cron scheduler with Telegram delivery
 internal/config/          App configuration (providers, Telegram, sessions)
-internal/runtime/         Path resolver + instance bootstrap
+internal/runtime/         Path resolver + instance bootstrap + project memory dirs
+internal/orchestrator/    Git operations, worktree management, PR creation
 pkg/stt/                  Speech-to-text (Groq Whisper)
 bridge/                   TypeScript Bridge source (compiled to bundle.js via esbuild, embedded in binary)
 ```
@@ -168,14 +174,32 @@ Three markdown files in `~/.aurelia/memory/personas/`:
 
 Created automatically via `/start` on Telegram (choose "Coder" or "Assistant" preset).
 
+## Memory System
+
+Aurelia has a 3-layer persistent memory that survives across sessions:
+
+| Layer | Location | Purpose |
+|-------|----------|---------|
+| **Global** | `~/.aurelia/memory/` | Personal facts, preferences, communication style |
+| **Project Private** | `~/.aurelia/projects/<cwd>/memory/` | Personal notes, work log, task state |
+| **Project Team** | `~/.aurelia/projects/<cwd>/memory/team/` | Stack, conventions, architecture (shareable) |
+
+Memory is populated automatically:
+- **Nudge** — extracts facts from conversations when a session resets (`/new` or auto-reset)
+- **Dream** — periodic background consolidation that organizes, deduplicates, and prunes memory files
+
+The model sees all memory layers in its system prompt and can read/write them during conversation.
+
 ## Telegram Commands
 
 | Command | Description |
 |---------|-------------|
 | `/start` | Setup persona (first run) or welcome |
 | `/help` | List available commands |
+| `/new` | New session (flushes memory, clears context) |
 | `/cwd <path>` | Set working directory for this chat |
-| `/reset` | Reset session (new conversation) |
+| `/reset` | Reset session (alias for `/new`) |
+| `/usage` | Show session token usage and cost |
 | `/cron` | Manage schedules (list, add, delete, pause, resume) |
 | `/agents` | List available agents |
 
@@ -268,10 +292,13 @@ go build -trimpath -ldflags "-s -w" -o ./build/aurelia.exe ./cmd/aurelia
 
 | Document | Purpose |
 |----------|---------|
-| [AGENTS.md](AGENTS.md) | Workflow rules, bridge protocol, agent format |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture, layers, decisions |
-| [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md) | Code conventions, Go patterns |
-| [docs/LEARNINGS.md](docs/LEARNINGS.md) | Operational lessons |
+| [CLAUDE.md](CLAUDE.md) | Instructions for coding agents |
+| [CHANGELOG.md](CHANGELOG.md) | Release history and changes |
+| [.specs/codebase/ARCHITECTURE.md](.specs/codebase/ARCHITECTURE.md) | System architecture and patterns |
+| [.specs/codebase/CONVENTIONS.md](.specs/codebase/CONVENTIONS.md) | Code conventions and Go patterns |
+| [.specs/codebase/STACK.md](.specs/codebase/STACK.md) | Technology stack and dependencies |
+| [.specs/project/PROJECT.md](.specs/project/PROJECT.md) | Vision, constraints, current state |
+| [.specs/project/ROADMAP.md](.specs/project/ROADMAP.md) | Feature roadmap |
 
 ## Development
 
@@ -291,7 +318,8 @@ cp bundle.js ../internal/bridge/bundle.js
 
 ## Current State
 
-- Go test suite is green (11 packages)
+- **v0.4.0** — see [CHANGELOG.md](CHANGELOG.md)
+- Go test suite is green
 - TypeScript Bridge compiles clean
-- Production code: ~6,800 lines Go + ~270 lines TypeScript
-- Active development on `feat/aurelia-os` branch
+- Cross-platform: Windows and Linux
+- Active development on `main` branch

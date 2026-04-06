@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/kocar/aurelia/internal/version"
 )
 
 func main() {
@@ -25,6 +28,9 @@ func main() {
 			if err := runTelegramCLI(os.Args[2:]); err != nil {
 				log.Fatalf("Telegram command failed: %v", err)
 			}
+			return
+		case "version":
+			fmt.Println(version.BuildInfo())
 			return
 		default:
 			log.Fatalf("Unknown command: %s", os.Args[1])

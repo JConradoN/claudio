@@ -15,6 +15,7 @@ import (
 	"github.com/kocar/aurelia/internal/persona"
 	"github.com/kocar/aurelia/internal/runtime"
 	"github.com/kocar/aurelia/internal/session"
+	"github.com/kocar/aurelia/internal/version"
 	"github.com/kocar/aurelia/pkg/stt"
 )
 
@@ -139,7 +140,7 @@ func (bc *BotController) GetBot() *telebot.Bot {
 
 // Start begins Telegram polling.
 func (bc *BotController) Start() {
-	log.Println("Starting Aurelia Telegram Bot...")
+	log.Printf("Starting %s Telegram Bot...", version.BuildInfo())
 	bc.bot.Start()
 }
 
