@@ -11,6 +11,7 @@ import (
 	"github.com/kocar/aurelia/internal/agents"
 	"github.com/kocar/aurelia/internal/bridge"
 	"github.com/kocar/aurelia/internal/config"
+	"github.com/kocar/aurelia/internal/orchestrator"
 	"github.com/kocar/aurelia/internal/persona"
 	"github.com/kocar/aurelia/internal/session"
 	"github.com/kocar/aurelia/pkg/stt"
@@ -28,11 +29,17 @@ type BotController struct {
 	sessions         *session.Store
 	tracker          *session.Tracker
 	personasDir      string
+	memoryDir        string // path to ~/.aurelia/memory for SDK auto-memory
 	exePath          string // path to aurelia binary for CLI instructions in system prompt
 	bootstrapMu      sync.Mutex
 	pendingBootstrap map[int64]bootstrapState
 	albums           *albumBuffer
 	bridgeFailures   bridgeFailureTracker
+	orchestrator     *orchestrator.Orchestrator
+	dreamer          interface {
+		AfterTurn()
+		ExtractMemories(userMessage string, assistantResponse string)
+	}
 }
 
 type albumBuffer struct {
@@ -66,6 +73,7 @@ func NewBotController(
 	s stt.Transcriber,
 	cronHandler *CronCommandHandler,
 	personasDir string,
+	memoryDir string,
 	exePath string,
 	sessions *session.Store,
 	tracker *session.Tracker,
@@ -92,6 +100,7 @@ func NewBotController(
 		sessions:         sessions,
 		tracker:          tracker,
 		personasDir:      personasDir,
+		memoryDir:        memoryDir,
 		exePath:          exePath,
 		pendingBootstrap: make(map[int64]bootstrapState),
 		albums:           newAlbumBuffer(),
@@ -99,6 +108,20 @@ func NewBotController(
 
 	bc.setupRoutes()
 	return bc, nil
+}
+
+// SetOrchestrator injects the orchestrator after construction.
+// Called separately to avoid changing the NewBotController signature.
+func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
+	bc.orchestrator = o
+}
+
+// SetDreamer injects the dream system after construction.
+func (bc *BotController) SetDreamer(d interface {
+	AfterTurn()
+	ExtractMemories(userMessage string, assistantResponse string)
+}) {
+	bc.dreamer = d
 }
 
 // GetBot exposes the underlying Telebot instance.

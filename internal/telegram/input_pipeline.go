@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/kocar/aurelia/internal/agents"
 	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/kocar/aurelia/internal/orchestrator"
 )
 
 func (bc *BotController) processInput(c telebot.Context, text string) error {
@@ -22,6 +25,11 @@ func (bc *BotController) processInput(c telebot.Context, text string) error {
 		default:
 			return bc.completeBootstrapProfile(c, state, text)
 		}
+	}
+
+	// 0. Command layer — intercept system commands before LLM
+	if cmd := MatchCommand(text); cmd != nil {
+		return bc.handleCommand(c, cmd)
 	}
 
 	// 1. Route to agent (sync — fast)
@@ -41,8 +49,17 @@ func (bc *BotController) processInput(c telebot.Context, text string) error {
 		userText = text
 	}
 
-	// 2. Build system prompt (sync — fast)
+	// 1b. Auto-detect project path — only on new sessions (no active session)
+	// Changing cwd mid-session breaks SDK continue (different project = different session)
 	chatID := c.Chat().ID
+	if _, active := bc.sessions.GetWithState(chatID); !active {
+		if detected := bc.detectProjectPath(userText); detected != "" {
+			bc.sessions.SetCwd(chatID, detected)
+			log.Printf("cwd: auto-detected %s for chat=%d", detected, chatID)
+		}
+	}
+
+	// 2. Build system prompt (sync — fast)
 	messageID := c.Message().ID
 	systemPrompt, err := bc.buildSystemPrompt(userText, agent, chatID, messageID)
 	if err != nil {
@@ -345,7 +362,7 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 			}
 
 			if ev.CostUSD > 0 || ev.NumTurns > 0 {
-				if bc.tracker.RecordUsage(chat.ID, ev.NumTurns, ev.CostUSD, bc.config.MaxSessionTokens) {
+				if bc.tracker.RecordUsage(chat.ID, ev.NumTurns, ev.CostUSD, bc.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens) {
 					log.Printf("session auto-reset: chat=%d threshold=%d", chat.ID, bc.config.MaxSessionTokens)
 					bc.sessions.Clear(chat.ID)
 					bc.tracker.Clear(chat.ID)
@@ -360,8 +377,27 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 				finalText = "(sem resposta)"
 			}
 
+			// Check if Aurelia emitted an execution plan
+			if bc.orchestrator != nil {
+				if plan, err := bc.orchestrator.ExtractPlan(finalText); err == nil && plan != nil {
+					log.Printf("Execution plan detected with %d tasks", len(plan.Tasks))
+					// Strip the plan block from the displayed text
+					displayText := orchestrator.StripPlanBlock(finalText)
+					if displayText != "" {
+						_ = SendTextReply(bc.bot, chat, displayText, messageID)
+					}
+					// Launch execution in background
+					go bc.executeApprovedPlan(chat, messageID, plan)
+					return outcomeSuccess
+				}
+			}
+
 			if err := SendTextReply(bc.bot, chat, finalText, messageID); err != nil {
 				log.Printf("Failed to send reply to chat %d: %v", chat.ID, err)
+			}
+			if bc.dreamer != nil {
+				bc.dreamer.AfterTurn()
+				bc.dreamer.ExtractMemories(userText, finalText)
 			}
 			return outcomeSuccess
 
@@ -411,6 +447,15 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 		sections = append(sections, agentSection)
 	}
 
+	// Orchestrator TLC methodology (always active when orchestrator is wired)
+	var orchLen int
+	if bc.orchestrator != nil {
+		agentSummaries := bc.buildAgentSummaries()
+		orchSection := orchestrator.BuildOrchestratorPrompt("", agentSummaries)
+		orchLen = len(orchSection)
+		sections = append(sections, orchSection)
+	}
+
 	// Cron scheduling instructions
 	cronSection := bc.buildCronInstructions(chatID)
 	cronLen = len(cronSection)
@@ -421,11 +466,120 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
 
+	// Auto-memory instructions (SDK auto-memory doesn't activate via programmatic API,
+	// so we instruct the model explicitly)
+	memorySection := bc.buildMemoryInstructions()
+	sections = append(sections, memorySection)
+
+	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
+	if projectSection := bc.buildProjectDocsSection(chatID, agent); projectSection != "" {
+		sections = append(sections, projectSection)
+	}
+
 	result := strings.Join(sections, "\n\n")
-	log.Printf("system prompt breakdown: persona=%d agent=%d cron=%d telegram=%d total=%d chars",
-		personaLen, agentLen, cronLen, telegramLen, len(result))
+	log.Printf("system prompt breakdown: persona=%d agent=%d orch=%d cron=%d telegram=%d memory=%d total=%d chars",
+		personaLen, agentLen, orchLen, cronLen, telegramLen, len(memorySection), len(result))
 
 	return result, nil
+}
+
+// detectProjectPath tries to find a project path from the user message.
+// 1. Looks for absolute paths in the text
+// 2. Searches memory files for project names mentioned in the text
+func (bc *BotController) detectProjectPath(text string) string {
+	// 1. Absolute path in text (must be deep enough to be a real project)
+	for _, word := range strings.Fields(text) {
+		if !filepath.IsAbs(word) {
+			continue
+		}
+		clean := filepath.Clean(word)
+		// Reject trivial paths like "/" or "/home"
+		if len(strings.Split(clean, string(filepath.Separator))) < 4 {
+			continue
+		}
+		info, err := os.Stat(clean)
+		if err == nil && info.IsDir() {
+			return clean
+		}
+	}
+
+	// 2. Match project names from memory files
+	if bc.memoryDir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(bc.memoryDir)
+	if err != nil {
+		return ""
+	}
+
+	lower := strings.ToLower(text)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(bc.memoryDir, name))
+		if err != nil {
+			continue
+		}
+		content := string(data)
+
+		// Extract project name from frontmatter
+		projectName := extractFrontmatterField(content, "name")
+		if projectName == "" {
+			continue
+		}
+
+		// Check if user message mentions this project (either direction match)
+		lowerName := strings.ToLower(projectName)
+		if !strings.Contains(lower, lowerName) && !strings.Contains(lowerName, lower) {
+			// Try partial match — any word in the message that's a substring of the project name
+			found := false
+			for _, word := range strings.Fields(lower) {
+				clean := strings.Trim(word, ".,!?;:()\"'")
+				if len(clean) >= 4 && strings.Contains(lowerName, clean) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		// Extract path from content (look for "Caminho:" or absolute path lines)
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Caminho:") || strings.HasPrefix(line, "Path:") {
+				path := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+				if info, err := os.Stat(path); err == nil && info.IsDir() {
+					return path
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// extractFrontmatterField extracts a field value from YAML frontmatter.
+func extractFrontmatterField(content string, field string) string {
+	lines := strings.Split(content, "\n")
+	inFrontmatter := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			if inFrontmatter {
+				return "" // end of frontmatter, field not found
+			}
+			inFrontmatter = true
+			continue
+		}
+		if inFrontmatter && strings.HasPrefix(trimmed, field+":") {
+			return strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
+		}
+	}
+	return ""
 }
 
 // buildTelegramInstructions returns instructions for interacting with the Telegram chat.
@@ -448,8 +602,131 @@ React to a message with emoji:
 Available emojis: 👍 👎 ❤️ 🔥 🎉 🤩 😱 😁 😢 💩 🤮 🥰 🤯 🤔 🤬 👏 🙏 👌 😍 💯 ⚡️ 🏆
 
 Use reactions naturally and contextually — react when it adds to the conversation, not on every message.
-DO NOT use the Telegram MCP plugin for reactions or replies — use the Aurelia CLI above.`,
-		chatID, messageID, bin, chatID, messageID)
+DO NOT use the Telegram MCP plugin for reactions or replies — use the Aurelia CLI above.
+
+### Working directory
+Current working directory: %s
+
+IMPORTANT rules about the working directory:
+- When cwd is "(none)", you are in CHAT MODE. Do NOT read files, run commands, or analyze any project. Only use your memory and conversation context to answer questions.
+- When the user wants to work on files or a project, tell them to set the directory first: `+"`/cwd <path>`"+`
+- Only perform file operations (Read, Write, Edit, Bash, Glob, Grep) when a cwd is explicitly set.
+- If the user asks about "this project" or "the project", refer to conversation context and memory — do NOT go reading random directories.`,
+		chatID, messageID, bin, chatID, messageID, func() string {
+			if cwd := bc.sessions.GetCwd(chatID); cwd != "" {
+				return cwd
+			}
+			return "(none — no project set)"
+		}())
+}
+
+// buildMemoryInstructions returns the system prompt section for persistent memory.
+// It reads MEMORY.md and referenced memory files, injecting their contents directly
+// so the model always has context — even after SDK context compaction.
+func (bc *BotController) buildMemoryInstructions() string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf(`## Persistent Memory — YOU HAVE MEMORY
+
+IMPORTANT: Unlike standard Claude Code, you DO have persistent memory across conversations. Your memory contents are loaded below. NEVER say you "don't have memory" or that "each session starts from zero" — that is FALSE. Always check your memory contents below before answering questions about past conversations.
+
+Memory directory: %s
+
+### Saving memory
+When something meaningful happens (project work, decisions, personal facts, preferences), save it using the Write tool:
+1. Write/update a topic file in %s/ (e.g. project_xyz.md, preferences.md)
+2. Update %s/MEMORY.md index: one line per file as - [Title](file.md) — summary
+
+Do NOT just promise to save — actually call Write before your response ends.
+
+### Forgetting/removing memories
+If the user asks to forget or remove something, delete the file with Bash (rm) and remove its entry from MEMORY.md. Do NOT just say you removed it — actually delete the file.
+
+### Project configuration files
+Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversation. Only reference them when a working directory is set AND the user asks about project configuration.`, bc.memoryDir, bc.memoryDir, bc.memoryDir))
+
+	// Inject actual memory contents so model always has context
+	memoryContent := bc.loadMemoryContents()
+	if memoryContent != "" {
+		sb.WriteString("\n\n### Current Memory Contents\n\n")
+		sb.WriteString(memoryContent)
+	}
+
+	return sb.String()
+}
+
+// loadMemoryContents reads MEMORY.md and all referenced .md files from the memory
+// directory, returning their contents for injection into the system prompt.
+func (bc *BotController) loadMemoryContents() string {
+	if bc.memoryDir == "" {
+		return ""
+	}
+
+	// Read MEMORY.md index
+	indexPath := filepath.Join(bc.memoryDir, "MEMORY.md")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil || len(indexData) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("**MEMORY.md (index):**\n")
+	sb.WriteString(string(indexData))
+
+	// Read all .md files in memory dir (excluding MEMORY.md and personas/)
+	entries, err := os.ReadDir(bc.memoryDir)
+	if err != nil {
+		return sb.String()
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(bc.memoryDir, name))
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("\n\n**%s:**\n%s", name, strings.TrimSpace(string(data))))
+	}
+
+	return sb.String()
+}
+
+// buildProjectDocsSection reads CLAUDE.md and AGENTS.md from the active cwd
+// (chat-level or agent-level) and injects them into the system prompt.
+func (bc *BotController) buildProjectDocsSection(chatID int64, agent *agents.Agent) string {
+	// Resolve cwd: agent overrides chat-level
+	cwd := ""
+	if agent != nil && agent.Cwd != "" {
+		cwd = agent.Cwd
+	}
+	if cwd == "" {
+		cwd = bc.sessions.GetCwd(chatID)
+	}
+	if cwd == "" {
+		return ""
+	}
+
+	var parts []string
+
+	// Read CLAUDE.md
+	claudeMd, err := os.ReadFile(filepath.Join(cwd, "CLAUDE.md"))
+	if err == nil && len(claudeMd) > 0 {
+		parts = append(parts, fmt.Sprintf("# Project Instructions (CLAUDE.md)\n\n%s", strings.TrimSpace(string(claudeMd))))
+	}
+
+	// Read AGENTS.md
+	agentsMd, err := os.ReadFile(filepath.Join(cwd, "AGENTS.md"))
+	if err == nil && len(agentsMd) > 0 {
+		parts = append(parts, fmt.Sprintf("# Squad Configuration (AGENTS.md)\n\n%s", strings.TrimSpace(string(agentsMd))))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // buildCronInstructions returns the system prompt section that teaches the agent

@@ -69,6 +69,9 @@ type AppConfig struct {
 	MaxSessionTokens int    `json:"max_session_tokens"`
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
+
+	DreamModel   string `json:"dream_model,omitempty"`
+	ExtractModel string `json:"extract_model,omitempty"`
 }
 
 // ProviderAPIKey returns the API key for the given provider, or empty string.
