@@ -26,6 +26,13 @@ func Bootstrap(r *PathResolver) error {
 			return fmt.Errorf("runtime: bootstrap failed to create %q: %w", dir(r), err)
 		}
 	}
+	// Ensure the global memory index exists so loadMemoryDir can discover memory files.
+	globalIndex := filepath.Join(r.Memory(), "MEMORY.md")
+	if _, err := os.Stat(globalIndex); os.IsNotExist(err) {
+		if err := os.WriteFile(globalIndex, nil, 0600); err != nil {
+			return fmt.Errorf("runtime: create global memory index: %w", err)
+		}
+	}
 	return nil
 }
 

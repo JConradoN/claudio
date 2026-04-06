@@ -103,8 +103,16 @@ func bootstrapApp() (*app, error) {
 	})
 	bot.SetOrchestrator(orch)
 
-	// Wire dreamer — background memory consolidation + nudge review
+	// Wire dreamer — background memory consolidation + nudge review.
+	// Fall back to the user's default model so dream/nudge work on any provider
+	// (avoids 402 errors when the hardcoded Anthropic models aren't available).
 	dreamCfg := dream.DefaultConfig()
+	userModel := cfg.DefaultModel
+	if userModel != "" {
+		dreamCfg.Model = userModel
+		dreamCfg.ExtractModel = userModel
+		dreamCfg.NudgeModel = userModel
+	}
 	if cfg.DreamModel != "" {
 		dreamCfg.Model = cfg.DreamModel
 	}

@@ -22,6 +22,23 @@ func (d *Dreamer) AfterTurnNudge(chatID int64, cwd string, buffer *session.Nudge
 		return
 	}
 
+	d.flushNudgeBuffer(chatID, cwd, buffer)
+}
+
+// FlushNudge forces a nudge review with whatever is in the buffer, regardless
+// of the turn threshold. Call this on session reset (/new, auto-reset) so
+// short conversations are not lost.
+func (d *Dreamer) FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer) {
+	if !d.config.NudgeEnabled || buffer == nil {
+		return
+	}
+	if buffer.TurnCount(chatID) == 0 {
+		return
+	}
+	d.flushNudgeBuffer(chatID, cwd, buffer)
+}
+
+func (d *Dreamer) flushNudgeBuffer(chatID int64, cwd string, buffer *session.NudgeBuffer) {
 	// Prevent concurrent nudges
 	if !d.nudgeRunning.CompareAndSwap(false, true) {
 		return

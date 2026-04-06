@@ -370,6 +370,11 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 			if ev.CostUSD > 0 || ev.NumTurns > 0 {
 				if bc.tracker.RecordUsage(chat.ID, ev.NumTurns, ev.CostUSD, bc.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens) {
 					log.Printf("session auto-reset: chat=%d threshold=%d", chat.ID, bc.config.MaxSessionTokens)
+					// Flush nudge buffer before clearing so conversation memories are saved.
+					if bc.dreamer != nil {
+						cwd := bc.sessions.GetCwd(chat.ID)
+						bc.dreamer.FlushNudge(chat.ID, cwd, bc.nudgeBuffer)
+					}
 					bc.sessions.Clear(chat.ID)
 					bc.tracker.Clear(chat.ID)
 				} else {
@@ -911,24 +916,25 @@ func (bc *BotController) loadMemoryContents(chatID int64) string {
 }
 
 // loadMemoryDir reads MEMORY.md and all .md files from a directory.
+// Memory files are loaded even when MEMORY.md is missing or empty so that
+// memories saved by the model are never silently dropped.
 func loadMemoryDir(dir string) string {
 	if dir == "" {
 		return ""
 	}
 
-	indexPath := filepath.Join(dir, "MEMORY.md")
-	indexData, err := os.ReadFile(indexPath)
-	if err != nil || len(indexData) == 0 {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("**MEMORY.md (index):**\n")
-	sb.WriteString(string(indexData))
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return sb.String()
+	// Include the index if it has content.
+	indexPath := filepath.Join(dir, "MEMORY.md")
+	if indexData, err := os.ReadFile(indexPath); err == nil && len(indexData) > 0 {
+		sb.WriteString("**MEMORY.md (index):**\n")
+		sb.WriteString(string(indexData))
 	}
 
 	for _, entry := range entries {

@@ -42,6 +42,7 @@ type BotController struct {
 	dreamer          interface {
 		AfterTurn()
 		AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
+		FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
 	}
 }
 
@@ -126,6 +127,7 @@ func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 func (bc *BotController) SetDreamer(d interface {
 	AfterTurn()
 	AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
+	FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
 }) {
 	bc.dreamer = d
 }
