@@ -1,8 +1,20 @@
 import { createInterface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+
+// Resolve the SDK's cli.js at runtime so the bundled import.meta.url
+// doesn't break the SDK's own path resolution.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
+const sdkCliPath = join(
+  dirname(require.resolve("@anthropic-ai/claude-agent-sdk")),
+  "cli.js",
+);
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +40,7 @@ interface RequestOptions {
   agents?: Record<string, unknown>;
   no_user_settings?: boolean;
   disabled_tools?: string[];
+  persist_session?: boolean;
 }
 
 // ── Cloud MCP (claude.ai) ───────────────────────────────────────────────────
@@ -149,11 +162,17 @@ function log(msg: string): void {
 async function buildSDKOptions(opts: RequestOptions | undefined) {
   if (!opts) return {};
 
-  const sdkOpts: Record<string, unknown> = {};
+  const sdkOpts: Record<string, unknown> = {
+    pathToClaudeCodeExecutable: sdkCliPath,
+  };
 
   if (opts.model) sdkOpts.model = opts.model;
   if (opts.cwd) sdkOpts.cwd = opts.cwd;
-  if (opts.system_prompt) sdkOpts.systemPrompt = opts.system_prompt;
+  // Only send system prompt on new sessions — continue/resume reuses the original.
+  // Sending a changed prompt on continue can cause the SDK to start a new session.
+  if (opts.system_prompt && !opts.continue && !opts.resume) {
+    sdkOpts.systemPrompt = opts.system_prompt;
+  }
   if (opts.resume) sdkOpts.resume = opts.resume;
   if (opts.continue) sdkOpts.continue = opts.continue;
   if (opts.agents && Object.keys(opts.agents).length > 0) {
@@ -174,6 +193,21 @@ async function buildSDKOptions(opts: RequestOptions | undefined) {
   } else {
     sdkOpts.settingSources = ["user", "project", "local"];
   }
+
+  // Ephemeral sessions (extractor, dream) don't persist to disk
+  if (opts.persist_session === false) {
+    sdkOpts.persistSession = false;
+  }
+
+  // Set context window — SDK defaults to 192K which is too small for large-context models
+  sdkOpts.settings = {
+    autoCompactWindow: 1000000,
+  };
+
+  // Capture stderr from the SDK process for debugging
+  sdkOpts.stderr = (data: string) => {
+    log(`sdk-stderr: ${data.trimEnd()}`);
+  };
 
   // Merge agent MCP servers with cloud MCPs from claude.ai
   const cloudServers = opts.no_user_settings ? {} : await loadCloudMCPs();
@@ -216,7 +250,7 @@ async function handleQuery(req: Request): Promise<void> {
 
   const sdkOptions = await buildSDKOptions(req.options);
 
-  log(`query start — rid=${reqId} model=${sdkOptions.model ?? "default"} prompt="${req.prompt.slice(0, 80)}..."`);
+  log(`query start — rid=${reqId} model=${sdkOptions.model ?? "default"} continue=${sdkOptions.continue ?? false} resume=${sdkOptions.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`);
 
   const timeoutMs = 10 * 60 * 1000;
   const timeout = setTimeout(() => {
@@ -282,6 +316,7 @@ async function handleQuery(req: Request): Promise<void> {
         case "result": {
           const subtype = msg.subtype as string | undefined;
           if (subtype === "success") {
+            const usage = msg.usage as Record<string, number> | undefined;
             emitReq({
               event: "result",
               content: msg.result as string,
@@ -289,6 +324,8 @@ async function handleQuery(req: Request): Promise<void> {
               session_id: msg.session_id as string,
               duration_ms: msg.duration_ms as number,
               num_turns: msg.num_turns as number,
+              input_tokens: usage?.input_tokens ?? 0,
+              output_tokens: usage?.output_tokens ?? 0,
             });
           } else {
             // error_max_turns, error_during_execution, etc.

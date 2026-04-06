@@ -14,6 +14,8 @@ import (
 	"github.com/kocar/aurelia/internal/bridge"
 	"github.com/kocar/aurelia/internal/config"
 	"github.com/kocar/aurelia/internal/cron"
+	"github.com/kocar/aurelia/internal/dream"
+	"github.com/kocar/aurelia/internal/orchestrator"
 	"github.com/kocar/aurelia/internal/persona"
 	"github.com/kocar/aurelia/internal/runtime"
 	"github.com/kocar/aurelia/internal/session"
@@ -85,7 +87,7 @@ func bootstrapApp() (*app, error) {
 
 	bot, err := telegram.NewBotController(
 		cfg, br, agentReg, personaSvc, transcriber,
-		cronHandler, resolver.MemoryPersonas(), exePath, sessions, tracker,
+		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker,
 	)
 	if err != nil {
 		if closeErr := cronStore.Close(); closeErr != nil {
@@ -94,7 +96,25 @@ func bootstrapApp() (*app, error) {
 		return nil, fmt.Errorf("initialize telegram bot: %w", err)
 	}
 
-	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot)
+	// Wire orchestrator — enables autonomous agent orchestration
+	cwd, _ := os.Getwd()
+	orch := orchestrator.NewOrchestrator(br, orchestrator.OrchestratorConfig{
+		RepoRoot: cwd,
+	})
+	bot.SetOrchestrator(orch)
+
+	// Wire dreamer — background memory consolidation + extraction
+	dreamCfg := dream.DefaultConfig()
+	if cfg.DreamModel != "" {
+		dreamCfg.Model = cfg.DreamModel
+	}
+	if cfg.ExtractModel != "" {
+		dreamCfg.ExtractModel = cfg.ExtractModel
+	}
+	dreamer := dream.New(resolver.Memory(), br, dreamCfg)
+	bot.SetDreamer(dreamer)
+
+	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory())
 	if err != nil {
 		if closeErr := cronStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close cron store: %v", closeErr)
@@ -182,6 +202,7 @@ func setupCronScheduler(
 	agentReg *agents.Registry,
 	personaSvc *persona.CanonicalIdentityService,
 	bot *telegram.BotController,
+	memoryDir string,
 ) (*cron.Scheduler, error) {
 	if agentReg == nil {
 		return nil, nil
@@ -191,6 +212,7 @@ func setupCronScheduler(
 		&cron.BridgeAdapter{B: br},
 		agentReg,
 		personaSvc,
+		memoryDir,
 	)
 
 	delivery := cron.NewTelegramDelivery(&telegramChatSender{bot: bot.GetBot()})
@@ -293,23 +315,10 @@ func setProviderEnv(cfg *config.AppConfig) {
 	}
 }
 
-// findBridgeDir locates the bridge/ directory containing bundle.js or index.ts.
+// findBridgeDir returns ~/.aurelia/bridge/ as the canonical bridge directory.
 func findBridgeDir() string {
 	home, _ := os.UserHomeDir()
-	candidates := []string{
-		"bridge",                                          // relative to cwd (development)
-		filepath.Join(filepath.Dir(os.Args[0]), "bridge"), // next to executable
-		filepath.Join(home, ".aurelia", "bridge"),          // user data dir
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "bundle.js")); err == nil {
-			return c
-		}
-		if _, err := os.Stat(filepath.Join(c, "index.ts")); err == nil {
-			return c
-		}
-	}
-	return "" // not found — triggers auto-setup
+	return filepath.Join(home, ".aurelia", "bridge")
 }
 
 func buildTranscriber(cfg *config.AppConfig) (stt.Transcriber, error) {

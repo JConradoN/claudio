@@ -30,4 +30,5 @@ type RequestOptions struct {
 	Agents         map[string]any `json:"agents,omitempty"`
 	NoUserSettings bool           `json:"no_user_settings,omitempty"`
 	DisabledTools  []string       `json:"disabled_tools,omitempty"`
+	PersistSession *bool          `json:"persist_session,omitempty"`
 }
