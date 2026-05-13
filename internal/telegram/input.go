@@ -58,7 +58,7 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 		return nil
 	}
 
-	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.UploadingPhoto, typingIndicatorInterval)
+	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.UploadingPhoto, typingIndicatorInterval, c.Message().ThreadID)
 	defer stopTyping()
 
 	text := strings.TrimSpace(caption)
@@ -118,7 +118,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 		return SendContextText(c, unsupportedDocumentMessage)
 	}
 
-	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval)
+	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval, c.Message().ThreadID)
 	defer stopTyping()
 
 	filePath, err := bc.downloadTelegramFile(&doc.File, doc.FileID+"_"+doc.FileName)
@@ -133,7 +133,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 }
 
 func (bc *BotController) handleImageDocument(c telebot.Context, doc *telebot.Document) error {
-	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.UploadingPhoto, typingIndicatorInterval)
+	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.UploadingPhoto, typingIndicatorInterval, c.Message().ThreadID)
 	defer stopTyping()
 
 	text := strings.TrimSpace(c.Message().Caption)
@@ -180,7 +180,7 @@ func (bc *BotController) handleVoice(c telebot.Context) error {
 		return nil
 	}
 
-	stopRecording := startChatActionLoop(bc.bot, c.Chat(), telebot.RecordingAudio, typingIndicatorInterval)
+	stopRecording := startChatActionLoop(bc.bot, c.Chat(), telebot.RecordingAudio, typingIndicatorInterval, c.Message().ThreadID)
 	defer stopRecording()
 
 	filePath, err := bc.downloadTelegramFile(&telebot.File{FileID: fileID}, fileID+"_"+filename)

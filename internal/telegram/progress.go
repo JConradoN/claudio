@@ -10,15 +10,20 @@ import (
 )
 
 type progressReporter struct {
-	bot   *telebot.Bot
-	chat  *telebot.Chat
-	msg   *telebot.Message
-	tools []string
-	mu    sync.Mutex
+	bot      *telebot.Bot
+	chat     *telebot.Chat
+	msg      *telebot.Message
+	tools    []string
+	threadID int
+	mu       sync.Mutex
 }
 
 func newProgressReporter(bot *telebot.Bot, chat *telebot.Chat) *progressReporter {
 	return &progressReporter{bot: bot, chat: chat}
+}
+
+func newProgressReporterWithThread(bot *telebot.Bot, chat *telebot.Chat, threadID int) *progressReporter {
+	return &progressReporter{bot: bot, chat: chat, threadID: threadID}
 }
 
 func (p *progressReporter) ReportTool(toolName string) {
@@ -36,7 +41,7 @@ func (p *progressReporter) ReportTool(toolName string) {
 	text := strings.Join(display, "\n")
 
 	if p.msg == nil {
-		sent, err := p.bot.Send(p.chat, text)
+		sent, err := p.bot.Send(p.chat, text, &telebot.SendOptions{ThreadID: p.threadID})
 		if err != nil {
 			log.Printf("Progress send error: %v", err)
 			return

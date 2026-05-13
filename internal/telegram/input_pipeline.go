@@ -271,12 +271,12 @@ func (t *bridgeFailureTracker) reset() {
 func (bc *BotController) executeAsync(chatID int64, threadID int, messageID int, req bridge.Request, userText string) {
 	chat := &telebot.Chat{ID: chatID}
 
-	// Start typing indicator
-	stopTyping := startChatActionLoop(bc.bot, chat, telebot.Typing, typingIndicatorInterval)
+	// Start typing indicator in the correct thread (0 = general/private)
+	stopTyping := startChatActionLoop(bc.bot, chat, telebot.Typing, typingIndicatorInterval, threadID)
 	defer stopTyping()
 
-	// Progress reporter
-	progress := newProgressReporter(bc.bot, chat)
+	// Progress reporter (thread-aware for forum topics)
+	progress := newProgressReporterWithThread(bc.bot, chat, threadID)
 	defer progress.Delete()
 
 	// Execute via bridge
@@ -286,7 +286,7 @@ func (bc *BotController) executeAsync(chatID int64, threadID int, messageID int,
 	ch, err := bc.bridge.Execute(ctx, req)
 	if err != nil {
 		log.Printf("Bridge execute error: %v", err)
-		if err := SendError(bc.bot, chat, "Falha ao conectar com o processador."); err != nil {
+		if err := SendErrorWithThread(bc.bot, chat, "Falha ao conectar com o processador.", threadID); err != nil {
 			log.Printf("Failed to send error to chat %d: %v", chat.ID, err)
 		}
 		return
@@ -826,15 +826,15 @@ func (bc *BotController) buildTelegramInstructions(chatID int64, messageID int, 
 		bin = bc.exePath
 	}
 
-	chatType := "private"
+	forumContext := ""
 	if threadID > 0 {
-		chatType = "forum topic"
+		forumContext = fmt.Sprintf("\nYou are in a FORUM TOPIC (thread ID %d).\nMessages and replies are scoped to this topic — they do NOT leak to other topics.\nThe typing indicator and all responses will appear in THIS topic only.\n", threadID)
 	}
 
 	return fmt.Sprintf(`## Telegram Context
 
-You ARE the Telegram bot. The user is talking to you via Telegram chat %d (%s).
-The current message ID is %d.
+You ARE the Telegram bot. The user is talking to you via Telegram chat %d.
+The current message ID is %d.`+forumContext+`
 
 You can interact with the chat using the Aurelia CLI via Bash:
 
@@ -854,7 +854,7 @@ IMPORTANT rules about the working directory:
 - When the user wants to work on files or a project, tell them to set the directory first: `+"`/cwd <path>`"+`
 - Only perform file operations (Read, Write, Edit, Bash, Glob, Grep) when a cwd is explicitly set.
 - If the user asks about "this project" or "the project", refer to conversation context and memory — do NOT go reading random directories.`,
-		chatID, chatType, messageID, bin, chatID, messageID, func() string {
+		chatID, messageID, bin, chatID, messageID, func() string {
 			if cwd := bc.sessions.GetCwd(chatID, threadID); cwd != "" {
 				return cwd
 			}

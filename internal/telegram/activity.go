@@ -1,7 +1,6 @@
 package telegram
 
 import (
-	"log"
 	"sync"
 	"time"
 
@@ -12,7 +11,7 @@ type actionSender interface {
 	Notify(to telebot.Recipient, action telebot.ChatAction, until ...int) error
 }
 
-func startChatActionLoop(sender actionSender, recipient telebot.Recipient, action telebot.ChatAction, interval time.Duration) func() {
+func startChatActionLoop(sender actionSender, recipient telebot.Recipient, action telebot.ChatAction, interval time.Duration, threadID ...int) func() {
 	if sender == nil || recipient == nil {
 		return func() {}
 	}
@@ -20,13 +19,19 @@ func startChatActionLoop(sender actionSender, recipient telebot.Recipient, actio
 		interval = typingIndicatorInterval
 	}
 
+	notify := func() {
+		if len(threadID) > 0 {
+			_ = sender.Notify(recipient, action, threadID[0])
+		} else {
+			_ = sender.Notify(recipient, action)
+		}
+	}
+
 	done := make(chan struct{})
 	var once sync.Once
 
 	go func() {
-		if err := sender.Notify(recipient, action); err != nil {
-			log.Printf("Failed to send typing indicator: %v", err)
-		}
+		notify()
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -34,9 +39,7 @@ func startChatActionLoop(sender actionSender, recipient telebot.Recipient, actio
 		for {
 			select {
 			case <-ticker.C:
-				if err := sender.Notify(recipient, action); err != nil {
-				log.Printf("Failed to send typing indicator: %v", err)
-			}
+				notify()
 			case <-done:
 				return
 			}
