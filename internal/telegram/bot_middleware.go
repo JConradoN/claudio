@@ -21,20 +21,25 @@ func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
 			sender := c.Sender()
 			chat := c.Chat()
 
+			log.Printf("whitelist check: user=%d chat=%d type=%q title=%q\n",
+				safeSenderID(sender), chat.ID, chat.Type, chat.Title)
+
+			for _, id := range bc.config.TelegramAllowedGroupIDs {
+				log.Printf("  allowed group ID: %d (match=%v)", id, id == chat.ID)
+			}
+
 			switch chat.Type {
 			case telebot.ChatPrivate:
-				// Private chat: check user whitelist
 				if sender != nil && bc.isAllowedUser(sender.ID) {
 					return next(c)
 				}
 			case telebot.ChatGroup, telebot.ChatSuperGroup:
-				// Group chat: check group whitelist
 				if bc.isAllowedGroup(chat.ID) {
 					return next(c)
 				}
 			}
 
-			log.Printf("blocked unauthorized access: user=%d chat=%d type=%s\n",
+			log.Printf("blocked unauthorized access: user=%d chat=%d type=%q\n",
 				safeSenderID(sender), chat.ID, chat.Type)
 			return nil
 		}
@@ -138,7 +143,7 @@ func (bc *BotController) handleResetCommand(c telebot.Context) error {
 	// Flush pending nudge buffer so conversation memories are saved.
 	if bc.dreamer != nil {
 		cwd := bc.sessions.GetCwd(chatID, threadID)
-		bc.dreamer.FlushNudge(chatID, cwd, bc.nudgeBuffer)
+		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
 	}
 	bc.sessions.Clear(chatID, threadID)
 	bc.tracker.Clear(chatID)

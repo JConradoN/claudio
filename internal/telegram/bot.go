@@ -42,8 +42,8 @@ type BotController struct {
 	nudgeBuffer      *session.NudgeBuffer
 	dreamer          interface {
 		AfterTurn()
-		AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
-		FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
+		AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
+		FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 	}
 	modelCache   []bridge.ModelInfo
 	modelCacheMu sync.Mutex
@@ -129,8 +129,8 @@ func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 // SetDreamer injects the dream system after construction.
 func (bc *BotController) SetDreamer(d interface {
 	AfterTurn()
-	AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
-	FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
+	AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
+	FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 }) {
 	bc.dreamer = d
 }

@@ -3,6 +3,7 @@ package dream
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"log"
 	"strings"
 	"time"
@@ -13,7 +14,7 @@ import (
 
 // AfterTurnNudge checks if enough turns have accumulated to trigger a nudge review.
 // It runs in background without blocking the chat.
-func (d *Dreamer) AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer) {
+func (d *Dreamer) AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer) {
 	if !d.config.NudgeEnabled || buffer == nil {
 		return
 	}
@@ -22,23 +23,23 @@ func (d *Dreamer) AfterTurnNudge(chatID int64, cwd string, buffer *session.Nudge
 		return
 	}
 
-	d.flushNudgeBuffer(chatID, cwd, buffer)
+	d.flushNudgeBuffer(chatID, threadID, cwd, buffer)
 }
 
 // FlushNudge forces a nudge review with whatever is in the buffer, regardless
 // of the turn threshold. Call this on session reset (/new, auto-reset) so
 // short conversations are not lost.
-func (d *Dreamer) FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer) {
+func (d *Dreamer) FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer) {
 	if !d.config.NudgeEnabled || buffer == nil {
 		return
 	}
 	if buffer.TurnCount(chatID) == 0 {
 		return
 	}
-	d.flushNudgeBuffer(chatID, cwd, buffer)
+	d.flushNudgeBuffer(chatID, threadID, cwd, buffer)
 }
 
-func (d *Dreamer) flushNudgeBuffer(chatID int64, cwd string, buffer *session.NudgeBuffer) {
+func (d *Dreamer) flushNudgeBuffer(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer) {
 	// Prevent concurrent nudges
 	if !d.nudgeRunning.CompareAndSwap(false, true) {
 		return
@@ -50,10 +51,10 @@ func (d *Dreamer) flushNudgeBuffer(chatID int64, cwd string, buffer *session.Nud
 		return
 	}
 
-	go d.runNudge(messages, cwd)
+	go d.runNudge(messages, threadID, cwd)
 }
 
-func (d *Dreamer) runNudge(messages []session.NudgeMessage, cwd string) {
+func (d *Dreamer) runNudge(messages []session.NudgeMessage, threadID int, cwd string) {
 	defer d.nudgeRunning.Store(false)
 
 	log.Printf("[nudge] starting review with %d messages...", len(messages))
@@ -66,7 +67,7 @@ func (d *Dreamer) runNudge(messages []session.NudgeMessage, cwd string) {
 	}
 
 	// Build system prompt with memory directories
-	sysPrompt := d.buildNudgePrompt(cwd)
+	sysPrompt := d.buildNudgePrompt(cwd, threadID)
 
 	prompt := fmt.Sprintf(`TASK: Extract facts from the conversation below and save them using the Write tool.
 
@@ -119,12 +120,22 @@ IMPORTANT: You MUST call the Write tool at least once. If the conversation has a
 		time.Since(start).Round(time.Second), ev.CostUSD, ev.NumTurns)
 }
 
-func (d *Dreamer) buildNudgePrompt(cwd string) string {
+func (d *Dreamer) buildNudgePrompt(cwd string, threadID int) string {
+	globalDir := d.memoryDir
+	topicDir := ""
+	if threadID > 0 {
+		topicDir = filepath.Join(globalDir, "topics", fmt.Sprint(threadID))
+	}
+
 	// When no project context, use global-only prompt
 	if cwd == "" || d.resolver == nil {
-		return `You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
+		saveDirs := "SAVE DIRECTORY: " + globalDir
+		if topicDir != "" {
+			saveDirs = "SAVE DIRECTORIES:\n- GLOBAL (" + globalDir + ") — personal facts, preferences, language, hobbies\n- TOPIC (" + topicDir + ") — facts specific to this forum topic"
+		}
+		return fmt.Sprintf(`You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
 
-SAVE DIRECTORY: ` + d.memoryDir + `
+%s
 
 ## What to save (extract ALL of these)
 - What topics were discussed (always save this)
@@ -135,35 +146,37 @@ SAVE DIRECTORY: ` + d.memoryDir + `
 - Problems encountered and how they were solved
 
 ## How to save — follow these steps exactly
-1. Use the Write tool to create or update a .md file in the save directory. Example: Write to ` + d.memoryDir + `/conversation_log.md
+1. Use the Write tool to create or update a .md file in the save directory. Example: Write to `+globalDir+`/conversation_log.md
 2. Each file should have a clear topic name
 3. Write one fact per line, prefixed with "- "
-4. After saving files, update ` + d.memoryDir + `/MEMORY.md with one index line per file: "- [Title](filename.md) — short description"
+4. After saving files, update MEMORY.md with one index line per file: "- [Title](filename.md) — short description"
 
 ## Format example for a memory file
-` + "```" + `
+`+"```"+`
 - User asked to list projects in D:/projetos
 - User wants to pick a project to work on tomorrow
 - User prefers casual conversation style (pt-BR)
-` + "```" + `
+`+"```"+`
 
 ## Rules
 - You MUST use the Write tool — do not just describe what you would save
 - Do NOT touch anything in personas/ subdirectory
 - Do NOT copy full conversation text — only extract facts
-- If a file already exists with the same topic, append new facts to it`
+- If a file already exists with the same topic, READ it first then append new facts`, saveDirs)
 	}
 
-	globalDir := d.memoryDir
 	projectDir := d.resolver.ProjectMemoryDir(cwd)
 	teamDir := d.resolver.ProjectTeamMemoryDir(cwd)
 
-	return `You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
+	saveDirs := fmt.Sprintf("- GLOBAL (%s) — personal facts, preferences, language, hobbies\n- PROJECT (%s) — work log, task state, personal decisions for this project\n- TEAM (%s) — stack, conventions, architecture, bugs (useful for any team member)", globalDir, projectDir, teamDir)
+	if topicDir != "" {
+		saveDirs += fmt.Sprintf("\n- TOPIC (%s) — facts specific to this forum topic", topicDir)
+	}
+
+	return fmt.Sprintf(`You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
 
 ## Save directories (use the correct one for each fact)
-- GLOBAL (` + globalDir + `) — personal facts, preferences, language, hobbies
-- PROJECT (` + projectDir + `) — work log, task state, personal decisions for this project
-- TEAM (` + teamDir + `) — stack, conventions, architecture, bugs (useful for any team member)
+%s
 
 ## What to save (extract ALL of these)
 - What topics were discussed (always save this)
@@ -174,21 +187,21 @@ SAVE DIRECTORY: ` + d.memoryDir + `
 - Problems encountered and how they were solved
 
 ## How to save — follow these steps exactly
-1. Use the Write tool to create or update a .md file in the correct directory. Example: Write to ` + globalDir + `/conversation_log.md
+1. Use the Write tool to create or update a .md file in the correct directory
 2. Each file should have a clear topic name
 3. Write one fact per line, prefixed with "- "
 4. After saving files, update MEMORY.md in each directory you wrote to
 
 ## Format example for a memory file
-` + "```" + `
+`+"```"+`
 - User asked to list projects in D:/projetos
 - User wants to pick a project to work on tomorrow
 - User prefers casual conversation style (pt-BR)
-` + "```" + `
+`+"```"+`
 
 ## Rules
 - You MUST use the Write tool — do not just describe what you would save
 - Do NOT touch anything in personas/ subdirectory
 - Do NOT copy full conversation text — only extract facts
-- If a file already exists with the same topic, READ it first then append new facts`
+- If a file already exists with the same topic, READ it first then append new facts`, saveDirs)
 }

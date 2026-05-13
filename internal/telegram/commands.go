@@ -207,7 +207,7 @@ func (bc *BotController) cmdSessionReset(chatID int64, threadID int) (string, er
 	// Flush pending nudge buffer so short conversations are not lost.
 	if bc.dreamer != nil {
 		cwd := bc.sessions.GetCwd(chatID, threadID)
-		bc.dreamer.FlushNudge(chatID, cwd, bc.nudgeBuffer)
+		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
 	}
 	bc.sessions.Clear(chatID, threadID)
 	bc.tracker.Clear(chatID)
