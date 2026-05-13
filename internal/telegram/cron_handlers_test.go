@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/cron"
+	"github.com/igormaneschy/aurelia/internal/cron"
 )
 
 type fakeCronCommandService struct {

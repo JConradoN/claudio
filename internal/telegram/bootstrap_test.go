@@ -6,21 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/config"
 	"gopkg.in/telebot.v3"
 )
 
 func TestBuildUserTemplate_UsesTelegramName(t *testing.T) {
 	user := &telebot.User{
 		ID:        42,
-		FirstName: "Rafael",
-		LastName:  "Kocar",
-		Username:  "rafa",
+		FirstName: "Igor",
+		LastName:  "Maneschy",
+		Username:  "igor",
 	}
 
 	got := buildUserTemplate(user)
 
-	if !strings.Contains(got, "Nome: Rafael Kocar") {
+	if !strings.Contains(got, "Nome: Igor Maneschy") {
 		t.Fatalf("expected full name in user template, got %q", got)
 	}
 	if strings.Contains(got, "Usuario 42") {
@@ -42,12 +42,12 @@ func TestBuildUserTemplate_FallsBackWithoutInventingIdentity(t *testing.T) {
 }
 
 func TestBuildUserTemplateFromProfile_UsesConversationProfile(t *testing.T) {
-	got := buildUserTemplateFromProfile("Me chamo Rafael e quero respostas diretas, sem floreios.", "rafa")
+	got := buildUserTemplateFromProfile("Me chamo Igor e quero respostas diretas, sem floreios.", "rafa")
 
-	if !strings.Contains(got, "Nome: Rafael") {
+	if !strings.Contains(got, "Nome: Igor") {
 		t.Fatalf("expected extracted name, got %q", got)
 	}
-	if !strings.Contains(got, "Preferencias: Me chamo Rafael e quero respostas diretas, sem floreios.") {
+	if !strings.Contains(got, "Preferencias: Me chamo Igor e quero respostas diretas, sem floreios.") {
 		t.Fatalf("expected full profile text, got %q", got)
 	}
 }
@@ -62,10 +62,10 @@ func TestBuildUserTemplateFromProfile_FallsBackToTelegramName(t *testing.T) {
 
 func TestExtractNameFromProfile(t *testing.T) {
 	cases := map[string]string{
-		"Me chamo Rafael e quero respostas diretas.": "Rafael",
-		"Meu nome e Rafael Kocar.":                   "Rafael Kocar",
-		"Sou Rafael.":                                "Rafael",
-		"Quero respostas diretas.":                   "",
+		"Me chamo Igor e quero respostas diretas.": "Igor",
+		"Meu nome e Igor Maneschy.":                "Igor Maneschy",
+		"Sou Igor.":                                "Igor",
+		"Quero respostas diretas.":                 "",
 	}
 
 	for input, want := range cases {

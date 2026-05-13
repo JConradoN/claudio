@@ -1,6 +1,6 @@
 package orchestrator
 
-import "github.com/kocar/aurelia/internal/agents"
+import "github.com/igormaneschy/aurelia/internal/agents"
 
 // DefaultWorkerConfig is the built-in worker that works without any .md file.
 var DefaultWorkerConfig = WorkerConfig{

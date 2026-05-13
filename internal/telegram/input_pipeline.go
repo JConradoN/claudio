@@ -12,13 +12,17 @@ import (
 
 	"gopkg.in/telebot.v3"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/bridge"
-	"github.com/kocar/aurelia/internal/orchestrator"
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/orchestrator"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 func (bc *BotController) processInput(c telebot.Context, text string) error {
+	return bc.processInputWithImages(c, text, nil)
+}
+
+func (bc *BotController) processInputWithImages(c telebot.Context, text string, images []bridge.ImageAttachment) error {
 	if state, ok := bc.popPendingBootstrap(c.Sender().ID); ok {
 		switch state.Step {
 		case bootstrapStepAssistant:
@@ -75,6 +79,21 @@ func (bc *BotController) processInput(c telebot.Context, text string) error {
 
 	// 3. Build bridge request (sync)
 	req := bc.buildBridgeRequest(userText, systemPrompt, agent, chatID)
+	req.Options.Images = images
+
+	// 3b. Vision fallback: if images are present and a vision model is configured,
+	// override the model/provider so non-vision models can delegate image analysis.
+	if len(images) > 0 {
+		if vModel, vProvider := bc.config.VisionFallback(); vModel != "" {
+			log.Printf("vision: switching to fallback model %s/%s for image input", vProvider, vModel)
+			req.Options.Model = vModel
+			if vProvider != "" {
+				req.Options.Provider = vProvider
+			}
+		} else {
+			log.Printf("vision: no fallback configured, using default model")
+		}
+	}
 
 	// 4. Launch async execution — don't block the handler
 	go bc.executeAsync(chatID, messageID, req, userText)
@@ -444,6 +463,15 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int) (string, error) {
 	var sections []string
 	var personaLen, agentLen, cronLen, telegramLen int
+
+	// Runtime identity — tells the model what provider and model it is running on
+	provider := bc.config.DefaultProvider
+	model := bc.config.DefaultModel
+	if agent != nil && agent.Model != "" {
+		model = agent.Model
+	}
+	identitySection := fmt.Sprintf("# Runtime Identity\n\nYou are running via the Aurelia bridge over the PI SDK.\nProvider: %s\nModel: %s\nAlways answer accurately when asked what model you are.", provider, model)
+	sections = append(sections, identitySection)
 
 	// Persona prompt
 	if bc.persona != nil {
@@ -828,7 +856,7 @@ func (bc *BotController) buildMemoryInstructions(chatID int64) string {
 
 	sb.WriteString(`## Persistent Memory — YOU HAVE MEMORY
 
-IMPORTANT: Unlike standard Claude Code, you DO have persistent memory across conversations. Your memory contents are loaded below. NEVER say you "don't have memory" or that "each session starts from zero" — that is FALSE. Always check your memory contents below before answering questions about past conversations.`)
+IMPORTANT: Unlike standard coding agents, you DO have persistent memory across conversations. Your memory contents are loaded below. NEVER say you "don't have memory" or that "each session starts from zero" — that is FALSE. Always check your memory contents below before answering questions about past conversations.`)
 
 	// Saving instructions depend on whether project context is active
 	if hasProject {

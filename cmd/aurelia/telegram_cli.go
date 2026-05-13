@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 	"gopkg.in/telebot.v3"
 )
 

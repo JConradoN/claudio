@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"context"
 
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 // BridgeExecutor is the interface the orchestrator needs from the bridge.

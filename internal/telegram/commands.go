@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 	"unicode"
 
 	"gopkg.in/telebot.v3"
 
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 // CommandType identifies a system command that can be handled locally without LLM.
@@ -25,6 +27,7 @@ const (
 	CmdStatus
 	CmdListAgents
 	CmdListModels
+	CmdSetModel
 )
 
 // MatchedCommand represents a message that was identified as a system command.
@@ -89,6 +92,12 @@ var commandRules = []commandRule{
 	{CmdListModels, []string{
 		"quais modelos", "lista modelos", "listar modelos",
 		"quais provedores", "lista provedores", "listar provedores",
+	}, false},
+	// set_model
+	{CmdSetModel, []string{
+		"muda modelo", "mudar modelo", "troca modelo", "trocar modelo",
+		"escolhe modelo", "seleciona modelo",
+		"/model ",
 	}, false},
 }
 
@@ -177,6 +186,8 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 		reply, err = bc.cmdListAgents()
 	case CmdListModels:
 		reply, err = bc.cmdListModels()
+	case CmdSetModel:
+		reply, err = bc.cmdSetModel(c, cmd.Text)
 	default:
 		return fmt.Errorf("unknown command type: %d", cmd.Type)
 	}
@@ -472,37 +483,171 @@ func (bc *BotController) cmdListAgents() (string, error) {
 }
 
 func (bc *BotController) cmdListModels() (string, error) {
-	if bc.config == nil || len(bc.config.Providers) == 0 {
-		return "Nenhum provedor configurado.", nil
+	// Always show current model first
+	currentLine := fmt.Sprintf("Modelo atual: **%s** (provedor: **%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+
+	if bc.bridge == nil {
+		return currentLine + "\n\nProcessador não disponível para listar modelos.", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	models, err := bc.bridge.ListModels(ctx)
+	if err != nil {
+		return currentLine + fmt.Sprintf("\n\nLista não disponível: %v", err), nil
 	}
 
 	var lines []string
-	lines = append(lines, "**Modelos e Provedores**\n")
+	lines = append(lines, currentLine)
+	lines = append(lines, "\n\n**Modelos disponíveis:**")
 
-	for name, prov := range bc.config.Providers {
-		status := "ativo"
-		if prov.APIKey == "" {
-			status = "sem API key"
+	// Group by provider (limit to 25 for Telegram readability)
+	type provInfo struct{ models []string }
+	grouped := make(map[string]*provInfo)
+	var providerOrder []string
+	for _, m := range models {
+		if grouped[m.Provider] == nil {
+			grouped[m.Provider] = &provInfo{}
+			providerOrder = append(providerOrder, m.Provider)
 		}
-		models := "—"
-		if known, ok := providerModels[name]; ok {
-			models = strings.Join(known, ", ")
+		display := fmt.Sprintf("`%s`", m.ID)
+		if m.SupportsImages {
+			display += " 📷"
 		}
-		lines = append(lines, fmt.Sprintf("- **%s** [%s]: %s", name, status, models))
+		grouped[m.Provider].models = append(grouped[m.Provider].models, display)
 	}
 
-	if bc.config.DefaultModel != "" {
-		lines = append(lines, fmt.Sprintf("\nModelo padrão: **%s**", bc.config.DefaultModel))
+	displayed := 0
+	const maxDisplay = 25
+	for _, prov := range providerOrder {
+		if displayed >= maxDisplay {
+			remaining := len(models) - displayed
+			lines = append(lines, fmt.Sprintf("\n... e mais %d modelos", remaining))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("\n%s:", prov))
+		for _, m := range grouped[prov].models {
+			if displayed >= maxDisplay {
+				break
+			}
+			lines = append(lines, fmt.Sprintf("  %s", m))
+			displayed++
+		}
 	}
 
+	lines = append(lines, "\n\nUse /model <nome> para trocar.")
 	return strings.Join(lines, "\n"), nil
 }
 
-// providerModels maps known providers to their available models.
-var providerModels = map[string][]string{
-	"anthropic":  {"claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"},
-	"google":     {"gemini-2.5-pro", "gemini-2.5-flash"},
-	"kimi":       {"kimi-k2-thinking", "kimi-k2"},
-	"openrouter": {"openrouter/auto"},
-	"zai":        {"zai-1.5-flash"},
+func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, error) {
+	if bc.bridge == nil {
+		return "Processador não disponível.", nil
+	}
+
+	// Extract the model name from the text
+	modelName := extractModelName(text)
+	if modelName == "" {
+		return "Use /model <nome> ou 'muda modelo para <nome>' para trocar.\n\n" +
+			"Digite 'lista modelos' para ver as opções disponíveis.", nil
+	}
+
+	// Validate: check if the model exists in PI registry
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	available, err := bc.bridge.ListModels(ctx)
+	if err != nil {
+		return "", fmt.Errorf("falha ao consultar modelos: %w", err)
+	}
+
+	var matched *bridge.ModelInfo
+	for _, m := range available {
+		fullID := m.ID
+		fullWithProvider := m.Provider + "/" + m.ID
+		if strings.EqualFold(modelName, fullID) || strings.EqualFold(modelName, fullWithProvider) {
+			matched = &m
+			break
+		}
+	}
+
+	if matched == nil {
+		return fmt.Sprintf("Modelo %q não encontrado. Use 'lista modelos' para ver as opções.", modelName), nil
+	}
+
+	// Update in-memory config
+	bc.config.DefaultModel = matched.ID
+	bc.config.DefaultProvider = matched.Provider
+
+	// Persist to file
+	if err := bc.saveDefaultModel(matched.Provider, matched.ID); err != nil {
+		return "", fmt.Errorf("falha ao salvar configuração: %w", err)
+	}
+
+	return fmt.Sprintf("✅ Modelo alterado para **%s** (provedor: **%s**)\nPróxima mensagem usará o novo modelo.", matched.ID, matched.Provider), nil
+}
+
+// extractModelName pulls the model name from a set-model command.
+func extractModelName(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+
+	// Try /model <name> syntax
+	if strings.HasPrefix(lower, "/model ") {
+		return strings.TrimSpace(text[len("/model "):])
+	}
+
+	// Try "muda modelo para <name>" or similar
+	for _, prefix := range []string{"muda modelo para ", "mudar modelo para ", "troca modelo para ", "trocar modelo para ", "escolhe modelo ", "seleciona modelo "} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(text[len(prefix):])
+		}
+	}
+
+	// Last word as model name fallback
+	words := strings.Fields(text)
+	if len(words) > 0 {
+		return words[len(words)-1]
+	}
+
+	return ""
+}
+
+// saveDefaultModel persists the default provider and model to the config file.
+func (bc *BotController) saveDefaultModel(provider, model string) error {
+	if bc.config == nil {
+		return fmt.Errorf("config is nil")
+	}
+	bc.config.DefaultProvider = provider
+	bc.config.DefaultModel = model
+
+	// Read current app.json, update, write back
+	resolver, err := runtime.New()
+	if err != nil {
+		return fmt.Errorf("resolve instance: %w", err)
+	}
+	cfgPath := resolver.AppConfig()
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	var cfgMap map[string]any
+	if err := json.Unmarshal(data, &cfgMap); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	cfgMap["default_provider"] = provider
+	cfgMap["default_model"] = model
+
+	updated, err := json.MarshalIndent(cfgMap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(cfgPath, updated, 0600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	return nil
 }

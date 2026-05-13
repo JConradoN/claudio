@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/kocar/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/agents"
 )
 
 func TestResolveAgentConfig_NoRegistry(t *testing.T) {

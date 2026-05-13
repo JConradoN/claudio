@@ -8,15 +8,15 @@ import (
 
 	"gopkg.in/telebot.v3"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/bridge"
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/orchestrator"
-	"github.com/kocar/aurelia/internal/persona"
-	"github.com/kocar/aurelia/internal/runtime"
-	"github.com/kocar/aurelia/internal/session"
-	"github.com/kocar/aurelia/internal/version"
-	"github.com/kocar/aurelia/pkg/stt"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/orchestrator"
+	"github.com/igormaneschy/aurelia/internal/persona"
+	"github.com/igormaneschy/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/version"
+	"github.com/igormaneschy/aurelia/pkg/stt"
 )
 
 // BotController wires Telegram I/O to the application services.
@@ -45,6 +45,8 @@ type BotController struct {
 		AfterTurnNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
 		FlushNudge(chatID int64, cwd string, buffer *session.NudgeBuffer)
 	}
+	modelCache   []bridge.ModelInfo
+	modelCacheMu sync.Mutex
 }
 
 type albumBuffer struct {

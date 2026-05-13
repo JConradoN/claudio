@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 // --- fakes ---

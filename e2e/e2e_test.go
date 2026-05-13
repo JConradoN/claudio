@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/cron"
-	"github.com/kocar/aurelia/internal/persona"
-	"github.com/kocar/aurelia/internal/session"
-	"github.com/kocar/aurelia/internal/telegram"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/cron"
+	"github.com/igormaneschy/aurelia/internal/persona"
+	"github.com/igormaneschy/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/telegram"
 )
 
 func TestWiring_AllComponentsInitialize(t *testing.T) {

@@ -63,7 +63,7 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 			return "", fmt.Errorf("write package.json: %w", err)
 		}
 
-		log.Println("Installing Claude Agent SDK (npm install)...")
+		log.Println("Installing PI SDK bridge dependencies (npm install)...")
 		cmd := exec.Command("npm", "install", "--production", "--no-optional")
 		cmd.Dir = targetDir
 		cmd.Stdout = os.Stderr

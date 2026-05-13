@@ -26,7 +26,7 @@ Examples: `defaultMaxIterations = 500`, `defaultLLMProvider = "kimi"`, `defaultS
 **Import ordering:** Three groups separated by blank lines
 1. Standard library (alphabetical)
 2. Third-party (alphabetical)
-3. Internal `github.com/kocar/aurelia/...` (alphabetical)
+3. Internal `github.com/igormaneschy/aurelia/...` (alphabetical)
 
 ```go
 import (
@@ -36,8 +36,8 @@ import (
 
     "gopkg.in/telebot.v3"
 
-    "github.com/kocar/aurelia/internal/bridge"
-    "github.com/kocar/aurelia/internal/config"
+    "github.com/igormaneschy/aurelia/internal/bridge"
+    "github.com/igormaneschy/aurelia/internal/config"
 )
 ```
 

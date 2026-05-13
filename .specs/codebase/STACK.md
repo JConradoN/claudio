@@ -5,7 +5,7 @@
 ## Core
 
 - Language: Go 1.25.0
-- Module: `github.com/kocar/aurelia`
+- Module: `github.com/igormaneschy/aurelia`
 - Package manager: Go modules
 - Build: `go build -trimpath -ldflags "-s -w" -o ./build/aurelia ./cmd/aurelia`
 - Hot reload: Air (`.air.toml` configured)

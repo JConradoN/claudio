@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 func TestValidate_FailedWorker(t *testing.T) {

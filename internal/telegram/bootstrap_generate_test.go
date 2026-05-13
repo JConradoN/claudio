@@ -142,12 +142,12 @@ func TestBuildAssistantGeneratePrompt_IncludesPresetAndDescription(t *testing.T)
 }
 
 func TestBuildUserGeneratePrompt_IncludesDescriptionAndFallback(t *testing.T) {
-	prompt := buildUserGeneratePrompt("Me chamo Rafael, sou dev e quero respostas diretas", "RafaKocar")
+	prompt := buildUserGeneratePrompt("Me chamo Igor, sou dev e quero respostas diretas", "IgorManeschy")
 
-	if !strings.Contains(prompt, "Rafael") {
+	if !strings.Contains(prompt, "Igor") {
 		t.Fatalf("expected user description in prompt, got %q", prompt)
 	}
-	if !strings.Contains(prompt, "RafaKocar") {
+	if !strings.Contains(prompt, "IgorManeschy") {
 		t.Fatalf("expected fallback name in prompt, got %q", prompt)
 	}
 }

@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/deps"
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/deps"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 	"golang.org/x/term"
 )
 
@@ -33,6 +34,7 @@ const (
 	stepTelegramToken
 	stepTelegramUsers
 	stepRuntimeMaxIterations
+	stepVisionModel
 	stepReview
 )
 
@@ -166,6 +168,25 @@ func runOnboardPrompt(stdin io.Reader, stdout io.Writer, resolver *runtime.PathR
 	current.TelegramBotToken, _ = promptString(reader, stdout, "Telegram bot token", current.TelegramBotToken, true)
 	current.TelegramAllowedUserIDs, _ = promptInt64List(reader, stdout, "Telegram allowed user IDs (comma-separated)", current.TelegramAllowedUserIDs)
 	current.MaxIterations, _ = promptInt(reader, stdout, "Max iterations", current.MaxIterations)
+
+	// Vision fallback model (optional)
+	defaultVision := current.VisionModel
+	if current.VisionProvider != "" {
+		defaultVision = current.VisionProvider + "/" + current.VisionModel
+	}
+	visionRaw, _ := promptString(reader, stdout, "Vision fallback model (optional, e.g. provider/model)", defaultVision, false)
+	visionRaw = strings.TrimSpace(visionRaw)
+	if visionRaw == "" {
+		current.VisionModel = ""
+		current.VisionProvider = ""
+	} else if strings.Contains(visionRaw, "/") {
+		parts := strings.SplitN(visionRaw, "/", 2)
+		current.VisionProvider = strings.TrimSpace(parts[0])
+		current.VisionModel = strings.TrimSpace(parts[1])
+	} else {
+		current.VisionModel = visionRaw
+		current.VisionProvider = ""
+	}
 
 	current.STTProvider = "groq"
 

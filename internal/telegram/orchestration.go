@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kocar/aurelia/internal/orchestrator"
+	"github.com/igormaneschy/aurelia/internal/orchestrator"
 
 	"gopkg.in/telebot.v3"
 )

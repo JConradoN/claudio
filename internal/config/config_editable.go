@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 // EditableConfig represents the user-editable portion of the runtime config.
@@ -22,6 +22,9 @@ type EditableConfig struct {
 	AnthropicAuthMode      string
 	GroqAPIKey             string
 	MaxIterations          int
+
+	VisionModel    string
+	VisionProvider string
 }
 
 func (c EditableConfig) LLMAPIKey(provider string) string {
@@ -105,6 +108,8 @@ func appConfigToEditable(cfg *AppConfig) *EditableConfig {
 		AlibabaAPIKey:          cfg.ProviderAPIKey("alibaba"),
 		GroqAPIKey:             cfg.ProviderAPIKey("groq"),
 		MaxIterations:          cfg.MaxIterations,
+		VisionModel:            cfg.VisionModel,
+		VisionProvider:         cfg.VisionProvider,
 	}
 }
 
@@ -147,6 +152,8 @@ func editableToFileConfig(editable EditableConfig) fileConfig {
 		TelegramBotToken:       editable.TelegramBotToken,
 		TelegramAllowedUserIDs: append([]int64(nil), editable.TelegramAllowedUserIDs...),
 		MaxIterations:          editable.MaxIterations,
+		VisionModel:            editable.VisionModel,
+		VisionProvider:         editable.VisionProvider,
 	}
 }
 
@@ -157,7 +164,9 @@ func sameFileConfig(a, b fileConfig) bool {
 		a.STTProvider != b.STTProvider ||
 		a.MaxIterations != b.MaxIterations ||
 		a.DBPath != b.DBPath ||
-		a.MCPConfigPath != b.MCPConfigPath {
+		a.MCPConfigPath != b.MCPConfigPath ||
+		a.VisionModel != b.VisionModel ||
+		a.VisionProvider != b.VisionProvider {
 		return false
 	}
 	if len(a.TelegramAllowedUserIDs) != len(b.TelegramAllowedUserIDs) {

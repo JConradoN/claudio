@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 // CronJob represents a scheduled job.

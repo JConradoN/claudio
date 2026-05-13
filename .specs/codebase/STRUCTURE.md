@@ -1,6 +1,6 @@
 # Project Structure
 
-**Root:** `RafaClaw-aurelia-os/`
+**Root:** `aurelia/`
 
 ## Directory Tree
 
@@ -21,7 +21,7 @@
 │   └── telegram_cli.go        # Telegram message CLI
 │
 ├── bridge/                    # TypeScript bridge source
-│   ├── index.ts               # Claude Agent SDK wrapper (~400 LOC)
+│   ├── index.ts               # PI SDK wrapper (~400 LOC)
 │   ├── bundle.js              # Compiled JS (embedded in Go binary)
 │   ├── package.json           # SDK dependency
 │   └── tsconfig.json

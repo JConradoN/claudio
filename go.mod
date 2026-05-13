@@ -1,4 +1,4 @@
-module github.com/kocar/aurelia
+module github.com/igormaneschy/aurelia
 
 go 1.25.0
 

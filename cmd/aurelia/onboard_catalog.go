@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/kocar/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/config"
 )
 
 func resolveModelOptions(cfg config.EditableConfig) ([]ModelOption, string) {

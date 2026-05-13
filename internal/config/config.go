@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 // NormalizeProvider returns a canonical lowercase provider name.
@@ -76,6 +76,15 @@ type AppConfig struct {
 	NudgeEnabled *bool  `json:"nudge_enabled,omitempty"` // nil = default true
 	NudgeTurns   int    `json:"nudge_turns,omitempty"`
 	NudgeModel   string `json:"nudge_model,omitempty"`
+
+	VisionModel    string `json:"vision_model,omitempty"`
+	VisionProvider string `json:"vision_provider,omitempty"`
+}
+
+// VisionFallback returns the configured vision model and provider for image inputs.
+// Returns empty strings when no vision fallback is configured.
+func (c *AppConfig) VisionFallback() (model, provider string) {
+	return c.VisionModel, c.VisionProvider
 }
 
 // ProviderAPIKey returns the API key for the given provider, or empty string.
@@ -120,6 +129,9 @@ type fileConfig struct {
 	MaxSessionTokens int    `json:"max_session_tokens"`
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
+
+	VisionModel    string `json:"vision_model,omitempty"`
+	VisionProvider string `json:"vision_provider,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -244,5 +256,7 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		MaxSessionTokens:       cfg.MaxSessionTokens,
 		DBPath:                 cfg.DBPath,
 		MCPConfigPath:          cfg.MCPConfigPath,
+		VisionModel:            cfg.VisionModel,
+		VisionProvider:         cfg.VisionProvider,
 	}
 }

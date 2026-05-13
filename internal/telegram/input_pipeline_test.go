@@ -7,10 +7,10 @@ import (
 
 	"gopkg.in/telebot.v3"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/bridge"
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 func TestBuildSystemPrompt_WithoutDependencies(t *testing.T) {

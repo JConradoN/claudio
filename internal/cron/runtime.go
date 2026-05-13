@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 // BridgeCronRuntime executes cron jobs via the Claude Code bridge,

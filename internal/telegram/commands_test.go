@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/agents"
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/cron"
-	"github.com/kocar/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/cron"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 func TestMatch(t *testing.T) {
@@ -395,7 +395,7 @@ func writeTestFile(path, content string) error {
 
 // --- T11: list_models tests ---
 
-func TestCmdListModels_WithProviders(t *testing.T) {
+func TestCmdListModels_RequiresBridge(t *testing.T) {
 	t.Parallel()
 
 	bc := &BotController{
@@ -403,8 +403,6 @@ func TestCmdListModels_WithProviders(t *testing.T) {
 			DefaultModel: "kimi-k2-thinking",
 			Providers: map[string]config.ProviderConfig{
 				"anthropic": {APIKey: "sk-test"},
-				"kimi":      {APIKey: "kimi-key"},
-				"google":    {APIKey: ""},
 			},
 		},
 	}
@@ -413,29 +411,9 @@ func TestCmdListModels_WithProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cmdListModels() error = %v", err)
 	}
-	if !strings.Contains(reply, "anthropic") || !strings.Contains(reply, "kimi") {
-		t.Fatalf("expected provider names, got %q", reply)
-	}
-	if !strings.Contains(reply, "sem API key") {
-		t.Fatalf("expected 'sem API key' for google, got %q", reply)
-	}
-}
-
-func TestCmdListModels_NoProviders(t *testing.T) {
-	t.Parallel()
-
-	bc := &BotController{
-		config: &config.AppConfig{
-			Providers: map[string]config.ProviderConfig{},
-		},
-	}
-
-	reply, err := bc.cmdListModels()
-	if err != nil {
-		t.Fatalf("cmdListModels() error = %v", err)
-	}
-	if !strings.Contains(reply, "Nenhum") {
-		t.Fatalf("expected 'nenhum' message, got %q", reply)
+	// Without a bridge, cmdListModels returns a user-friendly message.
+	if !strings.Contains(reply, "disponível") {
+		t.Fatalf("expected bridge-not-available message, got %q", reply)
 	}
 }
 

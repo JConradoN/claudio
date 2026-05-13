@@ -16,20 +16,28 @@ type Request struct {
 	Options   RequestOptions `json:"options,omitempty"`
 }
 
+// ImageAttachment represents a base64-encoded image to send alongside the prompt.
+type ImageAttachment struct {
+	Path      string `json:"path,omitempty"`
+	Data      string `json:"data,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}
+
 // RequestOptions configures how the Bridge executes a query.
 type RequestOptions struct {
-	Provider       string         `json:"provider,omitempty"`
-	Model          string         `json:"model,omitempty"`
-	Cwd            string         `json:"cwd,omitempty"`
-	SystemPrompt   string         `json:"system_prompt,omitempty"`
-	Resume         string         `json:"resume,omitempty"`
-	MaxTurns       int            `json:"max_turns,omitempty"`
-	PermissionMode string         `json:"permission_mode,omitempty"`
-	MCPServers     map[string]any `json:"mcp_servers,omitempty"`
-	AllowedTools   []string       `json:"allowed_tools,omitempty"`
-	Continue       bool           `json:"continue,omitempty"`
-	Agents         map[string]any `json:"agents,omitempty"`
-	NoUserSettings bool           `json:"no_user_settings,omitempty"`
-	DisabledTools  []string       `json:"disabled_tools,omitempty"`
-	PersistSession *bool          `json:"persist_session,omitempty"`
+	Provider       string            `json:"provider,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	Cwd            string            `json:"cwd,omitempty"`
+	SystemPrompt   string            `json:"system_prompt,omitempty"`
+	Resume         string            `json:"resume,omitempty"`
+	MaxTurns       int               `json:"max_turns,omitempty"`
+	PermissionMode string            `json:"permission_mode,omitempty"`
+	MCPServers     map[string]any    `json:"mcp_servers,omitempty"`
+	AllowedTools   []string          `json:"allowed_tools,omitempty"`
+	Continue       bool              `json:"continue,omitempty"`
+	Agents         map[string]any    `json:"agents,omitempty"`
+	NoUserSettings bool              `json:"no_user_settings,omitempty"`
+	DisabledTools  []string          `json:"disabled_tools,omitempty"`
+	PersistSession *bool             `json:"persist_session,omitempty"`
+	Images         []ImageAttachment `json:"images,omitempty"`
 }

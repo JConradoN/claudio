@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/telebot.v3"
 
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
@@ -36,6 +40,8 @@ func (bc *BotController) registerContentRoutes() {
 	bc.bot.Handle("/usage", bc.handleUsageCommand)
 	bc.bot.Handle("/cron", bc.handleCronCommand)
 	bc.bot.Handle("/agents", bc.handleAgentsCommand)
+	bc.bot.Handle("/model", bc.handleModelCommand)
+	bc.bot.Handle(telebot.OnCallback, bc.handleModelCallback)
 	bc.bot.Handle(telebot.OnText, bc.handleText)
 	bc.bot.Handle(telebot.OnPhoto, bc.handlePhoto)
 	bc.bot.Handle(telebot.OnDocument, bc.handleDocument)
@@ -50,6 +56,7 @@ func (bc *BotController) registerSlashMenu() {
 		{Text: "cwd", Description: "Definir diretório de trabalho"},
 		{Text: "cron", Description: "Gerenciar agendamentos"},
 		{Text: "agents", Description: "Listar agentes disponíveis"},
+		{Text: "model", Description: "Ver/trocar modelo ativo"},
 		{Text: "help", Description: "Mostrar comandos disponíveis"},
 	}
 	if err := bc.bot.SetCommands(commands); err != nil {
@@ -64,6 +71,7 @@ func (bc *BotController) handleHelpCommand(c telebot.Context) error {
 		"/cwd <path> — Definir diretório de trabalho\n" +
 		"/cron — Gerenciar agendamentos\n" +
 		"/agents — Listar agentes disponíveis\n" +
+		"/model — Ver/trocar modelo ativo\n" +
 		"/help — Mostrar esta mensagem\n\n" +
 		"Ou simplesmente envie uma mensagem e eu respondo."
 	return SendText(bc.bot, c.Chat(), help)
@@ -143,4 +151,196 @@ func (bc *BotController) handleCronCommand(c telebot.Context) error {
 		return SendText(bc.bot, c.Chat(), reply)
 	}
 	return nil
+}
+
+const modelsPerPage = 10
+
+func (bc *BotController) handleModelCommand(c telebot.Context) error {
+	args := strings.TrimSpace(c.Message().Payload)
+	if args != "" {
+		reply, err := bc.cmdSetModel(c, "/model "+args)
+		if err != nil {
+			return SendError(bc.bot, c.Chat(), fmt.Sprintf("Erro: %v", err))
+		}
+		return SendText(bc.bot, c.Chat(), reply)
+	}
+
+	currentLine := fmt.Sprintf("Modelo atual: **%s** (provedor: **%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+	if bc.bridge == nil {
+		return SendText(bc.bot, c.Chat(), currentLine+"\n\nBridge indisponível.")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	models, err := bc.bridge.ListModels(ctx)
+	if err != nil {
+		return SendText(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err))
+	}
+	if len(models) == 0 {
+		return SendText(bc.bot, c.Chat(), currentLine+"\n\nNenhum modelo disponível.")
+	}
+
+	bc.modelCacheMu.Lock()
+	bc.modelCache = models
+	bc.modelCacheMu.Unlock()
+
+	return bc.sendProviderMenu(c, false)
+}
+
+func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
+	bc.modelCacheMu.Lock()
+	models := bc.modelCache
+	bc.modelCacheMu.Unlock()
+
+	grouped := make(map[string]bool)
+	for _, m := range models {
+		grouped[m.Provider] = true
+	}
+	var providers []string
+	for p := range grouped {
+		providers = append(providers, p)
+	}
+	sort.Strings(providers)
+
+	menu := &telebot.ReplyMarkup{}
+	var rows []telebot.Row
+	for _, prov := range providers {
+		rows = append(rows, menu.Row(menu.Data(prov, "mdl_prov_"+prov)))
+	}
+	rows = append(rows, menu.Row(menu.Data("❌ Cancelar", "mdl_cancel")))
+	menu.Inline(rows...)
+
+	currentLine := fmt.Sprintf("Modelo atual: **%s** (**%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+	msg := currentLine + "\n\n**Selecione o provedor:**"
+	if edit {
+		return c.Edit(msg, menu)
+	}
+	_, err := bc.bot.Send(c.Chat(), msg, menu)
+	return err
+}
+
+func (bc *BotController) handleModelCallback(c telebot.Context) error {
+	// Acknowledge callback to stop Telegram loading spinner.
+	// This runs for ALL callbacks (bootstrap, model, etc.), which is harmless.
+	_ = bc.bot.Respond(c.Callback(), &telebot.CallbackResponse{})
+
+	data := c.Data()
+
+	// Telebot sends callback data as "\f<unique>|<payload>"
+	// c.Data() returns the full callback data from Telegram (with \f prefix)
+	// Strip the leading \f before checking
+	if len(data) > 0 && data[0] == '\f' {
+		data = data[1:]
+	}
+
+	// Split by | to get just the unique part (ignore payload we don't use)
+	if idx := strings.IndexByte(data, '|'); idx >= 0 {
+		data = data[:idx]
+	}
+
+	// Route by the model identifier prefix
+	switch {
+	case strings.HasPrefix(data, "mdl_prov_"):
+		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_prov_"), 0)
+	case strings.HasPrefix(data, "mdl_set_"):
+		return bc.setModelFromCallback(c, strings.TrimPrefix(data, "mdl_set_"))
+	case strings.HasPrefix(data, "mdl_next_"):
+		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_next_"), 1)
+	case strings.HasPrefix(data, "mdl_prev_"):
+		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_prev_"), -1)
+	case data == "mdl_back":
+		return bc.sendProviderMenu(c, true)
+	case data == "mdl_cancel":
+		return c.Edit("✅ Operação cancelada. O modelo continua: **" + bc.config.DefaultModel + "**.")
+	default:
+		return nil
+	}
+}
+
+func (bc *BotController) showModelPage(c telebot.Context, data string, dir int) error {
+	// data: "provider" for initial, "provider_PAGE" for pagination
+	lastUnderscore := strings.LastIndex(data, "_")
+	page := 0
+	provider := data
+	if lastUnderscore > 0 {
+		if p, err := strconv.Atoi(data[lastUnderscore+1:]); err == nil {
+			page = p + dir
+			provider = data[:lastUnderscore]
+		}
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	bc.modelCacheMu.Lock()
+	models := bc.modelCache
+	bc.modelCacheMu.Unlock()
+
+	var filtered []bridge.ModelInfo
+	for _, m := range models {
+		if m.Provider == provider {
+			filtered = append(filtered, m)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	totalPages := (len(filtered) + modelsPerPage - 1) / modelsPerPage
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+
+	start := page * modelsPerPage
+	end := start + modelsPerPage
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+
+	menu := &telebot.ReplyMarkup{}
+	var rows []telebot.Row
+	for _, m := range filtered[start:end] {
+		label := m.ID
+		if m.SupportsImages {
+			label += " 📷"
+		}
+		rows = append(rows, menu.Row(menu.Data(label, "mdl_set_"+provider+"_"+m.ID)))
+	}
+
+	// Navigation row
+	navRow := []telebot.Btn{}
+	if page > 0 {
+		navRow = append(navRow, menu.Data("◀", "mdl_prev_"+provider+"_"+strconv.Itoa(page)))
+	}
+	navRow = append(navRow, menu.Data(fmt.Sprintf("%d/%d", page+1, totalPages), "mdl_nop"))
+	if page < totalPages-1 {
+		navRow = append(navRow, menu.Data("▶", "mdl_next_"+provider+"_"+strconv.Itoa(page)))
+	}
+	rows = append(rows, navRow)
+	rows = append(rows, menu.Row(menu.Data("← Provedores", "mdl_back")))
+	rows = append(rows, menu.Row(menu.Data("❌ Cancelar", "mdl_cancel")))
+	menu.Inline(rows...)
+
+	return c.Edit(fmt.Sprintf("**%s** — página %d/%d:", provider, page+1, totalPages), menu)
+}
+
+func (bc *BotController) setModelFromCallback(c telebot.Context, data string) error {
+	firstUnderscore := strings.Index(data, "_")
+	if firstUnderscore < 0 {
+		return nil
+	}
+	provider := data[:firstUnderscore]
+	modelID := data[firstUnderscore+1:]
+
+	bc.config.DefaultModel = modelID
+	bc.config.DefaultProvider = provider
+
+	chatID := c.Chat().ID
+	bc.sessions.Clear(chatID)
+
+	if err := bc.saveDefaultModel(provider, modelID); err != nil {
+		log.Printf("model callback persist: %v", err)
+	}
+
+	return c.Edit(fmt.Sprintf("✅ Modelo alterado para **%s**\nProvedor: **%s**\n\nSessão resetada.", modelID, provider))
 }

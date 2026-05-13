@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 func TestLoad_CreatesDefaultAppConfigWhenMissing(t *testing.T) {

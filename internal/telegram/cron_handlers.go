@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kocar/aurelia/internal/cron"
+	"github.com/igormaneschy/aurelia/internal/cron"
 )
 
 type CronCommandService interface {

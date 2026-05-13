@@ -112,4 +112,4 @@
 - `internal/config/` — App configuration loading, provider management
 - `internal/runtime/` — Path resolution, directory bootstrapping
 - `pkg/stt/` — Speech-to-text client (Groq)
-- `bridge/` — TypeScript source for Claude Agent SDK wrapper
+- `bridge/` — TypeScript source for PI SDK wrapper

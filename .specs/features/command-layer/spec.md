@@ -24,7 +24,7 @@ Toda mensagem no Aurelia OS passa pelo LLM classify, mesmo operações que o sis
 
 ### P1: CRUD de Cron Jobs via Comando Local ⭐ MVP
 
-**User Story**: Como usuário, quero agendar, listar e cancelar tarefas recorrentes falando em linguagem natural, sem esperar o LLM classify e sem depender do cron do Claude SDK.
+**User Story**: Como usuário, quero agendar, listar e cancelar tarefas recorrentes falando em linguagem natural, sem esperar o LLM classify e sem depender do cron do PI SDK.
 
 **Why P1**: Agendamento é a dor mais clara. O Go já tem todo o infra (`internal/cron/`), mas hoje a mensagem precisa passar pelo LLM classify + bridge pra chegar lá.
 

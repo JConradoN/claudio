@@ -53,14 +53,14 @@ For trivial tasks, implement directly and validate.
 | `internal/telegram/` | Telegram bot handlers |
 | `internal/config/` | Config loading and validation |
 | `internal/runtime/` | Instance and project path resolution |
-| `bridge/` | TypeScript Bridge (Claude SDK wrapper) |
+| `bridge/` | TypeScript Bridge (PI SDK wrapper) |
 | `pkg/stt/` | Speech-to-text |
 
 ## Versioning & Changelog
 
 Every change that goes into `main` **must** bump the version and update
 `CHANGELOG.md`. The version bump (patch/minor/major) and changelog entry
-**must be approved by Rafael before committing** — propose the bump and
+**must be approved by Igor before committing** — propose the bump and
 entry text, wait for confirmation, then commit.
 
 ## Reference

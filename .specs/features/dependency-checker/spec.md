@@ -27,7 +27,7 @@ No boot normal (sem onboarding), se o Node nao existe o bridge tambem falha sem 
 
 | Dependencia | Tipo | Obrigatoria | Versao Minima | Usado por | Detectar com |
 |---|---|---|---|---|---|
-| Node.js | CLI | Sim | v18.0.0 | Bridge (Claude Agent SDK) | `node --version` |
+| Node.js | CLI | Sim | v18.0.0 | Bridge (PI SDK) | `node --version` |
 | npm | CLI | Sim | v8.0.0 | Bridge setup (npm install) | `npm --version` |
 | git | CLI | Nao | v2.0.0 | Orchestrator (worktree, commits) | `git --version` |
 | gh | CLI | Nao | qualquer | Orchestrator (criar PRs) | `gh --version` |

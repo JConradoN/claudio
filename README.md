@@ -28,10 +28,12 @@ It is built around a practical execution model:
 - Go daemon (24/7, lightweight, cross-platform)
 - TypeScript Bridge wrapping the PI SDK
 - PI coding agent as the brain (tools, skills, extensions, sessions)
+- Canonical Go module and repository under `github.com/igormaneschy/aurelia`
 - Session management with token tracking and auto-reset
 - Persistent 3-layer memory system with automatic extraction
 - Configurable agents in markdown with cron scheduling
 - Multi-provider: Anthropic, Kimi, OpenRouter (live model catalog), Z.ai, Alibaba
+- PI-first auth with API-key and subscription support
 - Bridge recovery with automatic retry on crash
 
 The goal is not to reimplement what PI already does.
@@ -53,8 +55,21 @@ The goal is to orchestrate it — adding persistence, memory, scheduling, multi-
 - **Tool progress** — see what PI is doing in real-time (reading files, running commands...)
 - **Reply-to** — responses quote the original message for async conversation clarity
 - **Photo analysis** — images downloaded and passed to PI for visual analysis
-- **Voice transcription** — Groq STT converts voice messages to text
+- **Voice transcription** — Groq STT converts voice messages to text (Whisper)
+- **Vision fallback** — configure a separate vision model for image inputs
+  while keeping a faster text-only model as default
 - **Inherits your setup** — models, auth, skills, extensions, and settings from `~/.pi/agent`
+
+## PI-backed Runtime Features
+
+Aurelia now treats PI as the agent runtime rather than maintaining a Claude-specific bridge:
+
+- **PI SDK bridge** — `bridge/index.ts` wraps `@earendil-works/pi-coding-agent` and is embedded into the Go binary.
+- **PI auth reuse** — uses `~/.pi/agent/auth.json`, `models.json`, `settings.json`, skills, extensions, and provider configuration.
+- **Subscription-friendly Anthropic auth** — resolves PI login first and keeps compatible Claude CLI auth as fallback.
+- **Provider environment export** — Aurelia can export provider keys from `~/.aurelia/config/app.json` into the PI runtime environment.
+- **Streaming progress** — PI tool events are mapped back into Telegram progress messages.
+- **Long-lived sessions** — Bridge requests preserve session IDs for continuity and token tracking.
 
 ## Runtime Model
 
@@ -128,6 +143,11 @@ The Bridge is a **long-lived** TypeScript process that wraps `@earendil-works/pi
 **Go → Bridge (stdin):**
 ```json
 {"command":"query","request_id":"req-1","prompt":"...","options":{"model":"k2.5","system_prompt":"...","cwd":"/path","permission_mode":"bypassPermissions"}}
+```
+
+With image attachments:
+```json
+{"command":"query","prompt":"Analise esta imagem","options":{"images":[{"data":"<base64>","media_type":"image/jpeg"}]}}
 ```
 
 **Bridge → Go (stdout):**
@@ -242,17 +262,28 @@ Requirements:
 
 ### Quick Start
 
-1. Run onboarding:
+1. Clone the canonical repository:
+   ```bash
+   git clone https://github.com/igormaneschy/aurelia.git
+   cd aurelia
+   ```
+
+2. Configure PI auth/models if you have not already:
+   ```bash
+   pi /login
+   ```
+
+3. Run onboarding:
    ```bash
    go run ./cmd/aurelia/ onboard
    ```
 
-2. Start:
+4. Start:
    ```bash
    go run ./cmd/aurelia/
    ```
 
-3. Send `/start` to your bot on Telegram.
+5. Send `/start` to your bot on Telegram.
 
 ### Hot Reload (Development)
 
@@ -267,15 +298,17 @@ Main config lives in `~/.aurelia/config/app.json`:
 
 ```json
 {
-  "default_provider": "anthropic",
-  "default_model": "claude-sonnet-4-6",
+  "default_provider": "opencode-go",
+  "default_model": "deepseek-v4-flash",
   "providers": {
-    "anthropic": { "auth_mode": "subscription" },
-    "kimi": { "api_key": "sk-kimi-..." }
+    "opencode": { "api_key": "sk-..." },
+    "groq": { "api_key": "gsk-..." }
   },
   "telegram_bot_token": "your-token",
   "telegram_allowed_user_ids": [123456789],
   "stt_provider": "groq",
+  "vision_model": "qwen3.5-plus",
+  "vision_provider": "opencode-go",
   "max_iterations": 500,
   "max_session_tokens": 100000
 }
@@ -319,8 +352,10 @@ cp bundle.js ../internal/bridge/bundle.js
 
 ## Current State
 
-- **v0.4.0** — see [CHANGELOG.md](CHANGELOG.md)
+- **v0.4.1 base + PI SDK migration branch** — see [CHANGELOG.md](CHANGELOG.md)
+- Canonical repository: `https://github.com/igormaneschy/aurelia`
+- Go module: `github.com/igormaneschy/aurelia`
 - Go test suite is green
 - TypeScript Bridge compiles clean
-- Cross-platform: Windows and Linux
-- Active development on `main` branch
+- Cross-platform: macOS, Windows, and Linux
+- Active development on `migrate-pi-brain` before merge to `main`

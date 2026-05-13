@@ -355,3 +355,30 @@ func (b *Bridge) Ping(ctx context.Context) error {
 	}
 	return nil
 }
+
+// ModelInfo describes a model available through the bridge.
+type ModelInfo struct {
+	Provider       string `json:"provider"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	SupportsImages bool   `json:"supportsImages"`
+}
+
+// ListModels returns all models with configured auth from the PI model registry.
+func (b *Bridge) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	ev, err := b.ExecuteSync(ctx, Request{Command: "list-models"})
+	if err != nil {
+		return nil, fmt.Errorf("bridge: list-models failed: %w", err)
+	}
+	if ev.Type == "error" {
+		return nil, fmt.Errorf("bridge: list-models error: %s", ev.Message)
+	}
+	if ev.Content == "" {
+		return nil, nil
+	}
+	var models []ModelInfo
+	if err := json.Unmarshal([]byte(ev.Content), &models); err != nil {
+		return nil, fmt.Errorf("bridge: list-models parse: %w", err)
+	}
+	return models, nil
+}

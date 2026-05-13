@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kocar/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 // fakeBridge implements BridgeExecutor for tests.

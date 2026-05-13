@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/kocar/aurelia/internal/version"
+	"github.com/igormaneschy/aurelia/internal/version"
 )
 
 func main() {
@@ -37,11 +37,15 @@ func main() {
 		}
 	}
 
+	// Ensure only one daemon instance runs at a time.
+	unlock := ensureSingleInstance()
+
 	app, err := bootstrapApp()
 	if err != nil {
 		log.Fatalf("Failed to bootstrap Aurelia: %v", err)
 	}
 	defer app.close()
+	defer unlock()
 
 	app.start()
 	waitForShutdownSignal()

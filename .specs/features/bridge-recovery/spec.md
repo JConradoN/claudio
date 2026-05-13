@@ -17,7 +17,7 @@ Hoje o bridge nunca morreu em produção, mas quando acontecer o impacto é perd
 
 - Health check proativo / heartbeat periódico (pode vir depois)
 - Restart automático do bridge quando idle (sem request ativa)
-- Persistência de sessions em disco (já existe via Claude SDK, usamos o que tem)
+- Persistência de sessions em disco (já existe via PI SDK, usamos o que tem)
 - Mudanças no lado TypeScript do bridge
 
 ---

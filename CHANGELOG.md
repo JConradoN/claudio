@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.4.2] - 2026-05-13
+
+### Added
+- Vision fallback model: configure `vision_model`/`vision_provider` in app.json
+  for automatic model switching when images are present in the input
+- Vision fallback step in onboarding TUI and prompt mode
+- Bridge protocol for image attachments with proper PI AI SDK ImageContent format
+
+### Fixed
+- Bridge image format: was sending images in Anthropic API format
+  (`source.media_type`/`source.data`), now uses PI AI SDK ImageContent
+  (`data`/`mimeType`) — fixing silent vision API failures
+- Removed invalid `deliverAs: "nextTurn"` from `sendUserMessage` call
+
 ## [v0.4.1] - 2026-04-06
 
 ### Added

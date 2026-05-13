@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/deps"
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/deps"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
@@ -16,11 +16,11 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 	// Use a compact header on the model step so the viewport has room.
 	if u.step == stepLLMModel {
 		b.WriteString(colorize("AURELIA", colorBlue))
-		_, _ = fmt.Fprintf(&b, " — Step %d/12\n", int(u.step)+1)
+		_, _ = fmt.Fprintf(&b, " — Step %d/13\n", int(u.step)+1)
 	} else {
 		b.WriteString(renderOnboardingHeader())
 		_, _ = fmt.Fprintf(&b, "Config file: %s\n", resolver.AppConfig())
-		_, _ = fmt.Fprintf(&b, "Step %d/12\n\n", int(u.step)+1)
+		_, _ = fmt.Fprintf(&b, "Step %d/13\n\n", int(u.step)+1)
 	}
 	if u.message != "" {
 		b.WriteString(colorize("! "+u.message, colorBlue))
@@ -93,6 +93,8 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 		b.WriteString(u.renderInputStep("Telegram allowed user IDs", "Comma-separated list, e.g. 123,456.", false))
 	case stepRuntimeMaxIterations:
 		b.WriteString(u.renderInputStep("Max iterations", "Maximum loop iterations per run.", false))
+	case stepVisionModel:
+		b.WriteString(u.renderInputStep("Vision fallback model", "Optional: model for image inputs (e.g. qwen3.5-plus or opencode-go/qwen3.5-plus). Leave empty to skip.", false))
 	case stepReview:
 		b.WriteString("Review & Save\n")
 		b.WriteString("Check the config before saving.\n\n")
@@ -110,7 +112,17 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 		_, _ = fmt.Fprintf(&b, "Groq API key: %s\n", maskSecret(u.cfg.GroqAPIKey))
 		_, _ = fmt.Fprintf(&b, "Telegram bot token: %s\n", maskSecret(u.cfg.TelegramBotToken))
 		_, _ = fmt.Fprintf(&b, "Telegram allowed user IDs: %s\n", formatInt64List(u.cfg.TelegramAllowedUserIDs))
-		_, _ = fmt.Fprintf(&b, "Max iterations: %d\n\n", u.cfg.MaxIterations)
+		_, _ = fmt.Fprintf(&b, "Max iterations: %d\n", u.cfg.MaxIterations)
+		if u.cfg.VisionModel != "" {
+			display := u.cfg.VisionModel
+			if u.cfg.VisionProvider != "" {
+				display = u.cfg.VisionProvider + "/" + display
+			}
+			_, _ = fmt.Fprintf(&b, "Vision fallback: %s\n", display)
+		} else {
+			b.WriteString("Vision fallback: (none)\n")
+		}
+		b.WriteString("\n")
 		b.WriteString(renderMenu(u.reviewOptions, u.menuIndex))
 		b.WriteString("\nUse arrows and Enter. Use left to go back. Press Ctrl+C to cancel.\n")
 	}
@@ -331,6 +343,19 @@ func (u *onboardingUI) commitInput() error {
 			return err
 		}
 		u.cfg.MaxIterations = value
+	case stepVisionModel:
+		raw := strings.TrimSpace(u.input)
+		if raw == "" {
+			u.cfg.VisionModel = ""
+			u.cfg.VisionProvider = ""
+		} else if strings.Contains(raw, "/") {
+			parts := strings.SplitN(raw, "/", 2)
+			u.cfg.VisionProvider = strings.TrimSpace(parts[0])
+			u.cfg.VisionModel = strings.TrimSpace(parts[1])
+		} else {
+			u.cfg.VisionModel = raw
+			u.cfg.VisionProvider = ""
+		}
 	}
 	return nil
 }
@@ -347,6 +372,14 @@ func (u *onboardingUI) currentInputValue() string {
 		return formatInt64CSV(u.cfg.TelegramAllowedUserIDs)
 	case stepRuntimeMaxIterations:
 		return fmt.Sprintf("%d", u.cfg.MaxIterations)
+	case stepVisionModel:
+		if u.cfg.VisionModel == "" {
+			return ""
+		}
+		if u.cfg.VisionProvider != "" {
+			return u.cfg.VisionProvider + "/" + u.cfg.VisionModel
+		}
+		return u.cfg.VisionModel
 	default:
 		return ""
 	}

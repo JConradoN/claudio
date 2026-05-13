@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kocar/aurelia/internal/bridge"
-	"github.com/kocar/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 // AfterTurnNudge checks if enough turns have accumulated to trigger a nudge review.

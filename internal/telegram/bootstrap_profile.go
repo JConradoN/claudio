@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kocar/aurelia/internal/bridge"
-	"github.com/kocar/aurelia/internal/persona"
+	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/persona"
 	"gopkg.in/telebot.v3"
 )
 

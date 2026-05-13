@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-A Aurelia já passa agents pro Claude SDK, mas a orquestração é primitiva: routing manual e delegação invisível. O objetivo é transformar a Aurelia numa **tech lead autônoma** que segue a metodologia **spec-driven** (TLC) de ponta a ponta: Specify → Design → Tasks → Implement + Validate. No Planning Mode, ela colabora com o usuário pra criar specs e design. No Execution Mode, ela decompõe em tasks atômicas, spawna workers em worktrees isolados, valida os resultados, e entrega até o PR.
+A Aurelia já passa agents pelo bridge PI SDK, mas a orquestração é primitiva: routing manual e delegação invisível. O objetivo é transformar a Aurelia numa **tech lead autônoma** que segue a metodologia **spec-driven** (TLC) de ponta a ponta: Specify → Design → Tasks → Implement + Validate. No Planning Mode, ela colabora com o usuário pra criar specs e design. No Execution Mode, ela decompõe em tasks atômicas, spawna workers em worktrees isolados, valida os resultados, e entrega até o PR.
 
 **Modelo arquitetural**: Múltiplas sessões do bridge, Go orquestra. Inspirado no [Composio agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator) — orchestrator + workers, worktrees isolados, decomposição LLM-driven. Nosso diferencial: bridge NDJSON com streaming real-time e metodologia spec-driven integrada.
 

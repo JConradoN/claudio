@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kocar/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/config"
 )
 
 // ModelOption is a selectable model entry for onboarding and config UIs.

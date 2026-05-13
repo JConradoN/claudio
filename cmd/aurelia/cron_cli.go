@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kocar/aurelia/internal/cron"
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/cron"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 func runCronCLI(args []string) error {
@@ -18,6 +18,9 @@ func runCronCLI(args []string) error {
 	resolver, err := runtime.New()
 	if err != nil {
 		return fmt.Errorf("resolve instance root: %w", err)
+	}
+	if err := runtime.Bootstrap(resolver); err != nil {
+		return fmt.Errorf("bootstrap instance directory: %w", err)
 	}
 
 	store, err := cron.NewSQLiteCronStore(resolver.DBPath("cron.db"))

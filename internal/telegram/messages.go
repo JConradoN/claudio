@@ -36,7 +36,7 @@ const (
 
 	bootstrapProfileMessage = "✅ **Personalidade configurada**\n\n" +
 		"Agora me diga seu nome e como prefere que eu trabalhe com voce.\n\n" +
-		"Exemplo: `Me chamo Rafael, sou dev e quero respostas diretas.`"
+		"Exemplo: `Me chamo Igor, sou dev e quero respostas diretas.`"
 
 	bootstrapSuccessMessage = "✅ **Personas criadas**\n\n" +
 		"Suas configuracoes base foram salvas em `~/.aurelia/memory/personas/`.\n\n" +

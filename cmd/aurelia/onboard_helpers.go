@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kocar/aurelia/internal/config"
-	"github.com/kocar/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 func nextOnboardStep(cfg config.EditableConfig, step onboardStep) onboardStep {
@@ -39,6 +39,8 @@ func nextOnboardStep(cfg config.EditableConfig, step onboardStep) onboardStep {
 	case stepTelegramUsers:
 		return stepRuntimeMaxIterations
 	case stepRuntimeMaxIterations:
+		return stepVisionModel
+	case stepVisionModel:
 		return stepReview
 	default:
 		return stepReview
@@ -71,8 +73,10 @@ func previousOnboardStep(cfg config.EditableConfig, step onboardStep) onboardSte
 		return stepTelegramToken
 	case stepRuntimeMaxIterations:
 		return stepTelegramUsers
-	case stepReview:
+	case stepVisionModel:
 		return stepRuntimeMaxIterations
+	case stepReview:
+		return stepVisionModel
 	default:
 		return stepDependencies
 	}
@@ -393,6 +397,19 @@ func renderSavedSummary(stdout io.Writer, resolver *runtime.PathResolver, curren
 	}
 	if err := writef(stdout, "Max iterations: %d\n", current.MaxIterations); err != nil {
 		return err
+	}
+	if current.VisionModel != "" {
+		display := current.VisionModel
+		if current.VisionProvider != "" {
+			display = current.VisionProvider + "/" + display
+		}
+		if err := writef(stdout, "Vision fallback model: %s\n", display); err != nil {
+			return err
+		}
+	} else {
+		if err := writeString(stdout, "Vision fallback model: (none)\n"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

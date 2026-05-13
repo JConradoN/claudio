@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"mime"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"gopkg.in/telebot.v3"
+
+	"github.com/igormaneschy/aurelia/internal/bridge"
 )
 
 func (bc *BotController) handleText(c telebot.Context) error {
@@ -59,30 +62,45 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 	defer stopTyping()
 
 	text := strings.TrimSpace(caption)
-
-	var photoPaths []string
-	for _, p := range photos {
-		filePath, err := bc.downloadTelegramFile(&p.photo.File, fmt.Sprintf("photo_%d.jpg", p.messageID))
-		if err != nil {
-			log.Printf("Failed to download photo: %v", err)
-			continue
-		}
-		photoPaths = append(photoPaths, filePath)
-	}
-
 	if text == "" {
-		if len(photoPaths) > 1 {
+		if len(photos) > 1 {
 			text = "Analise estas imagens."
 		} else {
 			text = "Analise esta imagem."
 		}
 	}
 
-	for _, path := range photoPaths {
-		text += fmt.Sprintf("\n\nImagem: %s", path)
+	var images []bridge.ImageAttachment
+	for _, p := range photos {
+		filePath, err := bc.downloadTelegramFile(&p.photo.File, fmt.Sprintf("photo_%d.jpg", p.messageID))
+		if err != nil {
+			log.Printf("Failed to download photo: %v", err)
+			continue
+		}
+		img, err := encodeImageAttachment(filePath, "image/jpeg")
+		if err != nil {
+			log.Printf("Failed to encode photo: %v", err)
+			continue
+		}
+		images = append(images, img)
 	}
 
-	return bc.processInput(c, text)
+	return bc.processInputWithImages(c, text, images)
+}
+
+// encodeImageAttachment reads an image file, base64-encodes it, and returns
+// an ImageAttachment suitable for the bridge protocol.
+func encodeImageAttachment(filePath, defaultMIME string) (bridge.ImageAttachment, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return bridge.ImageAttachment{}, fmt.Errorf("read image %q: %w", filePath, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return bridge.ImageAttachment{
+		Path:      filePath,
+		Data:      encoded,
+		MediaType: defaultMIME,
+	}, nil
 }
 
 func (bc *BotController) handleDocument(c telebot.Context) error {
@@ -129,8 +147,31 @@ func (bc *BotController) handleImageDocument(c telebot.Context, doc *telebot.Doc
 		return bc.processInput(c, text)
 	}
 
-	text += fmt.Sprintf("\n\nImagem: %s", filePath)
-	return bc.processInput(c, text)
+	// Determine MIME from filename extension, fall back to doc MIME
+	mimeType := doc.MIME
+	if mimeType == "" {
+		ext := strings.ToLower(filepath.Ext(doc.FileName))
+		switch ext {
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".png":
+			mimeType = "image/png"
+		case ".gif":
+			mimeType = "image/gif"
+		case ".webp":
+			mimeType = "image/webp"
+		default:
+			mimeType = "image/jpeg"
+		}
+	}
+
+	img, err := encodeImageAttachment(filePath, mimeType)
+	if err != nil {
+		log.Printf("Failed to encode image document: %v", err)
+		return bc.processInput(c, text)
+	}
+
+	return bc.processInputWithImages(c, text, []bridge.ImageAttachment{img})
 }
 
 func (bc *BotController) handleVoice(c telebot.Context) error {

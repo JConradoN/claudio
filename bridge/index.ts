@@ -23,6 +23,12 @@ interface MCPServerConfig {
   id?: string;
 }
 
+interface ImageAttachment {
+  path?: string;
+  data?: string;
+  media_type?: string;
+}
+
 interface RequestOptions {
   provider?: string;
   model?: string;
@@ -38,6 +44,7 @@ interface RequestOptions {
   no_user_settings?: boolean;
   disabled_tools?: string[];
   persist_session?: boolean;
+  images?: ImageAttachment[];
 }
 
 interface Request {
@@ -109,13 +116,22 @@ function translateToolName(name: string): string {
     Glob: "find",
     LS: "ls",
     List: "ls",
+    WebSearch: "web_search",
+    WebSearchPremium: "web_search_premium",
+    WebFetch: "web_search",
   };
   return toolMap[normalized] ?? normalized.toLowerCase();
 }
 
 function translateAllowedTools(tools: string[] | undefined): string[] | undefined {
   if (!tools || tools.length === 0) return undefined;
-  return [...new Set(tools.map(translateToolName))];
+  const mapped = [...new Set(tools.map(translateToolName))];
+  // Always include web_search so the model can search the web
+  // regardless of the agent's allowed_tools config
+  if (!mapped.includes("web_search")) {
+    mapped.push("web_search");
+  }
+  return mapped;
 }
 
 function textFromContent(content: unknown): string {
@@ -313,7 +329,25 @@ async function handleQuery(req: Request): Promise<void> {
     });
 
     try {
-      await session.prompt(req.prompt, { source: "rpc" });
+      const images = opts?.images;
+      if (images && images.length > 0) {
+        // Build content blocks: text + image blocks
+        // Images use the PI AI SDK's ImageContent format:
+        // { type: "image", data: "<base64>", mimeType: "<mime>" }
+        const contentBlocks: Record<string, unknown>[] = [
+          { type: "text", text: req.prompt },
+        ];
+        for (const img of images) {
+          contentBlocks.push({
+            type: "image",
+            data: img.data,
+            mimeType: img.media_type,
+          });
+        }
+        await session.sendUserMessage(contentBlocks);
+      } else {
+        await session.prompt(req.prompt, { source: "rpc" });
+      }
     } finally {
       unsubscribe();
     }
@@ -359,6 +393,7 @@ async function handleRequest(line: string): Promise<void> {
   }
 
   const reqId = req.request_id || "";
+  const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   switch (req.command) {
     case "query": {
@@ -372,6 +407,29 @@ async function handleRequest(line: string): Promise<void> {
 
     case "ping": {
       emit({ event: "pong", request_id: reqId });
+      break;
+    }
+
+    case "list-models": {
+      try {
+        const agentDir = piAgentDir() || getAgentDir();
+        const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+        const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+        const allModels = modelRegistry.getAll();
+        // Only show models from providers that have configured auth
+        const available = allModels.filter((m) => modelRegistry.hasConfiguredAuth(m));
+        const summary = available.map((m) => ({
+          provider: m.provider,
+          id: m.id,
+          name: m.name ?? m.id,
+          supportsImages: m.supportsImageInput ?? false,
+        }));
+        emitReq({ event: "result", content: JSON.stringify(summary) });
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`list-models error: ${errMsg}`);
+        emitReq({ event: "error", message: `list-models failed: ${errMsg}` });
+      }
       break;
     }
 
