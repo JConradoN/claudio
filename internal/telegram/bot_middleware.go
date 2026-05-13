@@ -121,20 +121,70 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
 	args := strings.TrimSpace(c.Message().Payload)
+
 	if args == "" {
-		cwd := bc.sessions.GetCwd(chatID, threadID)
-		if cwd == "" {
-			return SendTextWithThread(bc.bot, c.Chat(), "Nenhum diretório configurado. Use: /cwd C:\\path\\to\\project", threadID)
+		// Show full CWD hierarchy
+		topicCwd := ""
+		if threadID > 0 {
+			topicCwd = bc.sessions.GetCwd(chatID, threadID)
 		}
-		return SendTextWithThread(bc.bot, c.Chat(), fmt.Sprintf("Diretório atual: %s", cwd), threadID)
+		groupCwd := bc.sessions.GetCwd(chatID, 0)
+		defaultCwd := bc.botCwd
+
+		// Determine agent cwd if an agent is active
+		agentCwd := ""
+		text := c.Message().Text
+		if agent := bc.routeAgent(text); agent != nil && agent.Cwd != "" {
+			agentCwd = agent.Cwd
+		}
+
+		var b strings.Builder
+		b.WriteString("📂 **CWD Hierarchy**\n\n")
+
+		if agentCwd != "" {
+			fmt.Fprintf(&b, "🤖 Agent CWD: `%s`\n", agentCwd)
+			b.WriteString("   (defined in agent markdown — highest priority)\n\n")
+		}
+
+		if threadID > 0 {
+			if topicCwd != "" && topicCwd != groupCwd {
+				fmt.Fprintf(&b, "📌 Topic CWD (this topic): `%s`\n", topicCwd)
+				b.WriteString("   (specific to this topic, overrides group)\n\n")
+			} else {
+				b.WriteString("📌 Topic CWD: *(inherited from group)*\n\n")
+			}
+		}
+
+		if groupCwd != "" {
+			fmt.Fprintf(&b, "👥 Group CWD: `%s`\n", groupCwd)
+		} else {
+			b.WriteString("👥 Group CWD: *(not set)*\n")
+		}
+		b.WriteString("   (configure with /cwd <path> in the general topic)\n\n")
+
+		fmt.Fprintf(&b, "⚙️ Bot default CWD: `%s`\n", defaultCwd)
+		b.WriteString("   (bridge working directory — fallback when all others are empty)\n\n")
+
+		if groupCwd == "" && agentCwd == "" {
+			b.WriteString("💡 Set a directory with: `/cwd C:\\path\\to\\project`\n")
+		}
+
+		return SendTextWithThread(bc.bot, c.Chat(), b.String(), threadID)
 	}
+
+	// Set CWD for current thread/topic
 	bc.sessions.SetCwd(chatID, threadID, args)
 	if bc.resolver != nil {
 		if err := runtime.BootstrapProjectMemory(bc.resolver, args); err != nil {
 			log.Printf("cwd: failed to bootstrap project memory for %s: %v", args, err)
 		}
 	}
-	return SendTextWithThread(bc.bot, c.Chat(), fmt.Sprintf("Diretório configurado: %s", args), threadID)
+
+	msg := fmt.Sprintf("✅ Diretório configurado para este tópico: `%s`", args)
+	if threadID == 0 {
+		msg = fmt.Sprintf("✅ Diretório configurado para o grupo: `%s`\n\nOutros tópicos herdarão este caminho automaticamente.", args)
+	}
+	return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 }
 
 func (bc *BotController) handleResetCommand(c telebot.Context) error {

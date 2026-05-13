@@ -3,6 +3,7 @@ package telegram
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ type BotController struct {
 	bridgeFailures   bridgeFailureTracker
 	orchestrator     *orchestrator.Orchestrator
 	nudgeBuffer      *session.NudgeBuffer
+	botCwd          string // working directory of the aurelia daemon
 	dreamer          interface {
 		AfterTurn()
 		AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
@@ -97,6 +99,8 @@ func NewBotController(
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
 
+	botCwd, _ := os.Getwd()
+
 	bc := &BotController{
 		bot:              b,
 		config:           cfg,
@@ -112,6 +116,7 @@ func NewBotController(
 		personasDir:      personasDir,
 		memoryDir:        memoryDir,
 		exePath:          exePath,
+		botCwd:           botCwd,
 		pendingBootstrap: make(map[int64]bootstrapState),
 		albums:           newAlbumBuffer(),
 	}
