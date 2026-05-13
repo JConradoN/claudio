@@ -16,28 +16,35 @@ type messageSender interface {
 }
 
 func SendText(bot *telebot.Bot, chat *telebot.Chat, text string) error {
-	return sendTextWithSender(bot, chat, text, telegramMessageLimit)
+	return sendTextWithSender(bot, chat, text, telegramMessageLimit, 0)
 }
 
-func sendTextWithSender(sender messageSender, chat *telebot.Chat, text string, limit int) error {
+func SendTextWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, threadID int) error {
+	return sendTextWithSender(bot, chat, text, telegramMessageLimit, threadID)
+}
+
+func sendTextWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, threadID int) error {
 	chunks := splitTelegramMarkdown(text, limit)
 	for _, chunk := range chunks {
 		htmlChunk := MarkdownToHTML(chunk)
-		_, err := sender.Send(chat, htmlChunk, &telebot.SendOptions{
+		opts := &telebot.SendOptions{
 			ParseMode: telebot.ModeHTML,
-		})
+			ThreadID:  threadID,
+		}
+		_, err := sender.Send(chat, htmlChunk, opts)
 		if err == nil {
 			time.Sleep(interChunkDelay)
 			continue
 		}
 
 		log.Printf("Send chunk with HTML failed (%v). Retrying as plain text...", err)
-		_, err = sender.Send(chat, chunk)
+		opts = &telebot.SendOptions{ThreadID: threadID}
+		_, err = sender.Send(chat, chunk, opts)
 		if err != nil {
 			if floodErr, ok := err.(*telebot.FloodError); ok {
 				log.Printf("Hit rate limit in chunk sending. Retrying in %v...", floodErr.RetryAfter)
 				time.Sleep(time.Duration(floodErr.RetryAfter) * time.Second)
-				if _, retryErr := sender.Send(chat, chunk); retryErr == nil {
+				if _, retryErr := sender.Send(chat, chunk, opts); retryErr == nil {
 					time.Sleep(interChunkDelay)
 					continue
 				}
@@ -85,22 +92,23 @@ func bestSplitIndex(text string, limit int) int {
 }
 
 func SendTextReply(bot *telebot.Bot, chat *telebot.Chat, text string, replyToID int) error {
-	if replyToID == 0 {
-		return SendText(bot, chat, text)
-	}
-	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, replyToID)
+	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, replyToID, 0)
 }
 
-func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, replyToID int) error {
+func SendTextReplyWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, replyToID int, threadID int) error {
+	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, replyToID, threadID)
+}
+
+func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, replyToID int, threadID int) error {
 	chunks := splitTelegramMarkdown(text, limit)
 	replyTo := &telebot.Message{ID: replyToID}
 
 	for i, chunk := range chunks {
 		htmlChunk := MarkdownToHTML(chunk)
 		opts := &telebot.SendOptions{ParseMode: telebot.ModeHTML}
-		// Only reply-to on the first chunk
 		if i == 0 {
 			opts.ReplyTo = replyTo
+			opts.ThreadID = threadID
 		}
 
 		_, err := sender.Send(chat, htmlChunk, opts)
@@ -113,6 +121,7 @@ func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text stri
 		opts = &telebot.SendOptions{}
 		if i == 0 {
 			opts.ReplyTo = replyTo
+			opts.ThreadID = threadID
 		}
 		_, err = sender.Send(chat, chunk, opts)
 		if err != nil {
@@ -137,19 +146,25 @@ func ReactToMessage(bot *telebot.Bot, chat *telebot.Chat, messageID int, emoji s
 }
 
 func SendError(bot *telebot.Bot, chat *telebot.Chat, errMsg string) error {
-	return sendErrorWithSender(bot, chat, "Erro", errMsg)
+	return sendErrorWithSender(bot, chat, "Erro", errMsg, 0)
 }
 
-func sendErrorWithSender(sender messageSender, chat *telebot.Chat, title, errMsg string) error {
+func SendErrorWithThread(bot *telebot.Bot, chat *telebot.Chat, errMsg string, threadID int) error {
+	return sendErrorWithSender(bot, chat, "Erro", errMsg, threadID)
+}
+
+func sendErrorWithSender(sender messageSender, chat *telebot.Chat, title, errMsg string, threadID int) error {
 	formatted := ErrorMessage(title, errMsg)
-	_, err := sender.Send(chat, formatted, &telebot.SendOptions{
+	opts := &telebot.SendOptions{
 		ParseMode: telebot.ModeHTML,
-	})
+		ThreadID:  threadID,
+	}
+	_, err := sender.Send(chat, formatted, opts)
 	if err == nil {
 		return nil
 	}
 
 	log.Printf("Send error with HTML failed (%v). Retrying as plain text...", err)
-	_, err = sender.Send(chat, title+"\n\n"+errMsg)
+	_, err = sender.Send(chat, title+"\n\n"+errMsg, &telebot.SendOptions{ThreadID: threadID})
 	return err
 }

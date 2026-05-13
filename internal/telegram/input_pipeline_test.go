@@ -119,7 +119,7 @@ func TestProcessBridgeEventsAsync_ProcessDeath_NoTerminalEvent(t *testing.T) {
 	}
 
 	// Session should still have been set from the system event
-	sid := bc.sessions.Get(1)
+	sid := bc.sessions.Get(1, 0)
 	if sid != "sess-1" {
 		t.Fatalf("expected session sess-1, got %q", sid)
 	}
@@ -148,7 +148,7 @@ func TestProcessBridgeEventsAsync_SessionSetFromSystemEvent(t *testing.T) {
 
 	bc.processBridgeEventsAsync(chat, ch, noopProgress(), "test", 1)
 
-	sid, active := bc.sessions.GetWithState(42)
+	sid, active := bc.sessions.GetWithState(42, 0)
 	if sid != "sess-xyz" {
 		t.Fatalf("expected session sess-xyz, got %q", sid)
 	}
@@ -159,13 +159,13 @@ func TestProcessBridgeEventsAsync_SessionSetFromSystemEvent(t *testing.T) {
 
 func TestBridgeRecovery_DeactivateAllPreservesIDs(t *testing.T) {
 	sessions := session.NewStore()
-	sessions.Set(1, "sess-a")
-	sessions.Set(2, "sess-b")
+	sessions.Set(1, 0, "sess-a")
+	sessions.Set(2, 0, "sess-b")
 
 	sessions.DeactivateAll()
 
 	// Sessions should be cold but IDs preserved
-	sid, active := sessions.GetWithState(1)
+	sid, active := sessions.GetWithState(1, 0)
 	if active {
 		t.Fatal("session 1 should be inactive")
 	}
@@ -173,7 +173,7 @@ func TestBridgeRecovery_DeactivateAllPreservesIDs(t *testing.T) {
 		t.Fatalf("session 1 ID should be preserved, got %q", sid)
 	}
 
-	sid, active = sessions.GetWithState(2)
+	sid, active = sessions.GetWithState(2, 0)
 	if active {
 		t.Fatal("session 2 should be inactive")
 	}
@@ -182,7 +182,7 @@ func TestBridgeRecovery_DeactivateAllPreservesIDs(t *testing.T) {
 	}
 
 	// Get still works
-	if id := sessions.Get(1); id != "sess-a" {
+	if id := sessions.Get(1, 0); id != "sess-a" {
 		t.Fatalf("Get(1) = %q, want sess-a", id)
 	}
 }

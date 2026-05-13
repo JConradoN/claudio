@@ -60,8 +60,9 @@ type AppConfig struct {
 	DefaultModel    string                    `json:"default_model"`
 	Providers       map[string]ProviderConfig `json:"providers"`
 
-	TelegramBotToken       string  `json:"telegram_bot_token"`
-	TelegramAllowedUserIDs []int64 `json:"telegram_allowed_user_ids"`
+	TelegramBotToken        string  `json:"telegram_bot_token"`
+	TelegramAllowedUserIDs  []int64 `json:"telegram_allowed_user_ids"`
+	TelegramAllowedGroupIDs []int64 `json:"telegram_allowed_group_ids,omitempty"`
 
 	STTProvider string `json:"stt_provider"`
 
@@ -120,8 +121,9 @@ type fileConfig struct {
 	DefaultModel    string                    `json:"default_model"`
 	Providers       map[string]ProviderConfig `json:"providers"`
 
-	TelegramBotToken       string  `json:"telegram_bot_token"`
-	TelegramAllowedUserIDs []int64 `json:"telegram_allowed_user_ids"`
+	TelegramBotToken        string  `json:"telegram_bot_token"`
+	TelegramAllowedUserIDs  []int64 `json:"telegram_allowed_user_ids"`
+	TelegramAllowedGroupIDs []int64 `json:"telegram_allowed_group_ids,omitempty"`
 
 	STTProvider string `json:"stt_provider"`
 
@@ -187,7 +189,8 @@ func defaultFileConfig(r *runtime.PathResolver) fileConfig {
 		DefaultModel:           defaultModelForProvider(defaultLLMProvider),
 		Providers:              map[string]ProviderConfig{},
 		STTProvider:            defaultSTTProvider,
-		TelegramAllowedUserIDs: []int64{},
+		TelegramAllowedUserIDs:  []int64{},
+		TelegramAllowedGroupIDs: []int64{},
 		MaxIterations:          defaultMaxIterations,
 		MaxSessionTokens:       defaultMaxSessionTokens,
 		DBPath:                 filepath.Join(r.Data(), "aurelia.db"),
@@ -199,6 +202,9 @@ func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver) fileConfig {
 	defaults := defaultFileConfig(r)
 	if cfg.TelegramAllowedUserIDs == nil {
 		cfg.TelegramAllowedUserIDs = defaults.TelegramAllowedUserIDs
+	}
+	if cfg.TelegramAllowedGroupIDs == nil {
+		cfg.TelegramAllowedGroupIDs = defaults.TelegramAllowedGroupIDs
 	}
 	if cfg.DefaultProvider == "" {
 		cfg.DefaultProvider = defaults.DefaultProvider
@@ -249,8 +255,9 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		DefaultProvider:        cfg.DefaultProvider,
 		DefaultModel:           cfg.DefaultModel,
 		Providers:              cfg.Providers,
-		TelegramBotToken:       cfg.TelegramBotToken,
-		TelegramAllowedUserIDs: cfg.TelegramAllowedUserIDs,
+		TelegramBotToken:        cfg.TelegramBotToken,
+		TelegramAllowedUserIDs:  cfg.TelegramAllowedUserIDs,
+		TelegramAllowedGroupIDs: cfg.TelegramAllowedGroupIDs,
 		STTProvider:            cfg.STTProvider,
 		MaxIterations:          cfg.MaxIterations,
 		MaxSessionTokens:       cfg.MaxSessionTokens,

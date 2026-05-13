@@ -163,6 +163,18 @@ func (bc *BotController) isAllowedUser(userID int64) bool {
 	return false
 }
 
+func (bc *BotController) isAllowedGroup(chatID int64) bool {
+	if bc == nil || bc.config == nil {
+		return false
+	}
+	for _, id := range bc.config.TelegramAllowedGroupIDs {
+		if id == chatID {
+			return true
+		}
+	}
+	return false
+}
+
 func (bc *BotController) setupRoutes() {
 	bc.bot.Use(bc.whitelistMiddleware())
 

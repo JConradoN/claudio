@@ -165,15 +165,16 @@ func looksNarrative(prefix string) bool {
 // Returns nil if the command was handled (response sent to Telegram).
 func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) error {
 	chatID := c.Chat().ID
+	threadID := c.Message().ThreadID
 	messageID := c.Message().ID
-	log.Printf("command: type=%d chat=%d text=%q", cmd.Type, chatID, cmd.Text)
+	log.Printf("command: type=%d chat=%d thread=%d text=%q", cmd.Type, chatID, threadID, cmd.Text)
 
 	var reply string
 	var err error
 
 	switch cmd.Type {
 	case CmdSessionReset:
-		reply, err = bc.cmdSessionReset(chatID)
+		reply, err = bc.cmdSessionReset(chatID, threadID)
 	case CmdCronList:
 		reply, err = bc.cmdCronList(chatID)
 	case CmdCronCancel:
@@ -194,23 +195,23 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 
 	if err != nil {
 		log.Printf("command error: type=%d err=%v", cmd.Type, err)
-		return SendError(bc.bot, c.Chat(), fmt.Sprintf("Erro ao executar comando: %v", err))
+		return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro ao executar comando: %v", err), threadID)
 	}
 
-	return SendTextReply(bc.bot, c.Chat(), reply, messageID)
+	return SendTextReplyWithThread(bc.bot, c.Chat(), reply, messageID, threadID)
 }
 
 // --- P1 handlers ---
 
-func (bc *BotController) cmdSessionReset(chatID int64) (string, error) {
+func (bc *BotController) cmdSessionReset(chatID int64, threadID int) (string, error) {
 	// Flush pending nudge buffer so short conversations are not lost.
 	if bc.dreamer != nil {
-		cwd := bc.sessions.GetCwd(chatID)
+		cwd := bc.sessions.GetCwd(chatID, threadID)
 		bc.dreamer.FlushNudge(chatID, cwd, bc.nudgeBuffer)
 	}
-	bc.sessions.Clear(chatID)
+	bc.sessions.Clear(chatID, threadID)
 	bc.tracker.Clear(chatID)
-	log.Printf("command: session reset for chat=%d", chatID)
+	log.Printf("command: session reset for chat=%d thread=%d", chatID, threadID)
 	return "Sessão resetada. Próxima mensagem inicia conversa nova.", nil
 }
 
@@ -443,7 +444,7 @@ func (bc *BotController) cmdStatus(chatID int64) (string, error) {
 	}
 
 	// Session
-	if sid, active := bc.sessions.GetWithState(chatID); sid != "" {
+	if sid, active := bc.sessions.GetWithState(chatID, 0); sid != "" {
 		state := "cold"
 		if active {
 			state = "warm"

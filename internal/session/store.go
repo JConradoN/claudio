@@ -1,12 +1,26 @@
 package session
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
-// Store manages session IDs and working directories per chat.
+// SessionKey uniquely identifies a session within a chat thread.
+// For private chats and non-forum groups, ThreadID is 0.
+type SessionKey struct {
+	ChatID   int64
+	ThreadID int // 0 for non-forum chats
+}
+
+func (k SessionKey) String() string {
+	return fmt.Sprintf("%d:%d", k.ChatID, k.ThreadID)
+}
+
+// Store manages session IDs and working directories per chat thread.
 type Store struct {
 	mu       sync.RWMutex
-	sessions map[int64]*entry
-	cwds     map[int64]string
+	sessions map[SessionKey]*entry
+	cwds     map[SessionKey]string
 }
 
 type entry struct {
@@ -17,42 +31,64 @@ type entry struct {
 // NewStore creates a new session store.
 func NewStore() *Store {
 	return &Store{
-		sessions: make(map[int64]*entry),
-		cwds:     make(map[int64]string),
+		sessions: make(map[SessionKey]*entry),
+		cwds:     make(map[SessionKey]string),
 	}
 }
 
-func (s *Store) Get(chatID int64) string {
+// SessionKeyFor returns a SessionKey from chatID and optional threadID.
+func SessionKeyFor(chatID int64, threadID int) SessionKey {
+	return SessionKey{ChatID: chatID, ThreadID: threadID}
+}
+
+func (s *Store) Get(chatID int64, threadID int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	e := s.sessions[chatID]
+	key := SessionKeyFor(chatID, threadID)
+	e := s.sessions[key]
 	if e == nil {
 		return ""
 	}
 	return e.sessionID
 }
 
-func (s *Store) GetWithState(chatID int64) (sessionID string, active bool) {
+func (s *Store) GetWithState(chatID int64, threadID int) (sessionID string, active bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	e := s.sessions[chatID]
+	key := SessionKeyFor(chatID, threadID)
+	e := s.sessions[key]
 	if e == nil {
 		return "", false
 	}
 	return e.sessionID, e.active
 }
 
-func (s *Store) Set(chatID int64, sessionID string) {
+func (s *Store) Set(chatID int64, threadID int, sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sessions[chatID] = &entry{sessionID: sessionID, active: true}
+	key := SessionKeyFor(chatID, threadID)
+	s.sessions[key] = &entry{sessionID: sessionID, active: true}
 }
 
-func (s *Store) Clear(chatID int64) {
+// Clear removes session and cwd for a specific chat thread.
+func (s *Store) Clear(chatID int64, threadID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, chatID)
-	delete(s.cwds, chatID)
+	key := SessionKeyFor(chatID, threadID)
+	delete(s.sessions, key)
+	delete(s.cwds, key)
+}
+
+// ClearAll removes all sessions and cwds for a chat (all threads).
+func (s *Store) ClearAll(chatID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.sessions {
+		if key.ChatID == chatID {
+			delete(s.sessions, key)
+			delete(s.cwds, key)
+		}
+	}
 }
 
 // DeactivateAll marks all sessions as inactive (cold). Used when the bridge
@@ -66,14 +102,16 @@ func (s *Store) DeactivateAll() {
 	}
 }
 
-func (s *Store) GetCwd(chatID int64) string {
+func (s *Store) GetCwd(chatID int64, threadID int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cwds[chatID]
+	key := SessionKeyFor(chatID, threadID)
+	return s.cwds[key]
 }
 
-func (s *Store) SetCwd(chatID int64, cwd string) {
+func (s *Store) SetCwd(chatID int64, threadID int, cwd string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cwds[chatID] = cwd
+	key := SessionKeyFor(chatID, threadID)
+	s.cwds[key] = cwd
 }

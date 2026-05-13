@@ -102,7 +102,7 @@ func TestCmdSessionReset(t *testing.T) {
 
 	sessions := session.NewStore()
 	tracker := session.NewTracker()
-	sessions.Set(42, "sess-abc")
+	sessions.Set(42, 0, "sess-abc")
 	tracker.Add(42, 1000, 500, 1, 0.01)
 
 	bc := &BotController{
@@ -111,13 +111,13 @@ func TestCmdSessionReset(t *testing.T) {
 		tracker:  tracker,
 	}
 
-	reply, err := bc.cmdSessionReset(42)
+	reply, err := bc.cmdSessionReset(42, 0)
 	if err != nil {
 		t.Fatalf("cmdSessionReset() error = %v", err)
 	}
 
 	// Session should be cleared
-	if sid := sessions.Get(42); sid != "" {
+	if sid := sessions.Get(42, 0); sid != "" {
 		t.Fatalf("session should be cleared, got %q", sid)
 	}
 
@@ -303,7 +303,7 @@ func TestCmdStatus(t *testing.T) {
 		},
 	}
 	sessions := session.NewStore()
-	sessions.Set(42, "sess-abc-12345678")
+	sessions.Set(42, 0, "sess-abc-12345678")
 
 	bc := &BotController{
 		config: &config.AppConfig{

@@ -10,8 +10,9 @@ type EditableConfig struct {
 	LLMProvider            string
 	LLMModel               string
 	STTProvider            string
-	TelegramBotToken       string
-	TelegramAllowedUserIDs []int64
+	TelegramBotToken        string
+	TelegramAllowedUserIDs  []int64
+	TelegramAllowedGroupIDs []int64
 	AnthropicAPIKey        string
 	GoogleAPIKey           string
 	KiloAPIKey             string
@@ -96,8 +97,9 @@ func appConfigToEditable(cfg *AppConfig) *EditableConfig {
 		LLMProvider:            cfg.DefaultProvider,
 		LLMModel:               cfg.DefaultModel,
 		STTProvider:            cfg.STTProvider,
-		TelegramBotToken:       cfg.TelegramBotToken,
-		TelegramAllowedUserIDs: append([]int64(nil), cfg.TelegramAllowedUserIDs...),
+		TelegramBotToken:        cfg.TelegramBotToken,
+		TelegramAllowedUserIDs:  append([]int64(nil), cfg.TelegramAllowedUserIDs...),
+		TelegramAllowedGroupIDs: append([]int64(nil), cfg.TelegramAllowedGroupIDs...),
 		AnthropicAuthMode:      anthropicAuthMode,
 		AnthropicAPIKey:        cfg.ProviderAPIKey("anthropic"),
 		GoogleAPIKey:           cfg.ProviderAPIKey("google"),
@@ -149,8 +151,9 @@ func editableToFileConfig(editable EditableConfig) fileConfig {
 		DefaultModel:           editable.LLMModel,
 		Providers:              providers,
 		STTProvider:            editable.STTProvider,
-		TelegramBotToken:       editable.TelegramBotToken,
-		TelegramAllowedUserIDs: append([]int64(nil), editable.TelegramAllowedUserIDs...),
+		TelegramBotToken:        editable.TelegramBotToken,
+		TelegramAllowedUserIDs:  append([]int64(nil), editable.TelegramAllowedUserIDs...),
+		TelegramAllowedGroupIDs: append([]int64(nil), editable.TelegramAllowedGroupIDs...),
 		MaxIterations:          editable.MaxIterations,
 		VisionModel:            editable.VisionModel,
 		VisionProvider:         editable.VisionProvider,
@@ -169,13 +172,11 @@ func sameFileConfig(a, b fileConfig) bool {
 		a.VisionProvider != b.VisionProvider {
 		return false
 	}
-	if len(a.TelegramAllowedUserIDs) != len(b.TelegramAllowedUserIDs) {
+	if !int64SliceEqual(a.TelegramAllowedUserIDs, b.TelegramAllowedUserIDs) {
 		return false
 	}
-	for i := range a.TelegramAllowedUserIDs {
-		if a.TelegramAllowedUserIDs[i] != b.TelegramAllowedUserIDs[i] {
-			return false
-		}
+	if !int64SliceEqual(a.TelegramAllowedGroupIDs, b.TelegramAllowedGroupIDs) {
+		return false
 	}
 	if len(a.Providers) != len(b.Providers) {
 		return false
@@ -183,6 +184,18 @@ func sameFileConfig(a, b fileConfig) bool {
 	for k, v := range a.Providers {
 		bv, ok := b.Providers[k]
 		if !ok || v != bv {
+			return false
+		}
+	}
+	return true
+}
+
+func int64SliceEqual(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

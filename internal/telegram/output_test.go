@@ -30,7 +30,7 @@ func TestSendText_SendsTelegramHTML(t *testing.T) {
 	sender := &stubSender{}
 	chat := &telebot.Chat{ID: 123}
 
-	if err := sendTextWithSender(sender, chat, "## Title\n\n- **item**", 200); err != nil {
+	if err := sendTextWithSender(sender, chat, "## Title\n\n- **item**", 200, 0); err != nil {
 		t.Fatalf("sendTextWithSender returned error: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestSendText_FallsBackToPlainTextWhenHTMLSendFails(t *testing.T) {
 	sender := &stubSender{firstSendErr: errors.New("bad html")}
 	chat := &telebot.Chat{ID: 123}
 
-	if err := sendTextWithSender(sender, chat, "## Title", 200); err != nil {
+	if err := sendTextWithSender(sender, chat, "## Title", 200, 0); err != nil {
 		t.Fatalf("sendTextWithSender returned error: %v", err)
 	}
 
@@ -70,8 +70,8 @@ func TestSendText_FallsBackToPlainTextWhenHTMLSendFails(t *testing.T) {
 	if _, ok := sender.calls[1].what.(string); !ok {
 		t.Fatalf("expected plain text fallback payload, got %T", sender.calls[1].what)
 	}
-	if len(sender.calls[1].opts) != 0 {
-		t.Fatalf("expected fallback send without options, got %d opts", len(sender.calls[1].opts))
+	if len(sender.calls[1].opts) != 1 {
+		t.Fatalf("expected fallback send with 1 option (threadID), got %d opts", len(sender.calls[1].opts))
 	}
 }
 
@@ -96,7 +96,7 @@ func TestSendError_SendsFormattedHTML(t *testing.T) {
 	sender := &stubSender{}
 	chat := &telebot.Chat{ID: 123}
 
-	if err := sendErrorWithSender(sender, chat, "Erro", "max iterations reached"); err != nil {
+	if err := sendErrorWithSender(sender, chat, "Erro", "max iterations reached", 0); err != nil {
 		t.Fatalf("sendErrorWithSender returned error: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestSendError_FallsBackToPlainTextWhenHTMLSendFails(t *testing.T) {
 	sender := &stubSender{firstSendErr: errors.New("bad html")}
 	chat := &telebot.Chat{ID: 123}
 
-	if err := sendErrorWithSender(sender, chat, "Erro", "max iterations reached"); err != nil {
+	if err := sendErrorWithSender(sender, chat, "Erro", "max iterations reached", 0); err != nil {
 		t.Fatalf("sendErrorWithSender returned error: %v", err)
 	}
 

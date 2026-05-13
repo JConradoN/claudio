@@ -19,16 +19,33 @@ func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
 	return func(next telebot.HandlerFunc) telebot.HandlerFunc {
 		return func(c telebot.Context) error {
 			sender := c.Sender()
-			if sender == nil {
-				return nil
+			chat := c.Chat()
+
+			switch chat.Type {
+			case telebot.ChatPrivate:
+				// Private chat: check user whitelist
+				if sender != nil && bc.isAllowedUser(sender.ID) {
+					return next(c)
+				}
+			case telebot.ChatGroup, telebot.ChatSuperGroup:
+				// Group chat: check group whitelist
+				if bc.isAllowedGroup(chat.ID) {
+					return next(c)
+				}
 			}
-			if !bc.isAllowedUser(sender.ID) {
-				log.Printf("blocked unauthorized user: %d\n", sender.ID)
-				return nil
-			}
-			return next(c)
+
+			log.Printf("blocked unauthorized access: user=%d chat=%d type=%s\n",
+				safeSenderID(sender), chat.ID, chat.Type)
+			return nil
 		}
 	}
+}
+
+func safeSenderID(u *telebot.User) int64 {
+	if u == nil {
+		return 0
+	}
+	return u.ID
 }
 
 func (bc *BotController) registerContentRoutes() {
@@ -96,33 +113,36 @@ func (bc *BotController) handleAgentsCommand(c telebot.Context) error {
 }
 
 func (bc *BotController) handleCwdCommand(c telebot.Context) error {
+	chatID := c.Chat().ID
+	threadID := c.Message().ThreadID
 	args := strings.TrimSpace(c.Message().Payload)
 	if args == "" {
-		cwd := bc.sessions.GetCwd(c.Chat().ID)
+		cwd := bc.sessions.GetCwd(chatID, threadID)
 		if cwd == "" {
-			return SendText(bc.bot, c.Chat(), "Nenhum diretório configurado. Use: /cwd C:\\path\\to\\project")
+			return SendTextWithThread(bc.bot, c.Chat(), "Nenhum diretório configurado. Use: /cwd C:\\path\\to\\project", threadID)
 		}
-		return SendText(bc.bot, c.Chat(), fmt.Sprintf("Diretório atual: %s", cwd))
+		return SendTextWithThread(bc.bot, c.Chat(), fmt.Sprintf("Diretório atual: %s", cwd), threadID)
 	}
-	bc.sessions.SetCwd(c.Chat().ID, args)
+	bc.sessions.SetCwd(chatID, threadID, args)
 	if bc.resolver != nil {
 		if err := runtime.BootstrapProjectMemory(bc.resolver, args); err != nil {
 			log.Printf("cwd: failed to bootstrap project memory for %s: %v", args, err)
 		}
 	}
-	return SendText(bc.bot, c.Chat(), fmt.Sprintf("Diretório configurado: %s", args))
+	return SendTextWithThread(bc.bot, c.Chat(), fmt.Sprintf("Diretório configurado: %s", args), threadID)
 }
 
 func (bc *BotController) handleResetCommand(c telebot.Context) error {
 	chatID := c.Chat().ID
+	threadID := c.Message().ThreadID
 	// Flush pending nudge buffer so conversation memories are saved.
 	if bc.dreamer != nil {
-		cwd := bc.sessions.GetCwd(chatID)
+		cwd := bc.sessions.GetCwd(chatID, threadID)
 		bc.dreamer.FlushNudge(chatID, cwd, bc.nudgeBuffer)
 	}
-	bc.sessions.Clear(chatID)
+	bc.sessions.Clear(chatID, threadID)
 	bc.tracker.Clear(chatID)
-	return SendText(bc.bot, c.Chat(), "Sessão resetada. Próxima mensagem inicia conversa nova.")
+	return SendTextWithThread(bc.bot, c.Chat(), "Sessão resetada. Próxima mensagem inicia conversa nova.", threadID)
 }
 
 func (bc *BotController) handleUsageCommand(c telebot.Context) error {
@@ -336,7 +356,7 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 	bc.config.DefaultProvider = provider
 
 	chatID := c.Chat().ID
-	bc.sessions.Clear(chatID)
+	bc.sessions.ClearAll(chatID)
 
 	if err := bc.saveDefaultModel(provider, modelID); err != nil {
 		log.Printf("model callback persist: %v", err)

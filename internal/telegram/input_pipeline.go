@@ -32,6 +32,9 @@ func (bc *BotController) processInputWithImages(c telebot.Context, text string, 
 		}
 	}
 
+	// 0. Extract thread ID for forum topic support (0 = no topic / private)
+	threadID := c.Message().ThreadID
+
 	// 0. Command layer — intercept system commands before LLM
 	if cmd := MatchCommand(text); cmd != nil {
 		return bc.handleCommand(c, cmd)
@@ -57,10 +60,10 @@ func (bc *BotController) processInputWithImages(c telebot.Context, text string, 
 	// 1b. Auto-detect project path — only on new sessions (no active session)
 	// Changing cwd mid-session breaks SDK continue (different project = different session)
 	chatID := c.Chat().ID
-	if _, active := bc.sessions.GetWithState(chatID); !active {
+	if _, active := bc.sessions.GetWithState(chatID, threadID); !active {
 		if detected := bc.detectProjectPath(userText); detected != "" {
-			bc.sessions.SetCwd(chatID, detected)
-			log.Printf("cwd: auto-detected %s for chat=%d", detected, chatID)
+			bc.sessions.SetCwd(chatID, threadID, detected)
+			log.Printf("cwd: auto-detected %s for chat=%d thread=%d", detected, chatID, threadID)
 			if bc.resolver != nil {
 				if err := runtime.BootstrapProjectMemory(bc.resolver, detected); err != nil {
 					log.Printf("cwd: failed to bootstrap project memory for %s: %v", detected, err)
@@ -78,7 +81,7 @@ func (bc *BotController) processInputWithImages(c telebot.Context, text string, 
 	}
 
 	// 3. Build bridge request (sync)
-	req := bc.buildBridgeRequest(userText, systemPrompt, agent, chatID)
+	req := bc.buildBridgeRequest(userText, systemPrompt, agent, chatID, threadID)
 	req.Options.Images = images
 
 	// 3b. Vision fallback: if images are present and a vision model is configured,
@@ -96,7 +99,7 @@ func (bc *BotController) processInputWithImages(c telebot.Context, text string, 
 	}
 
 	// 4. Launch async execution — don't block the handler
-	go bc.executeAsync(chatID, messageID, req, userText)
+	go bc.executeAsync(chatID, threadID, messageID, req, userText)
 
 	return nil
 }
@@ -144,7 +147,7 @@ func (bc *BotController) classifyFunc() agents.ClassifyFunc {
 
 // buildBridgeRequest assembles the bridge.Request with agent overrides, session
 // resume, and working directory.
-func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent *agents.Agent, chatID int64) bridge.Request {
+func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent *agents.Agent, chatID int64, threadID int) bridge.Request {
 	req := bridge.Request{
 		Command: "query",
 		Prompt:  userText,
@@ -180,20 +183,20 @@ func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent
 
 	// PI resumes sessions by ID/path. Always pass the stored session ID so
 	// the Bridge can reuse warm sessions or reopen persisted ones after restart.
-	if sessionID, active := bc.sessions.GetWithState(chatID); sessionID != "" {
+	if sessionID, active := bc.sessions.GetWithState(chatID, threadID); sessionID != "" {
 		req.Options.Resume = sessionID
 		if active {
-			log.Printf("session: chat=%d mode=continue sid=%s", chatID, sessionID[:8])
+			log.Printf("session: chat=%d thread=%d mode=continue sid=%s", chatID, threadID, sessionID[:8])
 		} else {
-			log.Printf("session: chat=%d mode=resume sid=%s", chatID, sessionID[:8])
+			log.Printf("session: chat=%d thread=%d mode=resume sid=%s", chatID, threadID, sessionID[:8])
 		}
 	} else {
-		log.Printf("session: chat=%d mode=new", chatID)
+		log.Printf("session: chat=%d thread=%d mode=new", chatID, threadID)
 	}
 
 	// Apply chat-level cwd if no agent overrides it
 	if req.Options.Cwd == "" {
-		if chatCwd := bc.sessions.GetCwd(chatID); chatCwd != "" {
+		if chatCwd := bc.sessions.GetCwd(chatID, threadID); chatCwd != "" {
 			req.Options.Cwd = chatCwd
 		}
 	}
@@ -265,7 +268,7 @@ func (t *bridgeFailureTracker) reset() {
 // executeAsync runs the bridge execution in a goroutine with its own typing
 // indicator and progress reporter. Errors are sent directly to the chat since
 // the original handler has already returned.
-func (bc *BotController) executeAsync(chatID int64, messageID int, req bridge.Request, userText string) {
+func (bc *BotController) executeAsync(chatID int64, threadID int, messageID int, req bridge.Request, userText string) {
 	chat := &telebot.Chat{ID: chatID}
 
 	// Start typing indicator
@@ -290,7 +293,7 @@ func (bc *BotController) executeAsync(chatID int64, messageID int, req bridge.Re
 	}
 
 	// Process events — first attempt
-	outcome := bc.processBridgeEventsAsync(chat, ch, progress, userText, messageID)
+	outcome := bc.processBridgeEventsAsyncWithThread(chat, ch, progress, userText, messageID, threadID)
 
 	if outcome == outcomeSuccess {
 		bc.bridgeFailures.reset()
@@ -302,23 +305,23 @@ func (bc *BotController) executeAsync(chatID int64, messageID int, req bridge.Re
 
 	// --- RETRY PATH: bridge died mid-request ---
 	bc.bridgeFailures.record()
-	log.Printf("bridge: process died mid-request, retrying for chat=%d", chatID)
+	log.Printf("bridge: process died mid-request, retrying for chat=%d thread=%d", chatID, threadID)
 
 	// P3: Check cooldown before retrying
 	if bc.bridgeFailures.inCooldown() {
 		log.Printf("bridge: in cooldown, skipping retry for chat=%d", chatID)
-		_ = SendError(bc.bot, chat, "Processador temporariamente indisponível. Tente novamente em alguns segundos.")
+		_ = SendErrorWithThread(bc.bot, chat, "Processador temporariamente indisponível. Tente novamente em alguns segundos.", threadID)
 		return
 	}
 
 	// P2: Send reconnection feedback
 	var reconnectMsg *telebot.Message
-	reconnectMsg, _ = bc.bot.Send(chat, "⚡ Reconectando...")
+	reconnectMsg, _ = bc.bot.Send(chat, "⚡ Reconectando...", &telebot.SendOptions{ThreadID: threadID})
 
 	retryReq := req
 	retryReq.Options.Continue = false
 	retryReq.RequestID = ""
-	if sid := bc.sessions.Get(chatID); sid != "" {
+	if sid := bc.sessions.Get(chatID, threadID); sid != "" {
 		retryReq.Options.Resume = sid
 		log.Printf("bridge: retry with resume sid=%s", sid[:8])
 	}
@@ -327,12 +330,12 @@ func (bc *BotController) executeAsync(chatID int64, messageID int, req bridge.Re
 	bc.deleteMessage(reconnectMsg) // Bridge restarted (or failed) — remove feedback immediately
 	if err != nil {
 		log.Printf("bridge: retry failed for chat=%d: %v", chatID, err)
-		_ = SendError(bc.bot, chat, "Processador reiniciado mas não conseguiu completar. Tente novamente.")
+		_ = SendErrorWithThread(bc.bot, chat, "Processador reiniciado mas não conseguiu completar. Tente novamente.", threadID)
 		return
 	}
 
 	// Second attempt — no more retries
-	outcome = bc.processBridgeEventsAsync(chat, ch, progress, userText, messageID)
+	outcome = bc.processBridgeEventsAsyncWithThread(chat, ch, progress, userText, messageID, threadID)
 
 	switch outcome {
 	case outcomeSuccess:
@@ -356,13 +359,17 @@ func (bc *BotController) deleteMessage(msg *telebot.Message) {
 // processBridgeEventsAsync reads bridge events and sends responses to the
 // Telegram chat. Returns the outcome so the caller can decide whether to retry.
 func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan bridge.Event, progress *progressReporter, userText string, messageID int) bridgeOutcome {
+	return bc.processBridgeEventsAsyncWithThread(chat, ch, progress, userText, messageID, 0)
+}
+
+func (bc *BotController) processBridgeEventsAsyncWithThread(chat *telebot.Chat, ch <-chan bridge.Event, progress *progressReporter, userText string, messageID int, threadID int) bridgeOutcome {
 	var assistantText strings.Builder
 
 	for ev := range ch {
 		switch ev.Type {
 		case "system":
 			if ev.SessionID != "" {
-				bc.sessions.Set(chat.ID, ev.SessionID)
+				bc.sessions.Set(chat.ID, 0, ev.SessionID)
 			}
 
 		case "tool_use":
@@ -394,10 +401,10 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 					log.Printf("session auto-reset: chat=%d threshold=%d", chat.ID, bc.config.MaxSessionTokens)
 					// Flush nudge buffer before clearing so conversation memories are saved.
 					if bc.dreamer != nil {
-						cwd := bc.sessions.GetCwd(chat.ID)
+						cwd := bc.sessions.GetCwd(chat.ID, 0)
 						bc.dreamer.FlushNudge(chat.ID, cwd, bc.nudgeBuffer)
 					}
-					bc.sessions.Clear(chat.ID)
+					bc.sessions.Clear(chat.ID, 0)
 					bc.tracker.Clear(chat.ID)
 				} else {
 					usage := bc.tracker.Get(chat.ID)
@@ -430,7 +437,7 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 			}
 			if bc.dreamer != nil {
 				bc.dreamer.AfterTurn()
-				cwd := bc.sessions.GetCwd(chat.ID)
+				cwd := bc.sessions.GetCwd(chat.ID, 0)
 				bc.nudgeBuffer.AddTurn(chat.ID, userText, finalText)
 				bc.dreamer.AfterTurnNudge(chat.ID, cwd, bc.nudgeBuffer)
 			}
@@ -445,7 +452,7 @@ func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan 
 				errMsg = "Erro desconhecido no processador."
 			}
 			log.Printf("Bridge error: %s", errMsg)
-			if err := SendError(bc.bot, chat, errMsg); err != nil {
+			if err := SendErrorWithThread(bc.bot, chat, errMsg, threadID); err != nil {
 				log.Printf("Failed to send error to chat %d: %v", chat.ID, err)
 			}
 			return outcomeLLMError
@@ -838,7 +845,7 @@ IMPORTANT rules about the working directory:
 - Only perform file operations (Read, Write, Edit, Bash, Glob, Grep) when a cwd is explicitly set.
 - If the user asks about "this project" or "the project", refer to conversation context and memory — do NOT go reading random directories.`,
 		chatID, messageID, bin, chatID, messageID, func() string {
-			if cwd := bc.sessions.GetCwd(chatID); cwd != "" {
+			if cwd := bc.sessions.GetCwd(chatID, 0); cwd != "" {
 				return cwd
 			}
 			return "(none — no project set)"
@@ -851,7 +858,7 @@ IMPORTANT rules about the working directory:
 func (bc *BotController) buildMemoryInstructions(chatID int64) string {
 	var sb strings.Builder
 
-	cwd := bc.sessions.GetCwd(chatID)
+	cwd := bc.sessions.GetCwd(chatID, 0)
 	hasProject := cwd != "" && bc.resolver != nil
 
 	sb.WriteString(`## Persistent Memory — YOU HAVE MEMORY
@@ -924,7 +931,7 @@ func (bc *BotController) loadMemoryContents(chatID int64) string {
 	}
 
 	// Layers 2 & 3: Project memory (only when cwd is set)
-	cwd := bc.sessions.GetCwd(chatID)
+	cwd := bc.sessions.GetCwd(chatID, 0)
 	if cwd != "" && bc.resolver != nil {
 		projectName := filepath.Base(cwd)
 
@@ -992,7 +999,7 @@ func (bc *BotController) buildProjectDocsSection(chatID int64, agent *agents.Age
 		cwd = agent.Cwd
 	}
 	if cwd == "" {
-		cwd = bc.sessions.GetCwd(chatID)
+		cwd = bc.sessions.GetCwd(chatID, 0)
 	}
 	if cwd == "" {
 		return ""
