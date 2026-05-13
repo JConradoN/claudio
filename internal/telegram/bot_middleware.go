@@ -139,31 +139,36 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		}
 
 		var b strings.Builder
-		b.WriteString("📂 **CWD Hierarchy**\n\n")
+		b.WriteString("📂 **CWD Resolution Chain**\n\n")
+		b.WriteString("(from lowest to highest priority)\n\n")
 
-		if agentCwd != "" {
-			fmt.Fprintf(&b, "🤖 Agent CWD: `%s`\n", agentCwd)
-			b.WriteString("   (defined in agent markdown — highest priority)\n\n")
-		}
+		// Base: bot default
+		fmt.Fprintf(&b, "1. ⚙️ Bot default: `%s`\n", defaultCwd)
+		b.WriteString("   (bridge working directory — fallback when nothing else is set)\n\n")
 
-		if threadID > 0 {
-			if topicCwd != "" && topicCwd != groupCwd {
-				fmt.Fprintf(&b, "📌 Topic CWD (this topic): `%s`\n", topicCwd)
-				b.WriteString("   (specific to this topic, overrides group)\n\n")
-			} else {
-				b.WriteString("📌 Topic CWD: *(inherited from group)*\n\n")
-			}
-		}
-
+		// Then: group
 		if groupCwd != "" {
-			fmt.Fprintf(&b, "👥 Group CWD: `%s`\n", groupCwd)
+			fmt.Fprintf(&b, "2. 👥 Group: `%s`\n", groupCwd)
 		} else {
-			b.WriteString("👥 Group CWD: *(not set)*\n")
+			b.WriteString("2. 👥 Group: *(not set)*\n")
 		}
 		b.WriteString("   (configure with /cwd <path> in the general topic)\n\n")
 
-		fmt.Fprintf(&b, "⚙️ Bot default CWD: `%s`\n", defaultCwd)
-		b.WriteString("   (bridge working directory — fallback when all others are empty)\n\n")
+		// Then: topic (if applicable)
+		if threadID > 0 {
+			if topicCwd != "" && topicCwd != groupCwd {
+				fmt.Fprintf(&b, "3. 📌 This topic: `%s`\n", topicCwd)
+				b.WriteString("   (overrides group for this topic)\n\n")
+			} else {
+				b.WriteString("3. 📌 This topic: *(inherited from group)*\n\n")
+			}
+		}
+
+		// Finally: agent (highest priority)
+		if agentCwd != "" {
+			fmt.Fprintf(&b, "4. 🤖 Agent: `%s`\n", agentCwd)
+			b.WriteString("   (defined in agent markdown — highest priority)\n\n")
+		}
 
 		if groupCwd == "" && agentCwd == "" {
 			b.WriteString("💡 Set a directory with: `/cwd C:\\path\\to\\project`\n")
