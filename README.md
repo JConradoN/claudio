@@ -6,7 +6,7 @@
 
 **An autonomous agent operating system in Go.**
 
-Telegram-native. Claude Code-powered. Built to stay light.
+Telegram-native. PI-powered. Built to stay light.
 
 One persistent daemon, many projects, many agents.
 
@@ -15,7 +15,7 @@ One persistent daemon, many projects, many agents.
 [![Architecture](https://img.shields.io/badge/Architecture-Modular_Monolith-1F2937)](.specs/codebase/ARCHITECTURE.md)
 [![Storage](https://img.shields.io/badge/Storage-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org/)
 [![Telegram](https://img.shields.io/badge/Interface-Telegram-26A5E4?logo=telegram)](https://core.telegram.org/bots/api)
-[![Bridge](https://img.shields.io/badge/Brain-Claude_Code_SDK-6E56CF)](https://platform.claude.com/docs/en/agent-sdk)
+[![Bridge](https://img.shields.io/badge/Brain-PI_SDK-6E56CF)](https://pi.dev)
 
 </div>
 
@@ -26,15 +26,15 @@ Aurelia is an autonomous agent operating system accessible via Telegram. Talk na
 It is built around a practical execution model:
 
 - Go daemon (24/7, lightweight, cross-platform)
-- TypeScript Bridge wrapping the Claude Agent SDK
-- Claude Code CLI as the brain (tools, MCPs, skills, subagents)
+- TypeScript Bridge wrapping the PI SDK
+- PI coding agent as the brain (tools, skills, extensions, sessions)
 - Session management with token tracking and auto-reset
 - Persistent 3-layer memory system with automatic extraction
 - Configurable agents in markdown with cron scheduling
 - Multi-provider: Anthropic, Kimi, OpenRouter (live model catalog), Z.ai, Alibaba
 - Bridge recovery with automatic retry on crash
 
-The goal is not to reimplement what Claude Code already does.
+The goal is not to reimplement what PI already does.
 The goal is to orchestrate it — adding persistence, memory, scheduling, multi-project support, and a natural Telegram interface on top.
 
 ## Core Capabilities
@@ -50,11 +50,11 @@ The goal is to orchestrate it — adding persistence, memory, scheduling, multi-
 - **Smart routing** — LLM-based classification routes messages to the right agent
 - **Persistent scheduling** — create cron jobs via natural conversation, results delivered to Telegram
 - **Bridge recovery** — automatic retry with session resume when the Bridge process crashes
-- **Tool progress** — see what Claude Code is doing in real-time (reading files, running commands...)
+- **Tool progress** — see what PI is doing in real-time (reading files, running commands...)
 - **Reply-to** — responses quote the original message for async conversation clarity
-- **Photo analysis** — images downloaded and passed to Claude Code for visual analysis
+- **Photo analysis** — images downloaded and passed to PI for visual analysis
 - **Voice transcription** — Groq STT converts voice messages to text
-- **Inherits your setup** — MCPs, skills, plugins, and hooks from your Claude Code account
+- **Inherits your setup** — models, auth, skills, extensions, and settings from `~/.pi/agent`
 
 ## Runtime Model
 
@@ -72,8 +72,8 @@ flowchart LR
     T --> P[Pipeline]
     P --> R[Agent Router]
     R --> B[Bridge TS]
-    B --> SDK[Claude Code SDK]
-    SDK --> TOOLS[Tools + MCPs + Skills]
+    B --> SDK[PI SDK]
+    SDK --> TOOLS[Tools + Skills + Extensions]
     P --> SESS[Session Manager]
     P --> CRON[Cron Scheduler]
     B --> RES[Response]
@@ -88,7 +88,7 @@ flowchart LR
 3. Agent router classifies → specialist agent or general
 4. System prompt assembled: persona + agent + cron instructions
 5. Request sent to Bridge (long-lived TypeScript process)
-6. Bridge calls Claude Code SDK → Claude Code CLI executes
+6. Bridge calls PI SDK → PI agent executes
 7. Events streamed back: tool_use → progress, assistant → text, result → response
 8. Response delivered to Telegram (reply-to original message)
 9. Session token usage tracked, auto-reset if threshold exceeded
@@ -123,7 +123,7 @@ bridge/                   TypeScript Bridge source (compiled to bundle.js via es
 
 ### Bridge Protocol
 
-The Bridge is a **long-lived** TypeScript process that wraps `@anthropic-ai/claude-agent-sdk`. Communication is via stdin/stdout NDJSON with request multiplexing:
+The Bridge is a **long-lived** TypeScript process that wraps `@earendil-works/pi-coding-agent`. Communication is via stdin/stdout NDJSON with request multiplexing:
 
 **Go → Bridge (stdin):**
 ```json
@@ -232,8 +232,9 @@ Requirements:
 - Node.js `18+`
 - Telegram bot token
 - One LLM provider:
-  - **Anthropic** — API key or Max subscription (uses OAuth via `claude login`)
-  - **Kimi** — API key (Anthropic-compatible endpoint)
+  - **PI auth/config** in `~/.pi/agent` (`pi /login`, `auth.json`, `models.json`)
+  - **Anthropic** — API key or Max subscription via PI
+  - **Kimi** — API key (`KIMI_API_KEY` / PI auth)
   - **OpenRouter** — API key (multi-model proxy)
   - **Z.ai** — API key (GLM Coding Plan)
   - **Alibaba** — API key (Qwen Coding Plan)
@@ -280,7 +281,7 @@ Main config lives in `~/.aurelia/config/app.json`:
 }
 ```
 
-Provider base URLs are auto-configured. For Anthropic subscription mode, run `claude login` first.
+Provider auth is resolved by PI first. For Anthropic subscription mode, run `pi /login` or keep a compatible Claude auth as fallback.
 
 ### Release Build
 
@@ -312,7 +313,7 @@ air                   # Hot reload
 To rebuild the Bridge bundle after modifying `bridge/index.ts`:
 
 ```bash
-cd bridge && npx esbuild index.ts --bundle --platform=node --target=node18 --outfile=bundle.js --format=esm
+cd bridge && npm run build
 cp bundle.js ../internal/bridge/bundle.js
 ```
 

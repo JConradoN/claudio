@@ -1,20 +1,16 @@
 import { createInterface } from "node:readline";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-
-// Resolve the SDK's cli.js at runtime so the bundled import.meta.url
-// doesn't break the SDK's own path resolution.
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const require = createRequire(import.meta.url);
-const sdkCliPath = join(
-  dirname(require.resolve("@anthropic-ai/claude-agent-sdk")),
-  "cli.js",
-);
+import { join } from "node:path";
+import {
+  AuthStorage,
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+  ModelRegistry,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +24,7 @@ interface MCPServerConfig {
 }
 
 interface RequestOptions {
+  provider?: string;
   model?: string;
   cwd?: string;
   system_prompt?: string;
@@ -43,97 +40,6 @@ interface RequestOptions {
   persist_session?: boolean;
 }
 
-// ── Cloud MCP (claude.ai) ───────────────────────────────────────────────────
-
-interface CloudMCPServer {
-  type: "claudeai-proxy";
-  url: string;
-  id: string;
-}
-
-interface CloudMCPCache {
-  servers: Record<string, CloudMCPServer>;
-  expiresAt: number;
-}
-
-const CLOUD_MCP_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const CLOUD_MCP_API_TIMEOUT_MS = 5000;
-const CLOUD_MCP_PROXY_BASE = "https://mcp-proxy.anthropic.com/v1/mcp";
-const CLOUD_MCP_API_URL = "https://api.anthropic.com/v1/mcp_servers?limit=1000";
-const CLOUD_MCP_BETA_HEADER = "mcp-servers-2025-12-04";
-
-let cloudMcpCache: CloudMCPCache | null = null;
-
-async function loadCloudMCPs(): Promise<Record<string, CloudMCPServer>> {
-  // Return cached if still valid
-  if (cloudMcpCache && Date.now() < cloudMcpCache.expiresAt) {
-    return cloudMcpCache.servers;
-  }
-
-  try {
-    const credsPath = join(homedir(), ".claude", ".credentials.json");
-    const raw = await readFile(credsPath, "utf8");
-    const creds = JSON.parse(raw);
-
-    const oauth = creds?.claudeAiOauth;
-    if (!oauth?.accessToken) {
-      log("cloud-mcp: no OAuth token found");
-      return {};
-    }
-
-    if (!oauth.scopes?.includes("user:mcp_servers")) {
-      log("cloud-mcp: missing user:mcp_servers scope");
-      return {};
-    }
-
-    // Check if token is expired
-    if (oauth.expiresAt && Date.now() > oauth.expiresAt) {
-      log("cloud-mcp: OAuth token expired");
-      return {};
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CLOUD_MCP_API_TIMEOUT_MS);
-
-    const resp = await fetch(CLOUD_MCP_API_URL, {
-      headers: {
-        Authorization: `Bearer ${oauth.accessToken}`,
-        "Content-Type": "application/json",
-        "anthropic-beta": CLOUD_MCP_BETA_HEADER,
-        "anthropic-version": "2023-06-01",
-      },
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (!resp.ok) {
-      log(`cloud-mcp: API returned ${resp.status}`);
-      return {};
-    }
-
-    const body = (await resp.json()) as { data: Array<{ id: string; display_name: string }> };
-    const servers: Record<string, CloudMCPServer> = {};
-
-    for (const srv of body.data) {
-      const name = `claude.ai ${srv.display_name}`;
-      servers[name] = {
-        type: "claudeai-proxy",
-        url: `${CLOUD_MCP_PROXY_BASE}/${srv.id}`,
-        id: srv.id,
-      };
-    }
-
-    log(`cloud-mcp: fetched ${Object.keys(servers).length} servers`);
-    cloudMcpCache = { servers, expiresAt: Date.now() + CLOUD_MCP_CACHE_TTL_MS };
-    return servers;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log(`cloud-mcp: failed to load — ${msg}`);
-    return {};
-  }
-}
-
 interface Request {
   command: string;
   prompt: string;
@@ -147,6 +53,14 @@ interface OutEvent {
   [key: string]: unknown;
 }
 
+interface SessionLookup {
+  id: string;
+  file?: string;
+}
+
+const sessionByID = new Map<string, SessionLookup>();
+let lastSessionID = "";
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function emit(obj: OutEvent): void {
@@ -157,209 +71,267 @@ function log(msg: string): void {
   process.stderr.write(`[bridge] ${msg}\n`);
 }
 
-// ── Map request options to SDK options ───────────────────────────────────────
-
-async function buildSDKOptions(opts: RequestOptions | undefined) {
-  if (!opts) return {};
-
-  const sdkOpts: Record<string, unknown> = {
-    pathToClaudeCodeExecutable: sdkCliPath,
-  };
-
-  if (opts.model) sdkOpts.model = opts.model;
-  if (opts.cwd) sdkOpts.cwd = opts.cwd;
-  // Only send system prompt on new sessions — continue/resume reuses the original.
-  // Sending a changed prompt on continue can cause the SDK to start a new session.
-  if (opts.system_prompt && !opts.continue && !opts.resume) {
-    sdkOpts.systemPrompt = opts.system_prompt;
-  }
-  if (opts.resume) sdkOpts.resume = opts.resume;
-  if (opts.continue) sdkOpts.continue = opts.continue;
-  if (opts.agents && Object.keys(opts.agents).length > 0) {
-    sdkOpts.agents = opts.agents;
-  }
-  if (opts.max_turns) sdkOpts.maxTurns = opts.max_turns;
-  if (opts.permission_mode) {
-    sdkOpts.permissionMode = opts.permission_mode;
-    if (opts.permission_mode === "bypassPermissions") {
-      sdkOpts.allowDangerouslySkipPermissions = true;
-    }
-  }
-  if (opts.allowed_tools) sdkOpts.allowedTools = opts.allowed_tools;
-
-  // Load user settings unless explicitly disabled (e.g. cron jobs)
-  if (opts.no_user_settings) {
-    sdkOpts.settingSources = [];
-  } else {
-    sdkOpts.settingSources = ["user", "project", "local"];
-  }
-
-  // Ephemeral sessions (extractor, dream) don't persist to disk
-  if (opts.persist_session === false) {
-    sdkOpts.persistSession = false;
-  }
-
-  // Detect whether this is an Anthropic-served model. The Claude Agent SDK CLI
-  // always adds `context-management-2025-06-27` beta header for "firstParty" provider
-  // when the model is not claude-3-*. For non-Anthropic models on OpenRouter this
-  // causes a 400 error. We disable experimental betas for those models.
-  const model = (opts.model ?? "").toLowerCase();
-  const isAnthropicModel =
-    model.startsWith("claude") ||
-    model.startsWith("anthropic/") ||
-    model === "" ||
-    model === "openrouter/auto";
-
-  if (isAnthropicModel) {
-    sdkOpts.settings = { autoCompactWindow: 1000000 };
-    delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
-  } else {
-    // Prevent the SDK from sending Anthropic-only beta headers to non-Anthropic models.
-    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
-  }
-
-  // Capture stderr from the SDK process for debugging
-  sdkOpts.stderr = (data: string) => {
-    log(`sdk-stderr: ${data.trimEnd()}`);
-  };
-
-  // Merge agent MCP servers with cloud MCPs from claude.ai
-  const cloudServers = opts.no_user_settings ? {} : await loadCloudMCPs();
-  const agentServers = opts.mcp_servers ?? {};
-  const merged = { ...cloudServers, ...agentServers }; // agent overrides cloud
-  if (Object.keys(merged).length > 0) {
-    sdkOpts.mcpServers = merged;
-  }
-
-  // Disable specific tools if requested
-  if (opts.disabled_tools && opts.disabled_tools.length > 0) {
-    sdkOpts.disallowedTools = opts.disabled_tools;
-  }
-
-  return sdkOpts;
+function piAgentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 }
 
-// ── Extract text from content blocks ─────────────────────────────────────────
+function mapProvider(provider: string | undefined): string | undefined {
+  if (!provider) return undefined;
+  const normalized = provider.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    kimi: "kimi-coding",
+    kilo: "opencode-go",
+    alibaba: "opencode-go",
+    google: "google",
+    anthropic: "anthropic",
+    openrouter: "openrouter",
+    zai: "zai",
+  };
+  return aliases[normalized] ?? normalized;
+}
 
-function extractText(content: unknown): string {
+function mapModelForProvider(provider: string | undefined, model: string): string {
+  const normalized = model.trim();
+  if (provider === "kimi-coding" && (normalized === "k2.5" || normalized === "kimi-k2.5")) {
+    return "kimi-for-coding";
+  }
+  return normalized;
+}
+
+function translateToolName(name: string): string {
+  const normalized = name.trim();
+  const toolMap: Record<string, string> = {
+    Read: "read",
+    Write: "write",
+    Edit: "edit",
+    Bash: "bash",
+    Grep: "grep",
+    Glob: "find",
+    LS: "ls",
+    List: "ls",
+  };
+  return toolMap[normalized] ?? normalized.toLowerCase();
+}
+
+function translateAllowedTools(tools: string[] | undefined): string[] | undefined {
+  if (!tools || tools.length === 0) return undefined;
+  return [...new Set(tools.map(translateToolName))];
+}
+
+function textFromContent(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content
-    .filter(
-      (block: unknown) =>
-        typeof block === "object" &&
-        block !== null &&
-        "type" in block &&
-        (block as Record<string, unknown>).type === "text" &&
-        "text" in block,
-    )
-    .map((block: unknown) => (block as Record<string, string>).text)
+    .map((item) => {
+      if (typeof item !== "object" || item === null) return "";
+      const block = item as Record<string, unknown>;
+      if (block.type !== "text") return "";
+      return typeof block.text === "string" ? block.text : "";
+    })
     .join("");
+}
+
+function resolveModelFromRegistry(
+  registry: ModelRegistry,
+  provider: string | undefined,
+  modelID: string | undefined,
+) {
+  if (!modelID) return undefined;
+
+  const allModels = registry.getAll();
+  const mappedProvider = mapProvider(provider);
+  const mappedModel = mapModelForProvider(mappedProvider, modelID);
+
+  if (mappedProvider) {
+    const direct = registry.find(mappedProvider, mappedModel);
+    if (direct) return direct;
+  }
+
+  const canonical = allModels.find(
+    (model) => `${model.provider}/${model.id}`.toLowerCase() === mappedModel.toLowerCase(),
+  );
+  if (canonical) return canonical;
+
+  const exactIDMatches = allModels.filter((model) => model.id.toLowerCase() === mappedModel.toLowerCase());
+  const configuredExact = exactIDMatches.find((model) => registry.hasConfiguredAuth(model));
+  if (configuredExact) return configuredExact;
+  if (exactIDMatches.length === 1) return exactIDMatches[0];
+
+  if (mappedModel.includes("/") && !mappedProvider) {
+    const [maybeProvider, ...rest] = mappedModel.split("/");
+    const inferredProvider = mapProvider(maybeProvider);
+    const inferredModel = rest.join("/");
+    const inferred = registry.find(inferredProvider ?? maybeProvider, inferredModel);
+    if (inferred) return inferred;
+  }
+
+  const fuzzy = allModels.filter(
+    (model) =>
+      model.id.toLowerCase().includes(mappedModel.toLowerCase()) ||
+      model.name?.toLowerCase().includes(mappedModel.toLowerCase()),
+  );
+  const configuredFuzzy = fuzzy.find((model) => registry.hasConfiguredAuth(model));
+  return configuredFuzzy ?? fuzzy[0];
+}
+
+async function resolveSessionManager(opts: RequestOptions | undefined): Promise<SessionManager> {
+  const cwd = opts?.cwd || process.cwd();
+  if (opts?.persist_session === false) {
+    return SessionManager.inMemory(cwd);
+  }
+
+  const target = opts?.resume || (opts?.continue ? lastSessionID : "");
+  if (target) {
+    const cached = sessionByID.get(target);
+    if (cached?.file && existsSync(cached.file)) {
+      return SessionManager.open(cached.file, undefined, cwd);
+    }
+
+    if (existsSync(target)) {
+      return SessionManager.open(target, undefined, cwd);
+    }
+
+    const sessions = await SessionManager.listAll();
+    const match = sessions.find((session) => session.id === target || session.id.startsWith(target));
+    if (match) {
+      return SessionManager.open(match.path, undefined, cwd);
+    }
+
+    log(`session not found for resume=${target}; starting a new session`);
+  }
+
+  return SessionManager.create(cwd);
+}
+
+async function createPiSession(opts: RequestOptions | undefined) {
+  const cwd = opts?.cwd || process.cwd();
+  const agentDir = piAgentDir() || getAgentDir();
+  const settingsManager = opts?.no_user_settings
+    ? SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, maxRetries: 2 },
+      })
+    : SettingsManager.create(cwd, agentDir);
+
+  const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+  const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+  const model = resolveModelFromRegistry(modelRegistry, opts?.provider, opts?.model);
+  if (opts?.model && !model) {
+    log(`model not found in PI registry: provider=${opts.provider ?? ""} model=${opts.model}`);
+  }
+
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    noContextFiles: true,
+    noExtensions: opts?.no_user_settings ?? false,
+    noSkills: opts?.no_user_settings ?? false,
+    noPromptTemplates: opts?.no_user_settings ?? false,
+    noThemes: true,
+    systemPromptOverride: () => opts?.system_prompt || undefined,
+  });
+  await resourceLoader.reload();
+
+  const sessionManager = await resolveSessionManager(opts);
+  return createAgentSession({
+    cwd,
+    agentDir,
+    authStorage,
+    modelRegistry,
+    model,
+    resourceLoader,
+    sessionManager,
+    settingsManager,
+    tools: translateAllowedTools(opts?.allowed_tools),
+  });
 }
 
 // ── Handle a single query command ────────────────────────────────────────────
 
 async function handleQuery(req: Request): Promise<void> {
   const reqId = req.request_id || "";
+  const opts = req.options;
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
-  const sdkOptions = await buildSDKOptions(req.options);
-
-  log(`query start — rid=${reqId} model=${sdkOptions.model ?? "default"} continue=${sdkOptions.continue ?? false} resume=${sdkOptions.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`);
+  log(
+    `query start — rid=${reqId} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
+  );
 
   const timeoutMs = 10 * 60 * 1000;
   const timeout = setTimeout(() => {
     log(`query timeout — rid=${reqId} no result after 10 minutes`);
     emitReq({ event: "error", message: "query timeout: no result after 10 minutes" });
-    // Don't exit — just emit error and let the process continue.
   }, timeoutMs);
 
+  let turnCount = 0;
+
   try {
-    const stream = query({
-      prompt: req.prompt,
-      options: sdkOptions as Parameters<typeof query>[0]["options"],
+    const { session } = await createPiSession(opts);
+    const sessionID = session.sessionId;
+    lastSessionID = sessionID;
+    sessionByID.set(sessionID, { id: sessionID, file: session.sessionFile });
+
+    emitReq({
+      event: "system",
+      session_id: sessionID,
+      tools: session.getActiveToolNames(),
+      model: session.model ? `${session.model.provider}/${session.model.id}` : "",
     });
 
-    for await (const message of stream) {
-      const msg = message as Record<string, unknown>;
-      const msgType = msg.type as string | undefined;
-
-      switch (msgType) {
-        // ── System init ──────────────────────────────────────────────
-        case "system": {
-          emitReq({
-            event: "system",
-            session_id: msg.session_id as string,
-            tools: msg.tools as string[],
-            model: msg.model as string,
-          });
-          break;
-        }
-
-        // ── Assistant text + tool_use blocks ────────────────────────
-        case "assistant": {
-          const inner = msg.message as Record<string, unknown> | undefined;
-          if (inner?.content && Array.isArray(inner.content)) {
-            const text = extractText(inner.content);
-            if (text) {
-              emitReq({ event: "assistant", text });
-            }
-            for (const block of inner.content as Record<string, unknown>[]) {
-              if (block.type === "tool_use") {
-                emitReq({
-                  event: "tool_use",
-                  id: block.id as string,
-                  name: block.name as string,
-                  input: block.input as Record<string, unknown>,
-                });
-              }
-            }
+    const unsubscribe = session.subscribe((event) => {
+      switch (event.type) {
+        case "message_update": {
+          const update = event.assistantMessageEvent;
+          if (update.type === "text_delta") {
+            emitReq({ event: "assistant", text: update.delta });
           }
           break;
         }
-
-        // ── Tool use summary ─────────────────────────────────────────
-        case "tool_use_summary": {
+        case "tool_execution_start": {
+          emitReq({
+            event: "tool_use",
+            id: event.toolCallId,
+            name: event.toolName,
+            input: event.args,
+          });
+          break;
+        }
+        case "tool_execution_end": {
           emitReq({
             event: "tool_result",
-            content: msg.summary as string,
+            content: textFromContent(event.result?.content),
           });
           break;
         }
-
-        // ── Result (success or error) ────────────────────────────────
-        case "result": {
-          const subtype = msg.subtype as string | undefined;
-          if (subtype === "success") {
-            const usage = msg.usage as Record<string, number> | undefined;
-            emitReq({
-              event: "result",
-              content: msg.result as string,
-              cost_usd: msg.total_cost_usd as number,
-              session_id: msg.session_id as string,
-              duration_ms: msg.duration_ms as number,
-              num_turns: msg.num_turns as number,
-              input_tokens: usage?.input_tokens ?? 0,
-              output_tokens: usage?.output_tokens ?? 0,
-            });
-          } else {
-            // error_max_turns, error_during_execution, etc.
-            const errors = msg.errors as string[] | undefined;
-            emitReq({
-              event: "error",
-              message: errors?.join("; ") ?? `result error: ${subtype}`,
-              subtype: subtype ?? "unknown",
-            });
-          }
+        case "turn_end": {
+          turnCount += 1;
           break;
         }
-
-        // ── All other message types (status, hooks, etc.) ───────────
-        default: {
-          // Not emitted — keep the protocol focused on what Go needs.
+        default:
           break;
-        }
       }
+    });
+
+    try {
+      await session.prompt(req.prompt, { source: "rpc" });
+    } finally {
+      unsubscribe();
     }
+
+    const stats = session.getSessionStats();
+    const content = session.getLastAssistantText() ?? "";
+    emitReq({
+      event: "result",
+      content,
+      cost_usd: stats.cost,
+      session_id: sessionID,
+      duration_ms: 0,
+      num_turns: turnCount || stats.assistantMessages,
+      input_tokens: stats.tokens.input,
+      output_tokens: stats.tokens.output,
+    });
+
+    session.dispose();
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`query error: rid=${reqId} ${errMsg}`);
@@ -419,12 +391,10 @@ function main(): void {
     terminal: false,
   });
 
-  // Process requests concurrently — each query runs independently
   rl.on("line", (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
 
-    // Fire and forget — each request runs in its own async context
     handleRequest(trimmed).catch((err: unknown) => {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`unhandled error in request processing: ${errMsg}`);
@@ -437,7 +407,6 @@ function main(): void {
     process.exit(0);
   });
 
-  // Catch unhandled rejections so the bridge never crashes silently
   process.on("unhandledRejection", (reason: unknown) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     log(`unhandled rejection: ${msg}`);

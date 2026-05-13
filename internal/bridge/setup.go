@@ -14,7 +14,7 @@ const bridgePackageJSON = `{
   "private": true,
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "latest"
+    "@earendil-works/pi-coding-agent": "latest"
   }
 }
 `

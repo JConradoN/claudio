@@ -18,6 +18,7 @@ type Request struct {
 
 // RequestOptions configures how the Bridge executes a query.
 type RequestOptions struct {
+	Provider       string         `json:"provider,omitempty"`
 	Model          string         `json:"model,omitempty"`
 	Cwd            string         `json:"cwd,omitempty"`
 	SystemPrompt   string         `json:"system_prompt,omitempty"`

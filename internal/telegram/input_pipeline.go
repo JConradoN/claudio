@@ -109,6 +109,7 @@ func (bc *BotController) classifyFunc() agents.ClassifyFunc {
 			Command: "query",
 			Prompt:  prompt,
 			Options: bridge.RequestOptions{
+				Provider:       bc.config.DefaultProvider,
 				Model:          bc.config.DefaultModel,
 				SystemPrompt:   system,
 				MaxTurns:       1,
@@ -129,11 +130,12 @@ func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent
 		Command: "query",
 		Prompt:  userText,
 		Options: bridge.RequestOptions{
+			Provider:       bc.config.DefaultProvider,
 			Model:          bc.config.DefaultModel,
 			SystemPrompt:   systemPrompt,
 			MaxTurns:       bc.config.MaxIterations,
 			PermissionMode: "bypassPermissions",
-			DisabledTools: bridge.TelegramPluginTools,
+			DisabledTools:  bridge.TelegramPluginTools,
 		},
 	}
 
@@ -157,13 +159,13 @@ func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent
 		req.Options.Agents = sdkAgents
 	}
 
-	// Continue warm sessions (same process), resume cold ones (restored from disk)
+	// PI resumes sessions by ID/path. Always pass the stored session ID so
+	// the Bridge can reuse warm sessions or reopen persisted ones after restart.
 	if sessionID, active := bc.sessions.GetWithState(chatID); sessionID != "" {
+		req.Options.Resume = sessionID
 		if active {
-			req.Options.Continue = true
-			log.Printf("session: chat=%d mode=continue", chatID)
+			log.Printf("session: chat=%d mode=continue sid=%s", chatID, sessionID[:8])
 		} else {
-			req.Options.Resume = sessionID
 			log.Printf("session: chat=%d mode=resume sid=%s", chatID, sessionID[:8])
 		}
 	} else {
@@ -196,9 +198,9 @@ type bridgeFailureTracker struct {
 }
 
 const (
-	failureWindowMax   = 3                // max failures before cooldown
-	failureWindowDur   = 1 * time.Minute  // window to count failures
-	cooldownDuration   = 30 * time.Second // cooldown period after max failures
+	failureWindowMax = 3                // max failures before cooldown
+	failureWindowDur = 1 * time.Minute  // window to count failures
+	cooldownDuration = 30 * time.Second // cooldown period after max failures
 )
 
 // record adds a failure timestamp and returns true if in cooldown.
@@ -1012,4 +1014,3 @@ Cron prompts are ACTION instructions (not content). They run in isolated session
 		bin, bin,
 	)
 }
-

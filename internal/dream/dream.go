@@ -18,6 +18,7 @@ type DreamConfig struct {
 	Enabled      bool
 	MinInterval  time.Duration // minimum time between dreams
 	MinTurns     int           // minimum user turns before a dream can fire
+	Provider     string        // PI provider to use for consolidation/extraction
 	Model        string        // model to use for consolidation (dream)
 	ExtractModel string        // model to use for memory extraction (legacy, unused with nudge)
 	NudgeEnabled bool          // enable periodic nudge review
@@ -132,6 +133,7 @@ func (d *Dreamer) run() {
 		Command: "query",
 		Prompt:  "Consolidate memories now.",
 		Options: bridge.RequestOptions{
+			Provider:       d.config.Provider,
 			Model:          d.config.Model,
 			SystemPrompt:   consolidationPrompt,
 			Cwd:            d.memoryDir,

@@ -11,10 +11,11 @@ import (
 // BridgeCronRuntime executes cron jobs via the Claude Code bridge,
 // resolving agent config from the registry and injecting persona prompt.
 type BridgeCronRuntime struct {
-	bridge    BridgeExecutor
-	agents    AgentRegistry
-	persona   PersonaBuilder
-	memoryDir string
+	bridge          BridgeExecutor
+	agents          AgentRegistry
+	persona         PersonaBuilder
+	memoryDir       string
+	defaultProvider string
 }
 
 // AgentRegistry resolves agent definitions by name.
@@ -34,12 +35,18 @@ func NewBridgeCronRuntime(
 	ag AgentRegistry,
 	p PersonaBuilder,
 	memoryDir string,
+	defaultProvider ...string,
 ) *BridgeCronRuntime {
+	provider := ""
+	if len(defaultProvider) > 0 {
+		provider = defaultProvider[0]
+	}
 	return &BridgeCronRuntime{
-		bridge:    b,
-		agents:    ag,
-		persona:   p,
-		memoryDir: memoryDir,
+		bridge:          b,
+		agents:          ag,
+		persona:         p,
+		memoryDir:       memoryDir,
+		defaultProvider: provider,
 	}
 }
 
@@ -56,9 +63,10 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 	// 2. Build request options — block Telegram plugin tools to prevent
 	// delivery via wrong bot. All other user MCPs/plugins remain available.
 	opts := bridge.RequestOptions{
+		Provider:       r.defaultProvider,
 		SystemPrompt:   systemPrompt,
 		PermissionMode: "bypassPermissions",
-		DisabledTools: bridge.TelegramPluginTools,
+		DisabledTools:  bridge.TelegramPluginTools,
 	}
 
 	// 3. Apply agent config if available

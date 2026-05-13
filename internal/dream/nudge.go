@@ -93,6 +93,7 @@ IMPORTANT: You MUST call the Write tool at least once. If the conversation has a
 		Command: "query",
 		Prompt:  prompt,
 		Options: bridge.RequestOptions{
+			Provider:       d.config.Provider,
 			Model:          model,
 			SystemPrompt:   sysPrompt,
 			Cwd:            d.memoryDir,

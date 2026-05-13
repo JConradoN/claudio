@@ -19,13 +19,13 @@
 
 **Commands:** `/start`, `/help`, `/cwd`, `/reset`, `/cron`, `/agents`
 
-## LLM Bridge (Claude Agent SDK)
+## LLM Bridge (PI SDK)
 
-**Service:** Anthropic Claude (and compatible providers)
+**Service:** PI coding agent (`@earendil-works/pi-coding-agent`)
 **Purpose:** LLM inference, tool use, agentic loops
 **Implementation:** `internal/bridge/` (Go client) + `bridge/index.ts` (TS wrapper)
-**Configuration:** Provider API key + base URL in app config
-**Authentication:** API key via `ANTHROPIC_API_KEY` env var, or OAuth for subscription mode
+**Configuration:** PI auth/models/settings in `~/.pi/agent`, with selected credentials exported from Aurelia config as env vars
+**Authentication:** PI auth store (`auth.json`), provider env vars, or custom `models.json`
 
 **Protocol:** NDJSON over stdin/stdout
 - Request: `{command, prompt, request_id, options}`
@@ -42,20 +42,18 @@
 | Zai | `api.z.ai/api/anthropic` | (user-selected) |
 | Alibaba | `dashscope-intl.aliyuncs.com/apps/anthropic` | (user-selected) |
 
-## Cloud MCP Servers
+## PI Resources
 
-**Service:** Anthropic MCP Proxy
-**Purpose:** Discover and connect to cloud-hosted MCP servers (tools)
-**Implementation:** `bridge/index.ts` (lines 54-122)
-**Configuration:** OAuth token from `~/.claude/.credentials.json`
-**Authentication:** Bearer token + `anthropic-beta: mcp-servers-2025-12-04`
+**Service:** Local PI installation
+**Purpose:** Reuse auth, model registry, skills, extensions, sessions, and settings
+**Implementation:** `bridge/index.ts` via PI SDK
+**Configuration:** `~/.pi/agent/auth.json`, `~/.pi/agent/models.json`, `~/.pi/agent/settings.json`
+**Authentication:** PI `AuthStorage` plus provider env vars (`ANTHROPIC_API_KEY`, `KIMI_API_KEY`, `OPENROUTER_API_KEY`, etc.)
 
-**Flow:**
-1. Read OAuth from `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`
-2. Fetch `GET api.anthropic.com/v1/mcp_servers?limit=1000`
-3. Convert to `claudeai-proxy` format with MCP proxy URL
-4. Cache for 5 minutes
-5. Merge with agent-defined MCP servers (agent config wins)
+**Notes:**
+1. Claude-specific Cloud MCP discovery was removed from the bridge during PI migration.
+2. Agent-defined `mcp_servers` remain in the config schema but need a PI extension/adapter for parity.
+3. PI built-in tools are mapped from Claude-style tool names (`Read` → `read`, `Glob` → `find`, etc.).
 
 ## Speech-to-Text (Groq)
 

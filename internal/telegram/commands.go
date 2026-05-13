@@ -18,7 +18,7 @@ import (
 type CommandType int
 
 const (
-	CmdCronCreate   CommandType = iota
+	CmdCronCreate CommandType = iota
 	CmdCronList
 	CmdCronCancel
 	CmdSessionReset
@@ -35,9 +35,9 @@ type MatchedCommand struct {
 
 // commandRule defines a pattern for matching a command.
 type commandRule struct {
-	cmdType  CommandType
-	phrases  []string // phrase matches (checked in order)
-	exact    bool     // if true, the entire message must equal one of the phrases
+	cmdType CommandType
+	phrases []string // phrase matches (checked in order)
+	exact   bool     // if true, the entire message must equal one of the phrases
 }
 
 // rules are checked in order; first match wins.
@@ -345,6 +345,7 @@ func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, 
 		Command: "query",
 		Prompt:  text,
 		Options: bridge.RequestOptions{
+			Provider:       bc.config.DefaultProvider,
 			Model:          bc.config.DefaultModel,
 			SystemPrompt:   cronParseSystemPrompt,
 			MaxTurns:       1,

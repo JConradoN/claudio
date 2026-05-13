@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -12,9 +14,9 @@ import (
 
 	"github.com/kocar/aurelia/internal/agents"
 	"github.com/kocar/aurelia/internal/bridge"
-	"github.com/kocar/aurelia/internal/deps"
 	"github.com/kocar/aurelia/internal/config"
 	"github.com/kocar/aurelia/internal/cron"
+	"github.com/kocar/aurelia/internal/deps"
 	"github.com/kocar/aurelia/internal/dream"
 	"github.com/kocar/aurelia/internal/orchestrator"
 	"github.com/kocar/aurelia/internal/persona"
@@ -33,6 +35,22 @@ type app struct {
 	scheduler  *cron.Scheduler
 	cronCtx    context.Context
 	cronCancel context.CancelFunc
+}
+
+var runClaudeAuthStatus = func() ([]byte, error) {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			fallback := filepath.Join(home, ".local", "bin", "claude")
+			if stat, statErr := os.Stat(fallback); statErr == nil && !stat.IsDir() {
+				claudePath = fallback
+			}
+		}
+	}
+	if claudePath == "" {
+		return nil, err
+	}
+	return exec.Command(claudePath, "auth", "status").Output()
 }
 
 func bootstrapApp() (*app, error) {
@@ -122,6 +140,7 @@ func bootstrapApp() (*app, error) {
 	// Fall back to the user's default model so dream/nudge work on any provider
 	// (avoids 402 errors when the hardcoded Anthropic models aren't available).
 	dreamCfg := dream.DefaultConfig()
+	dreamCfg.Provider = cfg.DefaultProvider
 	userModel := cfg.DefaultModel
 	if userModel != "" {
 		dreamCfg.Model = userModel
@@ -146,7 +165,7 @@ func bootstrapApp() (*app, error) {
 	dreamer := dream.New(resolver.Memory(), resolver, br, dreamCfg)
 	bot.SetDreamer(dreamer)
 
-	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory())
+	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider)
 	if err != nil {
 		if closeErr := cronStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close cron store: %v", closeErr)
@@ -235,6 +254,7 @@ func setupCronScheduler(
 	personaSvc *persona.CanonicalIdentityService,
 	bot *telegram.BotController,
 	memoryDir string,
+	defaultProvider string,
 ) (*cron.Scheduler, error) {
 	if agentReg == nil {
 		return nil, nil
@@ -245,6 +265,7 @@ func setupCronScheduler(
 		agentReg,
 		personaSvc,
 		memoryDir,
+		defaultProvider,
 	)
 
 	delivery := cron.NewTelegramDelivery(&telegramChatSender{bot: bot.GetBot()})
@@ -304,47 +325,94 @@ func (a *app) close() {
 	}
 }
 
-// setProviderEnv exports provider credentials as env vars for the Bridge process.
+// setProviderEnv exports provider credentials as env vars consumed by PI.
 func setProviderEnv(cfg *config.AppConfig) {
-	provider := cfg.DefaultProvider
+	provider := config.NormalizeProvider(cfg.DefaultProvider)
 	authMode := cfg.ProviderAuthMode(provider)
 
-	// Subscription mode (Anthropic Max): SDK uses OAuth from ~/.claude/.credentials.json
+	// Subscription mode remains supported for Anthropic when the PI auth store is
+	// already configured. We also keep the legacy Claude auth check as fallback.
 	if provider == "anthropic" && authMode == "subscription" {
 		_ = os.Unsetenv("ANTHROPIC_API_KEY")
 		_ = os.Unsetenv("ANTHROPIC_BASE_URL")
+		if hasPIAuth("anthropic") {
+			return
+		}
 		home, _ := os.UserHomeDir()
-		credPath := filepath.Join(home, ".claude", ".credentials.json")
-		if _, err := os.Stat(credPath); os.IsNotExist(err) {
-			log.Fatalf("Anthropic subscription requires Claude login. Run 'claude login' first.")
+		if !hasClaudeSubscriptionAuth(home) {
+			log.Fatalf("Anthropic subscription requires PI /login or Claude auth. Run 'pi /login' or 'claude auth login' first.")
 		}
 		return
 	}
 
 	apiKey := cfg.ProviderAPIKey(provider)
-	baseURL := cfg.ProviderBaseURL(provider)
+	if apiKey == "" {
+		return
+	}
 
-	// Auto-set base URL for known providers if not explicitly configured
-	if baseURL == "" {
-		switch config.NormalizeProvider(provider) {
-		case "kimi":
-			baseURL = "https://api.kimi.com/coding/"
-		case "openrouter":
-			baseURL = "https://openrouter.ai/api"
-		case "zai":
-			baseURL = "https://api.z.ai/api/anthropic"
-		case "alibaba":
-			baseURL = "https://dashscope-intl.aliyuncs.com/apps/anthropic"
+	if envName := piProviderEnvName(provider); envName != "" {
+		_ = os.Setenv(envName, apiKey)
+	}
+}
+
+func piProviderEnvName(provider string) string {
+	switch config.NormalizeProvider(provider) {
+	case "anthropic":
+		return "ANTHROPIC_API_KEY"
+	case "kimi":
+		return "KIMI_API_KEY"
+	case "openrouter":
+		return "OPENROUTER_API_KEY"
+	case "zai":
+		return "ZAI_API_KEY"
+	case "google":
+		return "GEMINI_API_KEY"
+	case "kilo":
+		return "OPENCODE_API_KEY"
+	default:
+		return ""
+	}
+}
+
+func hasPIAuth(provider string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	path := filepath.Join(home, ".pi", "agent", "auth.json")
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	var auth map[string]any
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return false
+	}
+	_, ok := auth[provider]
+	return ok
+}
+
+func hasClaudeSubscriptionAuth(home string) bool {
+	if home != "" {
+		credPath := filepath.Join(home, ".claude", ".credentials.json")
+		if stat, err := os.Stat(credPath); err == nil && !stat.IsDir() && stat.Size() > 0 {
+			return true
 		}
 	}
 
-	if apiKey != "" {
-		_ = os.Setenv("ANTHROPIC_API_KEY", apiKey)
+	out, err := runClaudeAuthStatus()
+	if err != nil {
+		return false
 	}
-	if baseURL != "" {
-		_ = os.Setenv("ANTHROPIC_BASE_URL", baseURL)
-		_ = os.Setenv("ENABLE_TOOL_SEARCH", "false")
+
+	var status struct {
+		LoggedIn   bool   `json:"loggedIn"`
+		AuthMethod string `json:"authMethod"`
 	}
+	if err := json.Unmarshal(out, &status); err != nil {
+		return false
+	}
+	return status.LoggedIn && status.AuthMethod == "claude.ai"
 }
 
 // findBridgeDir returns ~/.aurelia/bridge/ as the canonical bridge directory.
