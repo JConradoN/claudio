@@ -105,3 +105,37 @@ func TestStore_Cwd(t *testing.T) {
 		t.Fatalf("expected empty after clear, got %q", cwd)
 	}
 }
+
+func TestStore_Cwd_TopicFallback(t *testing.T) {
+	s := NewStore()
+	// Set cwd on general topic (thread=0)
+	s.SetCwd(1, 0, "/home/project")
+
+	// Topic should inherit general topic's cwd
+	if cwd := s.GetCwd(1, 2); cwd != "/home/project" {
+		t.Fatalf("topic should inherit general cwd, got %q", cwd)
+	}
+
+	// Set topic-specific cwd — should override general
+	s.SetCwd(1, 2, "/home/project/sub")
+	if cwd := s.GetCwd(1, 2); cwd != "/home/project/sub" {
+		t.Fatalf("expected topic-specific cwd, got %q", cwd)
+	}
+
+	// Other topic without specific cwd should still inherit general
+	if cwd := s.GetCwd(1, 3); cwd != "/home/project" {
+		t.Fatalf("other topic should inherit general cwd, got %q", cwd)
+	}
+
+	// Clear topic-specific cwd — should fall back to general
+	s.Clear(1, 2)
+	if cwd := s.GetCwd(1, 2); cwd != "/home/project" {
+		t.Fatalf("after clear, topic should fall back to general cwd, got %q", cwd)
+	}
+
+	// Clear general — nothing left
+	s.Clear(1, 0)
+	if cwd := s.GetCwd(1, 2); cwd != "" {
+		t.Fatalf("after general clear, topic should return empty, got %q", cwd)
+	}
+}

@@ -105,8 +105,19 @@ func (s *Store) DeactivateAll() {
 func (s *Store) GetCwd(chatID int64, threadID int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	// Try thread-specific cwd first
 	key := SessionKeyFor(chatID, threadID)
-	return s.cwds[key]
+	if cwd, ok := s.cwds[key]; ok {
+		return cwd
+	}
+	// Fall back to general topic (thread=0) cwd
+	if threadID != 0 {
+		generalKey := SessionKeyFor(chatID, 0)
+		if cwd, ok := s.cwds[generalKey]; ok {
+			return cwd
+		}
+	}
+	return ""
 }
 
 func (s *Store) SetCwd(chatID int64, threadID int, cwd string) {
