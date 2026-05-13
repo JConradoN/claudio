@@ -101,14 +101,12 @@ func SendTextReplyWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, 
 
 func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, replyToID int, threadID int) error {
 	chunks := splitTelegramMarkdown(text, limit)
-	replyTo := &telebot.Message{ID: replyToID}
 
-	for i, chunk := range chunks {
+	for _, chunk := range chunks {
 		htmlChunk := MarkdownToHTML(chunk)
-		opts := &telebot.SendOptions{ParseMode: telebot.ModeHTML}
-		if i == 0 {
-			opts.ReplyTo = replyTo
-			opts.ThreadID = threadID
+		opts := &telebot.SendOptions{
+			ParseMode: telebot.ModeHTML,
+			ThreadID:  threadID,
 		}
 
 		_, err := sender.Send(chat, htmlChunk, opts)
@@ -118,11 +116,7 @@ func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text stri
 		}
 
 		log.Printf("Send chunk with HTML failed (%v). Retrying as plain text...", err)
-		opts = &telebot.SendOptions{}
-		if i == 0 {
-			opts.ReplyTo = replyTo
-			opts.ThreadID = threadID
-		}
+		opts = &telebot.SendOptions{ThreadID: threadID}
 		_, err = sender.Send(chat, chunk, opts)
 		if err != nil {
 			return err
