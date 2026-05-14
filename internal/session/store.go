@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // SessionKey uniquely identifies a session within a chat thread.
@@ -26,6 +27,7 @@ type Store struct {
 type entry struct {
 	sessionID string
 	active    bool
+	lastSeen  time.Time
 }
 
 // NewStore creates a new session store.
@@ -67,7 +69,7 @@ func (s *Store) Set(chatID int64, threadID int, sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := SessionKeyFor(chatID, threadID)
-	s.sessions[key] = &entry{sessionID: sessionID, active: true}
+	s.sessions[key] = &entry{sessionID: sessionID, active: true, lastSeen: time.Now()}
 }
 
 // Clear removes session and cwd for a specific chat thread.
@@ -99,6 +101,19 @@ func (s *Store) DeactivateAll() {
 	defer s.mu.Unlock()
 	for _, e := range s.sessions {
 		e.active = false
+	}
+}
+
+// GC removes sessions and cwds that have not been seen since maxAge ago.
+func (s *Store) GC(maxAge time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	for key, e := range s.sessions {
+		if e.lastSeen.Before(cutoff) {
+			delete(s.sessions, key)
+			delete(s.cwds, key)
+		}
 	}
 }
 

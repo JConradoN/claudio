@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTracker_AddAndGet(t *testing.T) {
 	tr := NewTracker()
@@ -48,9 +51,51 @@ func TestTracker_RecordUsage_FallbackEstimate(t *testing.T) {
 		t.Fatal("should not reset at 15000 estimated tokens")
 	}
 	usage := tr.Get(1)
-	// Fallback: 5 turns * 3000 = 15000 estimated as input tokens
+	if usage.EstimatedTokens != 15000 {
+		t.Fatalf("expected 15000 estimated tokens, got %d", usage.EstimatedTokens)
+	}
+	if usage.InputTokens != 0 {
+		t.Fatalf("expected InputTokens=0 for estimate-only, got %d", usage.InputTokens)
+	}
+	// TotalTokens uses the larger of real vs estimated
 	if usage.TotalTokens() != 15000 {
-		t.Fatalf("expected 15000 estimated tokens, got %d", usage.TotalTokens())
+		t.Fatalf("expected TotalTokens=15000, got %d", usage.TotalTokens())
+	}
+}
+
+func TestTracker_EstimatedTokens_DoNotMixWithReal(t *testing.T) {
+	tr := NewTracker()
+	// First call: no real tokens → estimated
+	tr.RecordUsage(1, 3, 0.05, 100000, 0, 0) // 3 * 3000 = 9000 estimated
+	// Second call: has real tokens → these should NOT add to EstimatedTokens
+	tr.RecordUsage(1, 5, 0.10, 100000, 10000, 5000)
+
+	usage := tr.Get(1)
+	if usage.EstimatedTokens != 9000 {
+		t.Fatalf("expected EstimatedTokens=9000, got %d", usage.EstimatedTokens)
+	}
+	if usage.InputTokens != 10000 {
+		t.Fatalf("expected InputTokens=10000, got %d", usage.InputTokens)
+	}
+	if usage.OutputTokens != 5000 {
+		t.Fatalf("expected OutputTokens=5000, got %d", usage.OutputTokens)
+	}
+	// TotalTokens = max(15000, 9000) = 15000
+	if usage.TotalTokens() != 15000 {
+		t.Fatalf("expected TotalTokens=15000, got %d", usage.TotalTokens())
+	}
+}
+
+func TestTracker_String_IncludesEstimated(t *testing.T) {
+	tr := NewTracker()
+	tr.RecordUsage(1, 2, 0.02, 100000, 0, 0) // 6000 estimated
+	s := tr.Get(1).String()
+	if s == "" {
+		t.Fatal("expected non-empty string")
+	}
+	// Should contain the estimated annotation
+	if !strings.Contains(s, "estimado: 6000") {
+		t.Fatalf("expected string to contain 'estimado: 6000', got: %s", s)
 	}
 }
 

@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestStore_SetGetClear(t *testing.T) {
 	s := NewStore()
@@ -104,6 +107,51 @@ func TestStore_Cwd(t *testing.T) {
 	if cwd := s.GetCwd(1, 0); cwd != "" {
 		t.Fatalf("expected empty after clear, got %q", cwd)
 	}
+}
+
+func TestStore_GC_RemovesOldEntries(t *testing.T) {
+	s := NewStore()
+	s.Set(1, 0, "sess-old")
+	s.Set(2, 0, "sess-new")
+
+	// Run GC with zero maxAge — everything should be removed
+	s.GC(0)
+
+	if id := s.Get(1, 0); id != "" {
+		t.Fatalf("expected empty after GC(0), got %q", id)
+	}
+	if id := s.Get(2, 0); id != "" {
+		t.Fatalf("expected empty after GC(0), got %q", id)
+	}
+}
+
+func TestStore_GC_KeepsRecentEntries(t *testing.T) {
+	s := NewStore()
+	s.Set(1, 0, "sess-recent")
+
+	// GC with 1 hour maxAge — recent entries should survive
+	s.GC(1 * time.Hour)
+
+	if id := s.Get(1, 0); id != "sess-recent" {
+		t.Fatalf("expected sess-recent after GC, got %q", id)
+	}
+}
+
+func TestStore_GC_AlsoClearsCwd(t *testing.T) {
+	s := NewStore()
+	s.Set(1, 0, "sess-1")
+	s.SetCwd(1, 0, "/home/project")
+
+	s.GC(0)
+
+	if cwd := s.GetCwd(1, 0); cwd != "" {
+		t.Fatalf("expected empty cwd after GC, got %q", cwd)
+	}
+}
+
+func TestStore_GC_Empty(t *testing.T) {
+	s := NewStore()
+	s.GC(1 * time.Hour) // should not panic
 }
 
 func TestStore_Cwd_TopicFallback(t *testing.T) {

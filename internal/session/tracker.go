@@ -9,19 +9,32 @@ const estimatedTokensPerTurn = 3000
 
 // Usage tracks accumulated token usage and cost for a chat session.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
-	NumTurns     int
+	InputTokens     int
+	OutputTokens    int
+	EstimatedTokens int // turn-based estimate when real tokens are unavailable
+	CostUSD         float64
+	NumTurns        int
 }
 
+// TotalTokens returns the gate value for auto-reset decisions.
+// Uses the larger of real tokens and estimated tokens to avoid underestimation
+// (which could prevent timely reset) or overestimation (which could trigger
+// premature reset when real tokens are available).
 func (u Usage) TotalTokens() int {
-	return u.InputTokens + u.OutputTokens
+	realTokens := u.InputTokens + u.OutputTokens
+	if u.EstimatedTokens > realTokens {
+		return u.EstimatedTokens
+	}
+	return realTokens
 }
 
 func (u Usage) String() string {
-	return fmt.Sprintf("Tokens: %d (in: %d, out: %d) | Turns: %d | Cost: $%.4f",
+	base := fmt.Sprintf("Tokens: %d (in: %d, out: %d) | Turns: %d | Cost: $%.4f",
 		u.TotalTokens(), u.InputTokens, u.OutputTokens, u.NumTurns, u.CostUSD)
+	if u.EstimatedTokens > 0 {
+		base += fmt.Sprintf(" (estimado: %d)", u.EstimatedTokens)
+	}
+	return base
 }
 
 // Tracker accumulates token usage per chat for auto-reset decisions.
@@ -63,9 +76,20 @@ func (t *Tracker) RecordUsage(chatID int64, numTurns int, costUSD float64, maxTo
 		totalTokens := t.Add(chatID, inputTokens, outputTokens, numTurns, costUSD)
 		return maxTokens > 0 && totalTokens >= maxTokens
 	}
-	// Fallback: estimate from turns (legacy behavior)
+
+	// Fallback: estimate from turns when real tokens aren't provided
+	t.mu.Lock()
 	estimated := numTurns * estimatedTokensPerTurn
-	totalTokens := t.Add(chatID, estimated, 0, numTurns, costUSD)
+	u, ok := t.usage[chatID]
+	if !ok {
+		u = &Usage{}
+		t.usage[chatID] = u
+	}
+	u.EstimatedTokens += estimated
+	u.NumTurns += numTurns
+	u.CostUSD += costUSD
+	totalTokens := u.TotalTokens()
+	t.mu.Unlock()
 	return maxTokens > 0 && totalTokens >= maxTokens
 }
 
