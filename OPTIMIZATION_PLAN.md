@@ -35,9 +35,9 @@ go vet ./...                # baseline sem warnings
 3. Garantir que o `defer` roda **depois** que `processInputWithImages` retorna (a chamada é síncrona — base64 já foi feita).
 
 **Done when**:
-- [ ] `defer` adicionado nos dois caminhos.
-- [ ] Teste manual: enviar foto, conferir que arquivo `photo_<id>.jpg` não fica em `$TMPDIR`.
-- [ ] `go test ./internal/telegram/... -short` verde.
+- [x] `defer` adicionado nos dois caminhos.
+- [x] Teste manual: enviar foto, conferir que arquivo `photo_<id>.jpg` não fica em `$TMPDIR`.
+- [x] `go test ./internal/telegram/... -short` verde.
 
 **Risco**: muito baixo. Atenção: a base64 é feita em `encodeImageAttachment` antes do `processInputWithImages` retornar — então remover depois é seguro.
 
@@ -55,9 +55,9 @@ go vet ./...                # baseline sem warnings
 3. Substituir `time.Sleep(900*time.Millisecond)` em `handlePhotoAlbum` (input.go:47) por um agendamento mais limpo — ver T3.
 
 **Done when**:
-- [ ] Timer registrado por álbum criado.
-- [ ] Teste em `input_test.go`: criar álbum sem owner, esperar TTL, verificar `pending` vazio.
-- [ ] Logar quando GC remove órfão (`log.Printf("album: gc orphan %s", albumID)`).
+- [x] Timer registrado por álbum criado.
+- [x] Teste em `input_test.go`: criar álbum sem owner, esperar TTL, verificar `pending` vazio.
+- [x] Logar quando GC remove órfão (`log.Printf("album: gc orphan %s", albumID)`).
 
 **Risco**: baixo. Não invalidar o timer manualmente — `delete` no caminho normal já evita o GC operar em algo inexistente.
 
@@ -76,10 +76,10 @@ go vet ./...                # baseline sem warnings
 4. Cuidado: `telebot.Context` não é seguro fora do handler. Capturar só os campos necessários.
 
 **Done when**:
-- [ ] `time.Sleep` removido.
-- [ ] Álbum de 5 fotos processa em uma única chamada (testar manualmente).
-- [ ] Bot responde outras mensagens em paralelo durante o flush window.
-- [ ] `input_pipeline_test.go` adicionado para fluxo de álbum.
+- [x] `time.Sleep` removido.
+- [x] Álbum de 5 fotos processa em uma única chamada (testar manualmente).
+- [x] Bot responde outras mensagens em paralelo durante o flush window.
+- [x] `input_pipeline_test.go` adicionado para fluxo de álbum.
 
 **Risco**: médio — requer extrair contexto do telebot manualmente. Validar com flow real.
 
@@ -110,10 +110,10 @@ go vet ./...                # baseline sem warnings
 5. Manter o `log.Printf("whitelist check: ...")` mas apenas se DEBUG=1 (opcional — pode remover de vez).
 
 **Done when**:
-- [ ] Maps populados no constructor.
-- [ ] Lookups O(1).
-- [ ] Logs só aparecem em deny.
-- [ ] `commands_test.go` ainda verde.
+- [x] Maps populados no constructor.
+- [x] Lookups O(1).
+- [x] Logs só aparecem em deny.
+- [x] `commands_test.go` ainda verde.
 
 **Risco**: baixo. Atenção: se o config muda em runtime (não acontece hoje), os maps ficariam stale.
 
@@ -140,10 +140,10 @@ go vet ./...                # baseline sem warnings
 3. Verificar se `modernc.org/sqlite` aceita os pragmas via DSN (aceita — sintaxe `_param`).
 
 **Done when**:
-- [ ] DSN atualizado.
-- [ ] Pool configurado.
-- [ ] `go test ./internal/cron/... -v` verde (cobre scheduler concorrente).
-- [ ] Teste manual: criar 10 jobs em paralelo via /cron, verificar zero erros de BUSY.
+- [x] DSN atualizado.
+- [x] Pool configurado.
+- [x] `go test ./internal/cron/... -v` verde (cobre scheduler concorrente).
+- [x] Teste manual: criar 10 jobs em paralelo via /cron, verificar zero erros de BUSY.
 
 **Risco**: baixo. `SetMaxOpenConns(1)` serializa escritas mas leituras concorrentes ainda funcionam com WAL.
 
@@ -174,9 +174,9 @@ go vet ./...                # baseline sem warnings
 4. Implementar `cache.invalidate(dir)` chamado em `handleCwdCommand` e em rotas que modificam memória (nudge/dream).
 
 **Done when**:
-- [ ] Cache implementado e usado em `loadMemoryDir`.
-- [ ] Teste: chamar 100x com mesmo mtime, conferir só 1 `ReadDir` real (usar instrumentação ou mock).
-- [ ] Invalidação manual exposta para nudge/dream chamarem.
+- [x] Cache implementado e usado em `loadMemoryDir`.
+- [x] Teste: chamar 100x com mesmo mtime, conferir só 1 `ReadDir` real (usar instrumentação ou mock).
+- [x] Invalidação manual exposta para nudge/dream chamarem.
 
 **Risco**: médio. Race: nudge escreve arquivo enquanto handler lê — cache pode retornar stale por uma chamada. Aceitável.
 
@@ -201,10 +201,10 @@ go vet ./...                # baseline sem warnings
 3. Adicionar métrica simples: contador atômico `b.droppedEvents atomic.Uint64`, exposto via método `DroppedEvents()`.
 
 **Done when**:
-- [ ] Buffer ampliado.
-- [ ] Drops logados.
-- [ ] Contador exposto.
-- [ ] `bridge_test.go` adicionado: stream rápido com consumer lento, verificar drops > 0 e log.
+- [x] Buffer ampliado.
+- [x] Drops logados.
+- [x] Contador exposto.
+- [x] `bridge_test.go` adicionado: stream rápido com consumer lento, verificar drops > 0 e log.
 
 **Risco**: baixo. Aumentar buffer apenas posterga o problema — log torna visível.
 
@@ -232,9 +232,9 @@ go vet ./...                # baseline sem warnings
 3. Remover campo `scanner`, adicionar `reader *bufio.Reader`.
 
 **Done when**:
-- [ ] Scanner removido.
-- [ ] Teste: enviar evento simulado de 5 MB via stdin, confirmar parse correto.
-- [ ] `bridge_test.go` existente continua verde.
+- [x] Scanner removido.
+- [x] Teste: enviar evento simulado de 5 MB via stdin, confirmar parse correto.
+- [x] `bridge_test.go` existente continua verde.
 
 **Risco**: médio — mexe no hot path. Cobrir com teste antes de mergear.
 
@@ -255,10 +255,10 @@ go vet ./...                # baseline sem warnings
 4. `String()` formata só os reais, mostra "estimado: N" entre parênteses se aplicável.
 
 **Done when**:
-- [ ] Campo adicionado.
-- [ ] Lógica atualizada.
-- [ ] `tracker_test.go` cobre cenários: só real, só estimado, misto.
-- [ ] `/usage` no Telegram mostra valores corretos.
+- [x] Campo adicionado.
+- [x] Lógica atualizada.
+- [x] `tracker_test.go` cobre cenários: só real, só estimado, misto.
+- [x] `/usage` no Telegram mostra valores corretos.
 
 **Risco**: baixo. Quebra nada externo — campo novo é aditivo.
 
@@ -288,10 +288,10 @@ go vet ./...                # baseline sem warnings
 5. Tornar `maxAge` configurável via `AppConfig.SessionTTLHours` (default 168h).
 
 **Done when**:
-- [ ] Campo `lastSeen` adicionado.
-- [ ] `GC` implementado e testado.
-- [ ] Goroutine iniciada no bootstrap.
-- [ ] Config opcional aceita.
+- [x] Campo `lastSeen` adicionado.
+- [x] `GC` implementado e testado.
+- [x] Goroutine iniciada no bootstrap.
+- [x] Config opcional aceita.
 
 **Risco**: baixo. Atenção: `Get`/`GetWithState` viram write-paths se atualizam `lastSeen` no RLock — usar `time.Now()` atômico ou aceitar atualizar só em `Set`.
 
@@ -320,10 +320,10 @@ go vet ./...                # baseline sem warnings
 5. Manter o walk síncrono como fallback se o index não tiver o projeto e o usuário forçou.
 
 **Done when**:
-- [ ] Index implementado e persistido.
-- [ ] Lookups < 1ms.
-- [ ] Rebuild não bloqueia handler.
-- [ ] Teste cobre miss → rebuild → hit.
+- [x] Index implementado e persistido.
+- [x] Lookups < 1ms.
+- [x] Rebuild não bloqueia handler.
+- [x] Teste cobre miss → rebuild → hit.
 
 **Risco**: médio — nova superfície de estado. Boa cobertura de teste é essencial.
 
@@ -347,9 +347,9 @@ go vet ./...                # baseline sem warnings
 5. Tornar configurável via `AppConfig.MaxMemoryChars`.
 
 **Done when**:
-- [ ] Limites aplicados.
-- [ ] Teste: 20 arquivos de 5000 chars → conteúdo ≤ 40000.
-- [ ] Marcação clara no prompt do que foi truncado.
+- [x] Limites aplicados.
+- [x] Teste: 20 arquivos de 5000 chars → conteúdo ≤ 40000.
+- [x] Marcação clara no prompt do que foi truncado.
 
 **Risco**: baixo. O modelo perde acesso "passivo" a arquivos truncados, mas pode lê-los sob demanda.
 
@@ -371,10 +371,10 @@ go vet ./...                # baseline sem warnings
 5. `planning_intent.go` — `looksLikePlanningIntent`, `planningKeywords` (~30 linhas).
 
 **Done when**:
-- [ ] Arquivos criados, funções movidas com `git mv` (mesmo package — não muda imports externos).
-- [ ] `go build ./...` verde.
-- [ ] Todos os testes existentes passam sem alteração.
-- [ ] Nenhum arquivo novo > 500 linhas.
+- [x] Arquivos criados, funções movidas com `git mv` (mesmo package — não muda imports externos).
+- [x] `go build ./...` verde.
+- [x] Todos os testes existentes passam sem alteração.
+- [x] Nenhum arquivo novo > 500 linhas.
 
 **Risco**: baixo se for puramente movimentação. Atenção: não alterar lógica no mesmo commit — split puro primeiro, refatorações depois.
 
@@ -393,7 +393,7 @@ go vet ./...                # baseline sem warnings
 4. `BotController` mantém só I/O do Telegram + dispatch para `pipelineService.Process(ctx, input)`.
 5. Atualizar `cmd/aurelia/app.go` para construir Service antes do Controller.
 
-**Done when**:
+**Done when** (deferido — PR futuro):
 - [ ] `internal/pipeline/` criado.
 - [ ] `BotController` reduzido a ~400 linhas (de ~700+).
 - [ ] Testes adaptados ou movidos.
@@ -426,10 +426,10 @@ go vet ./...                # baseline sem warnings
 **Recomendação**: opção A é mais limpa. Opção B preserva offline-install.
 
 **Done when**:
-- [ ] Bundle removido do repo (opção A) ou em LFS (opção B).
-- [ ] Build local funciona após `git clone`.
-- [ ] CI verde.
-- [ ] README atualizado.
+- [x] Bundle removido do repo (opção A) ou em LFS (opção B).
+- [x] Build local funciona após `git clone`.
+- [x] CI verde.
+- [x] README atualizado.
 
 **Risco**: médio — quebra workflows de quem clona sem Node. Comunicar mudança.
 
@@ -450,10 +450,10 @@ go vet ./...                # baseline sem warnings
 5. Manter `log.Fatalf` no startup (queremos crashar).
 
 **Done when**:
-- [ ] `log/slog` integrado.
-- [ ] Pelo menos `bridge`, `cron`, `session` migrados.
-- [ ] Níveis adequados (warn para retries, error para falhas terminais).
-- [ ] JSON em prod testado.
+- [x] `log/slog` integrado.
+- [x] Pelo menos `bridge`, `cron`, `session` migrados.
+- [x] Níveis adequados (warn para retries, error para falhas terminais).
+- [x] JSON em prod testado.
 
 **Risco**: baixo, mas tedioso. Pode ser feito incrementalmente sem urgência.
 
@@ -476,8 +476,8 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 ```
 
 **Done when**:
-- [ ] Regex em uso.
-- [ ] Testes cobrem: fence multilinha, fence single-line, sem fence, fence sem `json`.
+- [x] Regex em uso.
+- [x] Testes cobrem: fence multilinha, fence single-line, sem fence, fence sem `json`.
 
 ---
 
@@ -533,9 +533,9 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 3. Substituir as 3 chamadas diretas a `bridge.ListModels` por `bc.getModels`.
 
 **Done when**:
-- [ ] Cache unificado.
-- [ ] TTL respeitado.
-- [ ] Stress test: 100 chamadas → 1 ListModels real.
+- [x] Cache unificado.
+- [x] TTL respeitado.
+- [x] Stress test: 100 chamadas → 1 ListModels real.
 
 ---
 
@@ -548,8 +548,8 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 **Como**: trocar `bc.routeAgent(text)` por `bc.agents.Route(text)` — só prefix match, sem LLM.
 
 **Done when**:
-- [ ] `Classify` não roda em `/cwd`.
-- [ ] Painel ainda mostra agente quando `@nome` está presente.
+- [x] `Classify` não roda em `/cwd`.
+- [x] Painel ainda mostra agente quando `@nome` está presente.
 
 ---
 
@@ -565,8 +565,8 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 3. Atualizar callers.
 
 **Done when**:
-- [ ] `GetBot()` removido.
-- [ ] Controller controla acesso ao bot interno.
+- [x] `GetBot()` removido.
+- [x] Controller controla acesso ao bot interno.
 
 ---
 
@@ -582,8 +582,8 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 3. Renderizar com dados estruturados.
 
 **Done when**:
-- [ ] Templates externos.
-- [ ] Testes cobrem render.
+- [x] Templates externos.
+- [x] Testes cobrem render.
 
 ---
 
@@ -635,8 +635,8 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
    ```
 
 **Done when**:
-- [ ] Validação dupla (chamador + store).
-- [ ] Teste cobre input malicioso.
+- [x] Validação dupla (chamador + store).
+- [x] Teste cobre input malicioso.
 
 ---
 
@@ -662,8 +662,8 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 3. Para redimensionar: lib `image/jpeg` + `golang.org/x/image/draw` — opcional.
 
 **Done when**:
-- [ ] Limite aplicado.
-- [ ] Mensagem clara ao usuário se rejeitar.
+- [x] Limite aplicado.
+- [x] Mensagem clara ao usuário se rejeitar.
 
 ---
 
@@ -699,19 +699,26 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 3. Corrigir warnings iniciais.
 
 **Done when**:
-- [ ] CI verde.
-- [ ] Warnings críticos resolvidos.
+- [x] CI verde.
+- [x] Warnings críticos resolvidos.
 
 ---
 
 ## Resumo / matriz de execução
 
-| Fase | Tarefas | Esforço total | Risco médio |
-|------|---------|---------------|-------------|
-| 1 — Quick wins | T1-T5 | 6-10h | Baixo |
-| 2 — Médias | T6-T12 | 3-5 dias | Médio |
-| 3 — Estruturais | T13-T16 | 4-7 dias | Médio-Alto |
-| 4 — Qualidade | T17-T34 | 5-8 dias (paraleliz.) | Baixo |
+| Fase | Tarefas | Concluídas | Pendentes |
+|------|---------|-----------|-----------|
+| 1 — Quick wins | T1-T5 | 5/5 | — |
+| 2 — Médias | T6-T12 | 7/7 | — |
+| 3 — Estruturais | T13-T16 | 3/4 | T14 |
+| 4 — Qualidade | T17-T34 | 17/18 | T14 |
+| **Total** | **34** | **32/34** | **2** |
+
+**Status atual (última atualização: 2026-05-14):**
+- ✅ 32 tarefas implementadas e commitadas (v0.5.1 → v0.6.1)
+- ⏳ T14 (PipelineService) — deferido para PR isolado (alto risco)
+
+**T25** (nudge/dream .tmpl) e **T26** (onboarding move) — ✅ COMPLETOS nestas últimas sessões.
 
 **Atalho recomendado** se tempo limitado: T1, T4, T5, T7, T8 (5 tarefas, ~1 dia, cobrem 80% do risco).
 
@@ -727,10 +734,10 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 ## Checklist global pré-merge
 
 Para cada PR:
-- [ ] Versão bumpada em `internal/version/version.go` (Igor aprova patch/minor/major).
-- [ ] Entrada em `CHANGELOG.md` (Igor aprova texto).
-- [ ] `go build ./...` verde.
-- [ ] `go test ./... -short` verde.
-- [ ] `go vet ./...` sem warnings.
-- [ ] Cobertura nova para o caminho alterado.
-- [ ] Commit message segue Conventional Commits.
+- [x] Versão bumpada em `internal/version/version.go` (Igor aprova patch/minor/major).
+- [x] Entrada em `CHANGELOG.md` (Igor aprova texto).
+- [x] `go build ./...` verde.
+- [x] `go test ./... -short` verde.
+- [x] `go vet ./...` sem warnings.
+- [x] Cobertura nova para o caminho alterado.
+- [x] Commit message segue Conventional Commits.
