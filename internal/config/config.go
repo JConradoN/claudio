@@ -42,6 +42,8 @@ func defaultModelForProvider(provider string) string {
 const (
 	defaultMaxIterations    = 500
 	defaultMaxSessionTokens = 100000
+	defaultMaxImageBytes    = 10 * 1024 * 1024
+	defaultSessionTTLHours  = 168
 	defaultLLMProvider      = "kimi"
 	defaultLLMModel         = "kimi-k2-thinking"
 	defaultSTTProvider      = "groq"
@@ -69,6 +71,7 @@ type AppConfig struct {
 	MaxIterations    int    `json:"max_iterations"`
 	MaxSessionTokens int    `json:"max_session_tokens"`
 	MaxImageBytes    int    `json:"max_image_bytes,omitempty"`
+	SessionTTLHours  int    `json:"session_ttl_hours,omitempty"`
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
 
@@ -138,6 +141,7 @@ type fileConfig struct {
 	MaxIterations    int    `json:"max_iterations"`
 	MaxSessionTokens int    `json:"max_session_tokens"`
 	MaxImageBytes    int    `json:"max_image_bytes,omitempty"`
+	SessionTTLHours  int    `json:"session_ttl_hours,omitempty"`
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
 
@@ -196,16 +200,18 @@ func Load(r *runtime.PathResolver) (*AppConfig, error) {
 
 func defaultFileConfig(r *runtime.PathResolver) fileConfig {
 	return fileConfig{
-		DefaultProvider:        defaultLLMProvider,
-		DefaultModel:           defaultModelForProvider(defaultLLMProvider),
-		Providers:              map[string]ProviderConfig{},
-		STTProvider:            defaultSTTProvider,
+		DefaultProvider:         defaultLLMProvider,
+		DefaultModel:            defaultModelForProvider(defaultLLMProvider),
+		Providers:               map[string]ProviderConfig{},
+		STTProvider:             defaultSTTProvider,
 		TelegramAllowedUserIDs:  []int64{},
 		TelegramAllowedGroupIDs: []int64{},
-		MaxIterations:          defaultMaxIterations,
-		MaxSessionTokens:       defaultMaxSessionTokens,
-		DBPath:                 filepath.Join(r.Data(), "aurelia.db"),
-		MCPConfigPath:          filepath.Join(r.Config(), "mcp_servers.json"),
+		MaxIterations:           defaultMaxIterations,
+		MaxSessionTokens:        defaultMaxSessionTokens,
+		MaxImageBytes:           defaultMaxImageBytes,
+		SessionTTLHours:         defaultSessionTTLHours,
+		DBPath:                  filepath.Join(r.Data(), "aurelia.db"),
+		MCPConfigPath:           filepath.Join(r.Config(), "mcp_servers.json"),
 	}
 }
 
@@ -234,6 +240,12 @@ func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver) fileConfig {
 	}
 	if cfg.MaxSessionTokens <= 0 {
 		cfg.MaxSessionTokens = defaults.MaxSessionTokens
+	}
+	if cfg.MaxImageBytes <= 0 {
+		cfg.MaxImageBytes = defaults.MaxImageBytes
+	}
+	if cfg.SessionTTLHours <= 0 {
+		cfg.SessionTTLHours = defaults.SessionTTLHours
 	}
 	if cfg.MCPConfigPath == "" {
 		cfg.MCPConfigPath = defaults.MCPConfigPath
@@ -268,21 +280,22 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		normalized[NormalizeProvider(name)] = pc
 	}
 	return &AppConfig{
-		DefaultProvider:        cfg.DefaultProvider,
-		DefaultModel:           cfg.DefaultModel,
-		Providers:              normalized,
+		DefaultProvider:         cfg.DefaultProvider,
+		DefaultModel:            cfg.DefaultModel,
+		Providers:               normalized,
 		TelegramBotToken:        cfg.TelegramBotToken,
 		TelegramAllowedUserIDs:  cfg.TelegramAllowedUserIDs,
 		TelegramAllowedGroupIDs: cfg.TelegramAllowedGroupIDs,
-		STTProvider:            cfg.STTProvider,
-		MaxIterations:          cfg.MaxIterations,
-		MaxSessionTokens:       cfg.MaxSessionTokens,
-		MaxImageBytes:          cfg.MaxImageBytes,
-		DBPath:                 cfg.DBPath,
-		MCPConfigPath:          cfg.MCPConfigPath,
-		VisionModel:            cfg.VisionModel,
-		VisionProvider:         cfg.VisionProvider,
-		LogLevel:               cfg.LogLevel,
-		LogFormat:              cfg.LogFormat,
+		STTProvider:             cfg.STTProvider,
+		MaxIterations:           cfg.MaxIterations,
+		MaxSessionTokens:        cfg.MaxSessionTokens,
+		MaxImageBytes:           cfg.MaxImageBytes,
+		SessionTTLHours:         cfg.SessionTTLHours,
+		DBPath:                  cfg.DBPath,
+		MCPConfigPath:           cfg.MCPConfigPath,
+		VisionModel:             cfg.VisionModel,
+		VisionProvider:          cfg.VisionProvider,
+		LogLevel:                cfg.LogLevel,
+		LogFormat:               cfg.LogFormat,
 	}
 }

@@ -149,6 +149,17 @@ func TestStore_GC_AlsoClearsCwd(t *testing.T) {
 	}
 }
 
+func TestStore_GC_ClearsCwdWithoutSession(t *testing.T) {
+	s := NewStore()
+	s.SetCwd(1, 0, "/home/project")
+
+	s.GC(0)
+
+	if cwd := s.GetCwd(1, 0); cwd != "" {
+		t.Fatalf("expected empty cwd-only entry after GC, got %q", cwd)
+	}
+}
+
 func TestStore_GC_Empty(t *testing.T) {
 	s := NewStore()
 	s.GC(1 * time.Hour) // should not panic

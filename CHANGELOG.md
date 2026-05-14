@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.2] - 2026-05-14
+
+### Fixed
+- Bridge first-run setup now embeds the TypeScript source, writes `index.ts`, installs `esbuild`, and builds `bundle.js` without requiring versioned JS bundles.
+- Removed versioned bridge bundles from git while preserving runtime build support.
+- Avoided nil-agent panics when the agent registry fails to load.
+- Session GC now runs in production, uses configurable `session_ttl_hours`, and expires orphan CWD entries.
+- Memory prompt injection now enforces the total character cap, including the first memory layer.
+- Image uploads now honor configured `max_image_bytes` and return a clear user-facing error when oversized.
+- Project detection fallback now respects cancellation and schedules debounced index rebuilds on misses.
+- Bridge terminal events are preserved under backpressure so slow consumers do not turn dropped `result`/`error` events into false process deaths.
+
+### Added
+- Regression tests for bridge setup metadata, memory prompt cap, image size rejection, and orphan CWD GC.
+
 ## [v0.6.1] - 2026-05-14
 
 ### Added

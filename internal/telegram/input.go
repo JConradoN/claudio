@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"mime"
@@ -73,8 +74,9 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 	}
 
 	var (
-		images     []bridge.ImageAttachment
-		downloaded []string
+		images      []bridge.ImageAttachment
+		downloaded  []string
+		tooLargeMsg string
 	)
 	defer func() { removeAll(downloaded) }()
 	for _, p := range photos {
@@ -84,28 +86,60 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 			continue
 		}
 		downloaded = append(downloaded, filePath)
-		img, err := encodeImageAttachment(filePath, "image/jpeg")
+		img, err := encodeImageAttachment(filePath, "image/jpeg", bc.maxImageBytes())
 		if err != nil {
 			log.Printf("Failed to encode photo: %v", err)
+			var tooLarge imageTooLargeError
+			if errors.As(err, &tooLarge) && tooLargeMsg == "" {
+				tooLargeMsg = tooLarge.UserMessage()
+			}
 			continue
 		}
 		images = append(images, img)
 	}
 
+	if len(images) == 0 && tooLargeMsg != "" {
+		return SendContextText(c, tooLargeMsg)
+	}
 	return bc.processInputWithImages(c, text, images)
+}
+
+const fallbackMaxImageBytes = 10 * 1024 * 1024
+
+type imageTooLargeError struct {
+	path  string
+	size  int
+	limit int
+}
+
+func (e imageTooLargeError) Error() string {
+	return fmt.Sprintf("image %q is %d bytes, exceeds %d byte limit", e.path, e.size, e.limit)
+}
+
+func (e imageTooLargeError) UserMessage() string {
+	return fmt.Sprintf("Imagem muito grande (%d bytes). O limite configurado é %d bytes.", e.size, e.limit)
+}
+
+func (bc *BotController) maxImageBytes() int {
+	if bc != nil && bc.config != nil && bc.config.MaxImageBytes > 0 {
+		return bc.config.MaxImageBytes
+	}
+	return fallbackMaxImageBytes
 }
 
 // encodeImageAttachment reads an image file, base64-encodes it, and returns
 // an ImageAttachment suitable for the bridge protocol.
 // If the file exceeds maxImageBytes, it returns an error.
-func encodeImageAttachment(filePath, defaultMIME string) (bridge.ImageAttachment, error) {
+func encodeImageAttachment(filePath, defaultMIME string, maxImageBytes int) (bridge.ImageAttachment, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return bridge.ImageAttachment{}, fmt.Errorf("read image %q: %w", filePath, err)
 	}
-	const maxImageBytes = 10 * 1024 * 1024 // 10 MB default
+	if maxImageBytes <= 0 {
+		maxImageBytes = fallbackMaxImageBytes
+	}
 	if len(data) > maxImageBytes {
-		return bridge.ImageAttachment{}, fmt.Errorf("image %q is %d bytes, exceeds %d byte limit", filePath, len(data), maxImageBytes)
+		return bridge.ImageAttachment{}, imageTooLargeError{path: filePath, size: len(data), limit: maxImageBytes}
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return bridge.ImageAttachment{
@@ -178,9 +212,13 @@ func (bc *BotController) handleImageDocument(c telebot.Context, doc *telebot.Doc
 		}
 	}
 
-	img, err := encodeImageAttachment(filePath, mimeType)
+	img, err := encodeImageAttachment(filePath, mimeType, bc.maxImageBytes())
 	if err != nil {
 		log.Printf("Failed to encode image document: %v", err)
+		var tooLarge imageTooLargeError
+		if errors.As(err, &tooLarge) {
+			return SendContextText(c, tooLarge.UserMessage())
+		}
 		return bc.processInput(c, text)
 	}
 
@@ -269,8 +307,9 @@ func (bc *BotController) flushAlbumAndProcess(albumID string) {
 	}
 
 	var (
-		images     []bridge.ImageAttachment
-		downloaded []string
+		images      []bridge.ImageAttachment
+		downloaded  []string
+		tooLargeMsg string
 	)
 	defer func() { removeAll(downloaded) }()
 	for _, p := range fa.photos {
@@ -280,14 +319,22 @@ func (bc *BotController) flushAlbumAndProcess(albumID string) {
 			continue
 		}
 		downloaded = append(downloaded, filePath)
-		img, err := encodeImageAttachment(filePath, "image/jpeg")
+		img, err := encodeImageAttachment(filePath, "image/jpeg", bc.maxImageBytes())
 		if err != nil {
 			log.Printf("Failed to encode photo: %v", err)
+			var tooLarge imageTooLargeError
+			if errors.As(err, &tooLarge) && tooLargeMsg == "" {
+				tooLargeMsg = tooLarge.UserMessage()
+			}
 			continue
 		}
 		images = append(images, img)
 	}
 
+	if len(images) == 0 && tooLargeMsg != "" {
+		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, tooLargeMsg, fa.threadID)
+		return
+	}
 	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images); err != nil {
 		log.Printf("album: pipeline error for %s: %v", albumID, err)
 	}
@@ -319,11 +366,11 @@ func (ab *albumBuffer) store(albumID string, messageID int, caption string, phot
 
 // flushedAlbum holds all data extracted from a pending album after flush.
 type flushedAlbum struct {
-	caption string
-	photos  []albumPhoto
-	chatID  int64
-	threadID int
-	senderID int64
+	caption   string
+	photos    []albumPhoto
+	chatID    int64
+	threadID  int
+	senderID  int64
 	messageID int
 }
 

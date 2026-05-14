@@ -14,35 +14,24 @@ import {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-interface MCPServerConfig {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  type?: string;
-  url?: string;
-  id?: string;
-}
-
 interface ImageAttachment {
   path?: string;
   data?: string;
   media_type?: string;
 }
 
+// Mirrors RequestOptions in internal/bridge/protocol.go. The legacy Claude SDK
+// fields (max_turns, permission_mode, mcp_servers, agents, disabled_tools)
+// have no analogue in the PI SDK and were dropped.
 interface RequestOptions {
   provider?: string;
   model?: string;
   cwd?: string;
   system_prompt?: string;
   resume?: string;
-  max_turns?: number;
-  permission_mode?: string;
-  mcp_servers?: Record<string, MCPServerConfig>;
   allowed_tools?: string[];
   continue?: boolean;
-  agents?: Record<string, unknown>;
   no_user_settings?: boolean;
-  disabled_tools?: string[];
   persist_session?: boolean;
   images?: ImageAttachment[];
 }
@@ -65,8 +54,23 @@ interface SessionLookup {
   file?: string;
 }
 
+// Bounded LRU-ish cache of session id → session file. The bridge is long-lived
+// in daemon mode, so an unbounded map would grow over time. Insertion-ordered
+// Map iteration lets us evict the oldest entry once we hit the cap.
+const MAX_SESSION_CACHE = 256;
 const sessionByID = new Map<string, SessionLookup>();
 let lastSessionID = "";
+
+function rememberSession(id: string, lookup: SessionLookup): void {
+  // Touch on update so re-resumed sessions stay warm.
+  if (sessionByID.has(id)) sessionByID.delete(id);
+  sessionByID.set(id, lookup);
+  while (sessionByID.size > MAX_SESSION_CACHE) {
+    const oldest = sessionByID.keys().next().value;
+    if (oldest === undefined) break;
+    sessionByID.delete(oldest);
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -125,13 +129,7 @@ function translateToolName(name: string): string {
 
 function translateAllowedTools(tools: string[] | undefined): string[] | undefined {
   if (!tools || tools.length === 0) return undefined;
-  const mapped = [...new Set(tools.map(translateToolName))];
-  // Always include web_search so the model can search the web
-  // regardless of the agent's allowed_tools config
-  if (!mapped.includes("web_search")) {
-    mapped.push("web_search");
-  }
-  return mapped;
+  return [...new Set(tools.map(translateToolName))];
 }
 
 function textFromContent(content: unknown): string {
@@ -280,12 +278,14 @@ async function handleQuery(req: Request): Promise<void> {
   }, timeoutMs);
 
   let turnCount = 0;
+  let session: Awaited<ReturnType<typeof createPiSession>>["session"] | undefined;
+  const startedAt = Date.now();
 
   try {
-    const { session } = await createPiSession(opts);
+    ({ session } = await createPiSession(opts));
     const sessionID = session.sessionId;
     lastSessionID = sessionID;
-    sessionByID.set(sessionID, { id: sessionID, file: session.sessionFile });
+    rememberSession(sessionID, { id: sessionID, file: session.sessionFile });
 
     emitReq({
       event: "system",
@@ -332,20 +332,19 @@ async function handleQuery(req: Request): Promise<void> {
       const images = opts?.images;
       if (images && images.length > 0) {
         // Build content blocks: text + image blocks
+        // Images use the PI AI SDK's ImageContent format:
+        // { type: "image", data: "<base64>", mimeType: "<mime>" }
         const contentBlocks: Record<string, unknown>[] = [
           { type: "text", text: req.prompt },
         ];
         for (const img of images) {
           contentBlocks.push({
             type: "image",
-            source: {
-              type: "base64",
-              media_type: img.media_type,
-              data: img.data,
-            },
+            data: img.data,
+            mimeType: img.media_type,
           });
         }
-        await session.sendUserMessage(contentBlocks, { deliverAs: "nextTurn" });
+        await session.sendUserMessage(contentBlocks);
       } else {
         await session.prompt(req.prompt, { source: "rpc" });
       }
@@ -360,19 +359,24 @@ async function handleQuery(req: Request): Promise<void> {
       content,
       cost_usd: stats.cost,
       session_id: sessionID,
-      duration_ms: 0,
+      duration_ms: Date.now() - startedAt,
       num_turns: turnCount || stats.assistantMessages,
       input_tokens: stats.tokens.input,
       output_tokens: stats.tokens.output,
     });
-
-    session.dispose();
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`query error: rid=${reqId} ${errMsg}`);
     emitReq({ event: "error", message: errMsg });
   } finally {
     clearTimeout(timeout);
+    if (session) {
+      try {
+        session.dispose();
+      } catch (disposeErr) {
+        log(`session dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+      }
+    }
   }
 }
 

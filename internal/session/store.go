@@ -22,6 +22,7 @@ type Store struct {
 	mu       sync.RWMutex
 	sessions map[SessionKey]*entry
 	cwds     map[SessionKey]string
+	cwdSeen  map[SessionKey]time.Time
 }
 
 type entry struct {
@@ -35,6 +36,7 @@ func NewStore() *Store {
 	return &Store{
 		sessions: make(map[SessionKey]*entry),
 		cwds:     make(map[SessionKey]string),
+		cwdSeen:  make(map[SessionKey]time.Time),
 	}
 }
 
@@ -44,24 +46,26 @@ func SessionKeyFor(chatID int64, threadID int) SessionKey {
 }
 
 func (s *Store) Get(chatID int64, threadID int) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	key := SessionKeyFor(chatID, threadID)
 	e := s.sessions[key]
 	if e == nil {
 		return ""
 	}
+	e.lastSeen = time.Now()
 	return e.sessionID
 }
 
 func (s *Store) GetWithState(chatID int64, threadID int) (sessionID string, active bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	key := SessionKeyFor(chatID, threadID)
 	e := s.sessions[key]
 	if e == nil {
 		return "", false
 	}
+	e.lastSeen = time.Now()
 	return e.sessionID, e.active
 }
 
@@ -79,6 +83,7 @@ func (s *Store) Clear(chatID int64, threadID int) {
 	key := SessionKeyFor(chatID, threadID)
 	delete(s.sessions, key)
 	delete(s.cwds, key)
+	delete(s.cwdSeen, key)
 }
 
 // ClearAll removes all sessions and cwds for a chat (all threads).
@@ -88,7 +93,12 @@ func (s *Store) ClearAll(chatID int64) {
 	for key := range s.sessions {
 		if key.ChatID == chatID {
 			delete(s.sessions, key)
+		}
+	}
+	for key := range s.cwds {
+		if key.ChatID == chatID {
 			delete(s.cwds, key)
+			delete(s.cwdSeen, key)
 		}
 	}
 }
@@ -113,22 +123,36 @@ func (s *Store) GC(maxAge time.Duration) {
 		if e.lastSeen.Before(cutoff) {
 			delete(s.sessions, key)
 			delete(s.cwds, key)
+			delete(s.cwdSeen, key)
+		}
+	}
+	for key, seen := range s.cwdSeen {
+		if seen.Before(cutoff) {
+			delete(s.cwds, key)
+			delete(s.cwdSeen, key)
+		}
+	}
+	for key := range s.cwds {
+		if _, ok := s.cwdSeen[key]; !ok {
+			delete(s.cwds, key)
 		}
 	}
 }
 
 func (s *Store) GetCwd(chatID int64, threadID int) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Try thread-specific cwd first
 	key := SessionKeyFor(chatID, threadID)
 	if cwd, ok := s.cwds[key]; ok {
+		s.cwdSeen[key] = time.Now()
 		return cwd
 	}
 	// Fall back to general topic (thread=0) cwd
 	if threadID != 0 {
 		generalKey := SessionKeyFor(chatID, 0)
 		if cwd, ok := s.cwds[generalKey]; ok {
+			s.cwdSeen[generalKey] = time.Now()
 			return cwd
 		}
 	}
@@ -140,4 +164,5 @@ func (s *Store) SetCwd(chatID int64, threadID int, cwd string) {
 	defer s.mu.Unlock()
 	key := SessionKeyFor(chatID, threadID)
 	s.cwds[key] = cwd
+	s.cwdSeen[key] = time.Now()
 }

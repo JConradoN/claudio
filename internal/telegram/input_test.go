@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,6 +63,27 @@ func TestStoreAndFlushAlbumPhotos(t *testing.T) {
 	}
 	if _, ok := ab.flush("album-1"); ok {
 		t.Fatal("expected album to be removed after flush")
+	}
+}
+
+func TestEncodeImageAttachment_RejectsOversizeImage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "big.jpg")
+	if err := os.WriteFile(path, []byte("12345"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := encodeImageAttachment(path, "image/jpeg", 4)
+	if err == nil {
+		t.Fatal("expected oversize image error")
+	}
+	var tooLarge imageTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("expected imageTooLargeError, got %T", err)
+	}
+	if tooLarge.limit != 4 || tooLarge.size != 5 {
+		t.Fatalf("unexpected size/limit: %+v", tooLarge)
 	}
 }
 

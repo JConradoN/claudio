@@ -224,12 +224,17 @@ func (bc *BotController) loadMemoryContents(chatID int64, threadID int, agent *a
 	var total int
 
 	appendLayer := func(header, content string) {
-		if content == "" {
+		if content == "" || total >= maxMemoryTotalChars {
 			return
 		}
-		if total > 0 && total+len(header)+len(content) > maxMemoryTotalChars {
+		remaining := maxMemoryTotalChars - total - len(header)
+		if remaining <= 0 {
 			log.Printf("memory: skipped layer (%d chars total, max %d)", total, maxMemoryTotalChars)
 			return
+		}
+		if len(content) > remaining {
+			content = truncateToBudget(content, remaining)
+			log.Printf("memory: truncated layer to fit total budget (%d chars max)", maxMemoryTotalChars)
 		}
 		sb.WriteString(header)
 		sb.WriteString(content)
@@ -317,6 +322,20 @@ func truncateContent(content, filename string) string {
 	}
 	log.Printf("memory: truncated %s (%d chars, max %d)", filename, len(content), maxMemoryFileChars)
 	return content[:maxMemoryFileChars] + "\n\n[...truncado, ver arquivo completo via Read tool]"
+}
+
+func truncateToBudget(content string, budget int) string {
+	if len(content) <= budget {
+		return content
+	}
+	if budget <= 0 {
+		return ""
+	}
+	notice := "\n\n[...memória truncada por limite total]"
+	if budget <= len(notice) {
+		return content[:budget]
+	}
+	return content[:budget-len(notice)] + notice
 }
 
 // buildProjectDocsSection reads CLAUDE.md and AGENTS.md from the active cwd.

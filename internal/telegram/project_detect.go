@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // skipDirs contains directory names to skip during disk scan.
@@ -69,7 +70,7 @@ func extractFrontmatterField(content string, field string) string {
 
 // scanForProject walks home + mounted volumes looking for a directory
 // whose name fuzzy-matches a word from the user's message.
-func scanForProject(text string) string {
+func scanForProject(ctx context.Context, text string) string {
 	var candidates []string
 	for _, word := range strings.Fields(strings.ToLower(text)) {
 		clean := strings.Trim(word, ".,!?;:()\"'/")
@@ -102,10 +103,16 @@ func scanForProject(text string) string {
 	const maxDepth = 4
 
 	for _, root := range roots {
+		if ctx.Err() != nil {
+			return ""
+		}
 		rootDepth := strings.Count(root, string(filepath.Separator))
 		var result string
 
 		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return filepath.SkipAll
+			}
 			if err != nil || !d.IsDir() {
 				if err != nil && d != nil && d.IsDir() {
 					return filepath.SkipDir
@@ -184,19 +191,24 @@ func (bc *BotController) detectProjectPath(ctx context.Context, text string) str
 
 	// 3. Check project index (fast, cached)
 	if bc.projectIndex != nil {
+		indexMiss := false
 		for _, word := range strings.Fields(text) {
 			clean := strings.Trim(strings.ToLower(word), ".,!?;:()\"'/'")
 			if len(clean) >= 3 && !isStopWord(clean) && looksLikeProjectName(clean) {
+				indexMiss = true
 				if path := bc.projectIndex.Lookup(clean); path != "" {
 					return path
 				}
 			}
 		}
+		if indexMiss {
+			bc.projectIndex.ScheduleRebuild(30 * time.Minute)
+		}
 	}
 
 	// 4. Scan disk for directory name match (fallback)
 	if ctx.Err() == nil {
-		if found := scanForProject(text); found != "" {
+		if found := scanForProject(ctx, text); found != "" {
 			return found
 		}
 	}

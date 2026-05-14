@@ -130,8 +130,10 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		// Determine agent cwd if an agent is active
 		agentCwd := ""
 		text := c.Message().Text
-		if agent := bc.agents.Route(text); agent != nil && agent.Cwd != "" {
-			agentCwd = agent.Cwd
+		if bc.agents != nil {
+			if agent := bc.agents.Route(text); agent != nil && agent.Cwd != "" {
+				agentCwd = agent.Cwd
+			}
 		}
 
 		var b strings.Builder

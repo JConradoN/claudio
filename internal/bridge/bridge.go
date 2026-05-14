@@ -33,10 +33,10 @@ type Bridge struct {
 	command string
 	args    []string
 
-	mu      sync.Mutex // guards stdin writes and process lifecycle
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	reader  *bufio.Reader
+	mu     sync.Mutex // guards stdin writes and process lifecycle
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	reader *bufio.Reader
 
 	// pending maps request_id → channel for routing events.
 	pending   map[string]chan Event
@@ -152,12 +152,16 @@ func (b *Bridge) readLoop() {
 				b.pendingMu.Unlock()
 
 				if ok {
-					// Non-blocking send — channel has buffer.
-					select {
-					case ch <- ev:
-					default:
-						b.droppedEvents.Add(1)
-						slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
+					if ev.IsTerminal() {
+						b.sendTerminalEvent(ch, ev, rid)
+					} else {
+						// Non-blocking send — channel has buffer.
+						select {
+						case ch <- ev:
+						default:
+							b.droppedEvents.Add(1)
+							slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
+						}
 					}
 
 					if ev.IsTerminal() {
@@ -199,6 +203,29 @@ func (b *Bridge) readLoop() {
 	b.started = false
 	b.cmd = nil
 	b.mu.Unlock()
+}
+
+func (b *Bridge) sendTerminalEvent(ch chan Event, ev Event, rid string) {
+	select {
+	case ch <- ev:
+		return
+	default:
+	}
+
+	// Preserve terminal delivery by evicting one buffered non-terminal event
+	// instead of dropping result/error and making the consumer think the bridge died.
+	select {
+	case <-ch:
+		b.droppedEvents.Add(1)
+		slog.Warn("bridge: dropped buffered event to deliver terminal", "type", ev.Type, "rid", rid)
+	default:
+	}
+	select {
+	case ch <- ev:
+	default:
+		b.droppedEvents.Add(1)
+		slog.Error("bridge: terminal event could not be delivered", "type", ev.Type, "rid", rid)
+	}
 }
 
 // Stop kills the bridge process. Safe to call multiple times.

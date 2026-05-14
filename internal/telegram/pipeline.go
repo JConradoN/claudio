@@ -114,12 +114,12 @@ func (bc *BotController) runPipeline(chatID int64, threadID int, messageID int, 
 // routeAgent resolves which agent should handle the message, first by @name
 // prefix, then by LLM classification if agents are configured.
 func (bc *BotController) routeAgent(text string) *agents.Agent {
+	if bc.agents == nil {
+		return nil
+	}
 	agent := bc.agents.Route(text)
 	if agent != nil {
 		return agent
-	}
-	if bc.agents == nil {
-		return nil
 	}
 	classifyCtx, classifyCancel := context.WithTimeout(context.Background(), classifyTimeout)
 	defer classifyCancel()

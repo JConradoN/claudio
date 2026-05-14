@@ -7,22 +7,22 @@ import (
 // EditableConfig represents the user-editable portion of the runtime config.
 // Keeps flat per-provider fields for backward compatibility with onboarding UI.
 type EditableConfig struct {
-	LLMProvider            string
-	LLMModel               string
-	STTProvider            string
+	LLMProvider             string
+	LLMModel                string
+	STTProvider             string
 	TelegramBotToken        string
 	TelegramAllowedUserIDs  []int64
 	TelegramAllowedGroupIDs []int64
-	AnthropicAPIKey        string
-	GoogleAPIKey           string
-	KiloAPIKey             string
-	KimiAPIKey             string
-	OpenRouterAPIKey       string
-	ZAIAPIKey              string
-	AlibabaAPIKey          string
-	AnthropicAuthMode      string
-	GroqAPIKey             string
-	MaxIterations          int
+	AnthropicAPIKey         string
+	GoogleAPIKey            string
+	KiloAPIKey              string
+	KimiAPIKey              string
+	OpenRouterAPIKey        string
+	ZAIAPIKey               string
+	AlibabaAPIKey           string
+	AnthropicAuthMode       string
+	GroqAPIKey              string
+	MaxIterations           int
 
 	VisionModel    string
 	VisionProvider string
@@ -99,24 +99,24 @@ func appConfigToEditable(cfg *AppConfig) *EditableConfig {
 		anthropicAuthMode = "api_key"
 	}
 	return &EditableConfig{
-		LLMProvider:            cfg.DefaultProvider,
-		LLMModel:               cfg.DefaultModel,
-		STTProvider:            cfg.STTProvider,
+		LLMProvider:             cfg.DefaultProvider,
+		LLMModel:                cfg.DefaultModel,
+		STTProvider:             cfg.STTProvider,
 		TelegramBotToken:        cfg.TelegramBotToken,
 		TelegramAllowedUserIDs:  append([]int64(nil), cfg.TelegramAllowedUserIDs...),
 		TelegramAllowedGroupIDs: append([]int64(nil), cfg.TelegramAllowedGroupIDs...),
-		AnthropicAuthMode:      anthropicAuthMode,
-		AnthropicAPIKey:        cfg.ProviderAPIKey("anthropic"),
-		GoogleAPIKey:           cfg.ProviderAPIKey("google"),
-		KiloAPIKey:             cfg.ProviderAPIKey("kilo"),
-		KimiAPIKey:             cfg.ProviderAPIKey("kimi"),
-		OpenRouterAPIKey:       cfg.ProviderAPIKey("openrouter"),
-		ZAIAPIKey:              cfg.ProviderAPIKey("zai"),
-		AlibabaAPIKey:          cfg.ProviderAPIKey("alibaba"),
-		GroqAPIKey:             cfg.ProviderAPIKey("groq"),
-		MaxIterations:          cfg.MaxIterations,
-		VisionModel:            cfg.VisionModel,
-		VisionProvider:         cfg.VisionProvider,
+		AnthropicAuthMode:       anthropicAuthMode,
+		AnthropicAPIKey:         cfg.ProviderAPIKey("anthropic"),
+		GoogleAPIKey:            cfg.ProviderAPIKey("google"),
+		KiloAPIKey:              cfg.ProviderAPIKey("kilo"),
+		KimiAPIKey:              cfg.ProviderAPIKey("kimi"),
+		OpenRouterAPIKey:        cfg.ProviderAPIKey("openrouter"),
+		ZAIAPIKey:               cfg.ProviderAPIKey("zai"),
+		AlibabaAPIKey:           cfg.ProviderAPIKey("alibaba"),
+		GroqAPIKey:              cfg.ProviderAPIKey("groq"),
+		MaxIterations:           cfg.MaxIterations,
+		VisionModel:             cfg.VisionModel,
+		VisionProvider:          cfg.VisionProvider,
 	}
 }
 
@@ -152,16 +152,16 @@ func editableToFileConfig(editable EditableConfig) fileConfig {
 	maybeSet("groq", editable.GroqAPIKey)
 
 	return fileConfig{
-		DefaultProvider:        editable.LLMProvider,
-		DefaultModel:           editable.LLMModel,
-		Providers:              providers,
-		STTProvider:            editable.STTProvider,
+		DefaultProvider:         editable.LLMProvider,
+		DefaultModel:            editable.LLMModel,
+		Providers:               providers,
+		STTProvider:             editable.STTProvider,
 		TelegramBotToken:        editable.TelegramBotToken,
 		TelegramAllowedUserIDs:  append([]int64(nil), editable.TelegramAllowedUserIDs...),
 		TelegramAllowedGroupIDs: append([]int64(nil), editable.TelegramAllowedGroupIDs...),
-		MaxIterations:          editable.MaxIterations,
-		VisionModel:            editable.VisionModel,
-		VisionProvider:         editable.VisionProvider,
+		MaxIterations:           editable.MaxIterations,
+		VisionModel:             editable.VisionModel,
+		VisionProvider:          editable.VisionProvider,
 	}
 }
 
@@ -171,6 +171,9 @@ func sameFileConfig(a, b fileConfig) bool {
 		a.DefaultModel != b.DefaultModel ||
 		a.STTProvider != b.STTProvider ||
 		a.MaxIterations != b.MaxIterations ||
+		a.MaxSessionTokens != b.MaxSessionTokens ||
+		a.MaxImageBytes != b.MaxImageBytes ||
+		a.SessionTTLHours != b.SessionTTLHours ||
 		a.DBPath != b.DBPath ||
 		a.MCPConfigPath != b.MCPConfigPath ||
 		a.VisionModel != b.VisionModel ||

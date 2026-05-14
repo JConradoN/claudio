@@ -31,6 +31,7 @@ type app struct {
 	agents     *agents.Registry
 	cronStore  *cron.SQLiteCronStore
 	bot        *telegram.BotController
+	sessions   *session.Store
 	scheduler  *cron.Scheduler
 	cronCtx    context.Context
 	cronCancel context.CancelFunc
@@ -212,6 +213,7 @@ func bootstrapApp() (*app, error) {
 		agents:     agentReg,
 		cronStore:  cronStore,
 		bot:        bot,
+		sessions:   sessions,
 		scheduler:  scheduler,
 		cronCtx:    cronCtx,
 		cronCancel: cronCancel,
@@ -323,7 +325,31 @@ func (a *app) start() {
 			}
 		}()
 	}
+	a.startSessionGC()
 	go a.bot.Start()
+}
+
+func (a *app) startSessionGC() {
+	if a.sessions == nil || a.config == nil {
+		return
+	}
+	ttlHours := a.config.SessionTTLHours
+	if ttlHours <= 0 {
+		ttlHours = 168
+	}
+	maxAge := time.Duration(ttlHours) * time.Hour
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-a.cronCtx.Done():
+				return
+			case <-ticker.C:
+				a.sessions.GC(maxAge)
+			}
+		}
+	}()
 }
 
 func (a *app) shutdown(ctx context.Context) {

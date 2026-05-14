@@ -13,8 +13,12 @@ const bridgePackageJSON = `{
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=node --target=node18 --outfile=bundle.js --format=esm --banner:js=\"import { createRequire as __piCreateRequire } from 'module';const require = __piCreateRequire(import.meta.url);\""
+  },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "latest"
+    "@earendil-works/pi-coding-agent": "latest",
+    "esbuild": "^0.28.0"
   }
 }
 `
@@ -55,6 +59,14 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return "", fmt.Errorf("create bridge dir: %w", err)
+	}
+
+	buildingFromSource := !bundleExists && len(bundleJS) == 0
+	if buildingFromSource {
+		if err := writeBridgeSource(targetDir); err != nil {
+			return "", err
+		}
+		needsNpmInstall = true
 	}
 
 	// Write package.json and npm install first (needed for both embedded and TS build paths).
@@ -102,4 +114,15 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 
 	slog.Info("Bridge setup complete.")
 	return targetDir, nil
+}
+
+func writeBridgeSource(targetDir string) error {
+	if len(EmbeddedBridgeTS) == 0 {
+		return fmt.Errorf("bridge source is not embedded")
+	}
+	indexPath := filepath.Join(targetDir, "index.ts")
+	if err := os.WriteFile(indexPath, EmbeddedBridgeTS, 0600); err != nil {
+		return fmt.Errorf("write index.ts: %w", err)
+	}
+	return nil
 }

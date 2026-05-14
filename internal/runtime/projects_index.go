@@ -16,11 +16,13 @@ import (
 // filesystem on every message. Results are persisted to disk and rebuilt
 // periodically in the background.
 type ProjectIndex struct {
-	mu         sync.RWMutex
-	projects   map[string]string // project name → absolute path
-	lastBuilt  time.Time
-	jsonPath   string // path to persistent cache file
-	roots      []string
+	mu                 sync.RWMutex
+	projects           map[string]string // project name → absolute path
+	lastBuilt          time.Time
+	lastRebuildAttempt time.Time
+	rebuilding         bool
+	jsonPath           string // path to persistent cache file
+	roots              []string
 }
 
 // NewProjectIndex creates an index that scans the given roots and persists
@@ -45,6 +47,32 @@ func (p *ProjectIndex) Lookup(name string) string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.projects[strings.ToLower(name)]
+}
+
+// ScheduleRebuild starts a background rebuild unless another rebuild is
+// already running or the debounce interval has not elapsed.
+func (p *ProjectIndex) ScheduleRebuild(debounce time.Duration) bool {
+	p.mu.Lock()
+	now := time.Now()
+	if p.rebuilding || (!p.lastRebuildAttempt.IsZero() && now.Sub(p.lastRebuildAttempt) < debounce) {
+		p.mu.Unlock()
+		return false
+	}
+	p.rebuilding = true
+	p.lastRebuildAttempt = now
+	p.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if err := p.Rebuild(ctx); err != nil {
+			log.Printf("project index: scheduled rebuild error: %v", err)
+		}
+		p.mu.Lock()
+		p.rebuilding = false
+		p.mu.Unlock()
+	}()
+	return true
 }
 
 // Rebuild scans roots and rebuilds the index. Safe to call concurrently.
