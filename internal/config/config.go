@@ -91,6 +91,11 @@ func (c *AppConfig) VisionFallback() (model, provider string) {
 	return c.VisionModel, c.VisionProvider
 }
 
+// Editable returns a mutable copy of the user-editable configuration subset.
+func (c *AppConfig) Editable() *EditableConfig {
+	return appConfigToEditable(c)
+}
+
 // ProviderAPIKey returns the API key for the given provider, or empty string.
 func (c *AppConfig) ProviderAPIKey(provider string) string {
 	p, ok := c.Providers[NormalizeProvider(provider)]

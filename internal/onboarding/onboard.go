@@ -1,4 +1,4 @@
-package main
+package onboarding
 
 import (
 	"bufio"
@@ -86,7 +86,7 @@ const (
 
 var llmModelCatalog = listModels
 
-func runOnboard(stdin io.Reader, stdout io.Writer) error {
+func RunOnboard(stdin io.Reader, stdout io.Writer) error {
 	resolver, err := runtime.New()
 	if err != nil {
 		return fmt.Errorf("resolve instance root: %w", err)
@@ -95,24 +95,18 @@ func runOnboard(stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("bootstrap instance directory: %w", err)
 	}
 
-	current, err := config.LoadEditable(resolver)
+	editable, err := config.LoadEditable(resolver)
 	if err != nil {
-		return fmt.Errorf("load editable config: %w", err)
+		return fmt.Errorf("carregar configuracao: %w", err)
 	}
 
-	inFile, inOK := stdin.(*os.File)
-	outFile, outOK := stdout.(*os.File)
-	if inOK && outOK && term.IsTerminal(int(inFile.Fd())) && term.IsTerminal(int(outFile.Fd())) {
-		if err := runOnboardTUI(inFile, outFile, resolver, current); err != nil {
-			return err
-		}
-		return nil
+	if term, ok := stdout.(*os.File); ok && termFd(term) != -1 {
+		return runOnboardTUI(os.Stdin, term, resolver, editable)
 	}
-
-	return runOnboardPrompt(stdin, stdout, resolver, current)
+	return RunOnboardPrompt(stdin, stdout, resolver, editable)
 }
 
-func runOnboardPrompt(stdin io.Reader, stdout io.Writer, resolver *runtime.PathResolver, current *config.EditableConfig) error {
+func RunOnboardPrompt(stdin io.Reader, stdout io.Writer, resolver *runtime.PathResolver, current *config.EditableConfig) error {
 	reader := bufio.NewReader(stdin)
 
 	if err := writeString(stdout, renderOnboardingHeader()); err != nil {
@@ -268,4 +262,12 @@ func newOnboardingUI(cfg config.EditableConfig) *onboardingUI {
 		step:            stepDependencies,
 		reviewOptions:   []string{"Save config", "Back", "Cancel"},
 	}
+}
+
+// termFd returns the file descriptor of a terminal, or -1 if not a terminal.
+func termFd(f *os.File) int {
+	if stat, err := f.Stat(); err == nil && (stat.Mode()&os.ModeCharDevice) != 0 {
+		return int(f.Fd())
+	}
+	return -1
 }

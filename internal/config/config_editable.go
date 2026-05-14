@@ -28,6 +28,11 @@ type EditableConfig struct {
 	VisionProvider string
 }
 
+// Onboarded returns true if the config appears to be fully set up for use.
+func (c EditableConfig) Onboarded() bool {
+	return c.TelegramBotToken != "" && len(c.TelegramAllowedUserIDs) > 0 && c.LLMProvider != ""
+}
+
 func (c EditableConfig) LLMAPIKey(provider string) string {
 	switch NormalizeProvider(provider) {
 	case "anthropic":

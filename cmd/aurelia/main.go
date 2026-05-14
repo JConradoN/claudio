@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/igormaneschy/aurelia/internal/onboarding"
 	"github.com/igormaneschy/aurelia/internal/version"
 )
 
@@ -44,7 +45,7 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "onboard":
-			if err := runOnboard(os.Stdin, os.Stdout); err != nil {
+			if err := onboarding.RunOnboard(os.Stdin, os.Stdout); err != nil {
 				log.Fatalf("Failed to run onboarding: %v", err)
 			}
 			return

@@ -1,4 +1,4 @@
-package main
+package onboarding
 
 import (
 	"bufio"
@@ -27,8 +27,8 @@ func TestRunOnboard_SavesInteractiveConfig(t *testing.T) {
 	}, "\n")
 
 	var out bytes.Buffer
-	if err := runOnboard(strings.NewReader(input), &out); err != nil {
-		t.Fatalf("runOnboard() error = %v", err)
+	if err := RunOnboard(strings.NewReader(input), &out); err != nil {
+		t.Fatalf("RunOnboard() error = %v", err)
 	}
 
 	resolver, err := runtime.New()
@@ -100,8 +100,8 @@ func TestRunOnboard_PreservesExistingValuesOnBlankInput(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runOnboard(strings.NewReader("\n\n\n\n\n\n\n\n"), &out); err != nil {
-		t.Fatalf("runOnboard() error = %v", err)
+	if err := RunOnboard(strings.NewReader("\n\n\n\n\n\n\n\n"), &out); err != nil {
+		t.Fatalf("RunOnboard() error = %v", err)
 	}
 
 	cfg, err := config.Load(resolver)

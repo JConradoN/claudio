@@ -2,15 +2,28 @@ package dream
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
+
+//go:embed prompts/nudge_global.tmpl prompts/nudge_project.tmpl
+var nudgeTemplateFS embed.FS
+
+// nudgeTemplateData holds the data for rendering nudge prompt templates.
+type nudgeTemplateData struct {
+	GlobalDir  string
+	TopicDir   string
+	ProjectDir string
+	TeamDir    string
+}
 
 // AfterTurnNudge checks if enough turns have accumulated to trigger a nudge review.
 // It runs in background without blocking the chat.
@@ -122,86 +135,34 @@ func (d *Dreamer) buildNudgePrompt(cwd string, chatID int64, threadID int) strin
 	globalDir := d.memoryDir
 	topicDir := ""
 	if threadID > 0 {
-		// Mirrors topicMemoryDir() in internal/telegram: keep chat scope so
-		// two groups with the same Telegram thread id don't share memory.
 		topicDir = filepath.Join(globalDir, "topics", fmt.Sprintf("chat_%d", chatID), fmt.Sprintf("thread_%d", threadID))
 	}
 
-	// When no project context, use global-only prompt
+	data := nudgeTemplateData{
+		GlobalDir: globalDir,
+		TopicDir:  topicDir,
+	}
+
+	// When no project context, use global-only template
 	if cwd == "" || d.resolver == nil {
-		saveDirs := "SAVE DIRECTORY: " + globalDir
-		if topicDir != "" {
-			saveDirs = "SAVE DIRECTORIES:\n- GLOBAL (" + globalDir + ") — personal facts, preferences, language, hobbies\n- TOPIC (" + topicDir + ") — facts specific to this forum topic"
+		tmpl := template.Must(template.New("nudge_global").ParseFS(nudgeTemplateFS, "prompts/nudge_global.tmpl"))
+		var buf strings.Builder
+		if err := tmpl.ExecuteTemplate(&buf, "nudge_global.tmpl", data); err != nil {
+			log.Printf("[nudge] template error: %v", err)
+			return ""
 		}
-		return fmt.Sprintf(`You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
-
-%s
-
-## What to save (extract ALL of these)
-- What topics were discussed (always save this)
-- What the user asked for or wanted to do
-- Facts about the user (name, role, preferences, habits)
-- Decisions made or opinions expressed
-- Work completed, plans mentioned, next steps
-- Problems encountered and how they were solved
-
-## How to save — follow these steps exactly
-1. Use the Write tool to create or update a .md file in the save directory. Example: Write to `+globalDir+`/conversation_log.md
-2. Each file should have a clear topic name
-3. Write one fact per line, prefixed with "- "
-4. After saving files, update MEMORY.md with one index line per file: "- [Title](filename.md) — short description"
-
-## Format example for a memory file
-`+"```"+`
-- User asked to list projects in D:/projetos
-- User wants to pick a project to work on tomorrow
-- User prefers casual conversation style (pt-BR)
-`+"```"+`
-
-## Rules
-- You MUST use the Write tool — do not just describe what you would save
-- Do NOT touch anything in personas/ subdirectory
-- Do NOT copy full conversation text — only extract facts
-- If a file already exists with the same topic, READ it first then append new facts`, saveDirs)
+		return buf.String()
 	}
 
-	projectDir := d.resolver.ProjectMemoryDir(cwd)
-	teamDir := d.resolver.ProjectTeamMemoryDir(cwd)
+	// Project context
+	data.ProjectDir = d.resolver.ProjectMemoryDir(cwd)
+	data.TeamDir = d.resolver.ProjectTeamMemoryDir(cwd)
 
-	saveDirs := fmt.Sprintf("- GLOBAL (%s) — personal facts, preferences, language, hobbies\n- PROJECT (%s) — work log, task state, personal decisions for this project\n- TEAM (%s) — stack, conventions, architecture, bugs (useful for any team member)", globalDir, projectDir, teamDir)
-	if topicDir != "" {
-		saveDirs += fmt.Sprintf("\n- TOPIC (%s) — facts specific to this forum topic", topicDir)
+	tmpl := template.Must(template.New("nudge_project").ParseFS(nudgeTemplateFS, "prompts/nudge_project.tmpl"))
+	var buf strings.Builder
+	if err := tmpl.ExecuteTemplate(&buf, "nudge_project.tmpl", data); err != nil {
+		log.Printf("[nudge] template error: %v", err)
+		return ""
 	}
-
-	return fmt.Sprintf(`You are a memory-saving bot. Your ONLY job is to save facts from conversations using the Write tool.
-
-## Save directories (use the correct one for each fact)
-%s
-
-## What to save (extract ALL of these)
-- What topics were discussed (always save this)
-- What the user asked for or wanted to do
-- Facts about the user (name, role, preferences, habits)
-- Decisions made or opinions expressed
-- Work completed, plans mentioned, next steps
-- Problems encountered and how they were solved
-
-## How to save — follow these steps exactly
-1. Use the Write tool to create or update a .md file in the correct directory
-2. Each file should have a clear topic name
-3. Write one fact per line, prefixed with "- "
-4. After saving files, update MEMORY.md in each directory you wrote to
-
-## Format example for a memory file
-`+"```"+`
-- User asked to list projects in D:/projetos
-- User wants to pick a project to work on tomorrow
-- User prefers casual conversation style (pt-BR)
-`+"```"+`
-
-## Rules
-- You MUST use the Write tool — do not just describe what you would save
-- Do NOT touch anything in personas/ subdirectory
-- Do NOT copy full conversation text — only extract facts
-- If a file already exists with the same topic, READ it first then append new facts`, saveDirs)
+	return buf.String()
 }
