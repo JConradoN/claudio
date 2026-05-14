@@ -137,8 +137,6 @@ func (d *Dreamer) run() {
 			Model:          d.config.Model,
 			SystemPrompt:   consolidationPrompt,
 			Cwd:            d.memoryDir,
-			MaxTurns:       25,
-			PermissionMode: "bypassPermissions",
 			AllowedTools:   []string{"Read", "Glob", "Grep", "Write", "Edit", "Bash"},
 			NoUserSettings: true,
 			PersistSession: boolPtr(false),

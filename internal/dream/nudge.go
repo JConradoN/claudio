@@ -98,8 +98,6 @@ IMPORTANT: You MUST call the Write tool at least once. If the conversation has a
 			Model:          model,
 			SystemPrompt:   sysPrompt,
 			Cwd:            d.memoryDir,
-			MaxTurns:       15,
-			PermissionMode: "bypassPermissions",
 			AllowedTools:   []string{"Read", "Glob", "Grep", "Write", "Edit", "Bash"},
 			NoUserSettings: true,
 			PersistSession: boolPtr(false),

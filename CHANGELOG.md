@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.5.0] - 2026-05-14
+
+### Security
+- **BREAKING:** Group chats now require both the group ID in
+  `telegram_allowed_group_ids` AND the sender's user ID in
+  `telegram_allowed_user_ids`. Previously, any member of a whitelisted group
+  could interact with the bot regardless of the user allowlist. Existing
+  groups will need user IDs added to keep working.
+
+### Changed
+- Removed bridge options that have no analogue in the PI SDK:
+  `max_turns`, `permission_mode`, `mcp_servers`, `agents`, `disabled_tools`.
+  These were silently ignored since v0.4.0; removing them prevents confusion
+  in future development.
+- `allowed_tools` no longer auto-includes `web_search`. Agents that need
+  web search must list it explicitly in their markdown.
+
+### Fixed
+- Bridge no longer leaks PI sessions when `session.prompt()` throws
+- Bundle.js is now written atomically (temp + rename) to avoid corruption
+  during writes; startup fast-paths size check before reading 12 MB
+- `setupBridge` falls back to tsx when bundle.js exists but is truncated
+- Instance lock cleanup errors are logged instead of swallowed
+- Session ID slicing in logs is now bounds-checked (was unsafe for tests)
+- Bridge `duration_ms` reports real elapsed time (was hardcoded 0)
+
 ## [v0.4.2] - 2026-05-13
 
 ### Added

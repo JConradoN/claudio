@@ -86,9 +86,6 @@ func TestBridgeCronRuntime_ExecuteJob(t *testing.T) {
 	if executor.lastReq.Options.Model != "claude-sonnet-4-20250514" {
 		t.Fatalf("unexpected model: %q", executor.lastReq.Options.Model)
 	}
-	if executor.lastReq.Options.PermissionMode != "bypassPermissions" {
-		t.Fatalf("unexpected permission mode: %q", executor.lastReq.Options.PermissionMode)
-	}
 
 	// System prompt should contain persona + agent prompt
 	sp := executor.lastReq.Options.SystemPrompt

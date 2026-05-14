@@ -60,13 +60,12 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 	}
 	systemPrompt := basePrompt
 
-	// 2. Build request options — block Telegram plugin tools to prevent
-	// delivery via wrong bot. All other user MCPs/plugins remain available.
+	// 2. Build request options. The legacy Claude SDK supported per-tool
+	// disabling (used to block Telegram MCP plugins) and MCP server lists;
+	// neither is exposed by the PI SDK, so we no longer carry them through.
 	opts := bridge.RequestOptions{
-		Provider:       r.defaultProvider,
-		SystemPrompt:   systemPrompt,
-		PermissionMode: "bypassPermissions",
-		DisabledTools:  bridge.TelegramPluginTools,
+		Provider:     r.defaultProvider,
+		SystemPrompt: systemPrompt,
 	}
 
 	// 3. Apply agent config if available
@@ -77,7 +76,6 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 		opts.Model = agent.Model
 		opts.Cwd = agent.Cwd
 		opts.AllowedTools = agent.AllowedTools
-		opts.MCPServers = agent.MCPServers
 	}
 
 	// 4. Execute via Bridge

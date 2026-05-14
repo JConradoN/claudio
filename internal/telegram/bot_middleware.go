@@ -34,7 +34,10 @@ func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
 					return next(c)
 				}
 			case telebot.ChatGroup, telebot.ChatSuperGroup:
-				if bc.isAllowedGroup(chat.ID) {
+				// Require both: group on allowlist AND sender on user allowlist.
+				// Group-only check would let any group member talk to the bot,
+				// including users added after the group was whitelisted.
+				if sender != nil && bc.isAllowedGroup(chat.ID) && bc.isAllowedUser(sender.ID) {
 					return next(c)
 				}
 			}

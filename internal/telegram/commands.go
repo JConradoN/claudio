@@ -357,11 +357,9 @@ func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, 
 		Command: "query",
 		Prompt:  text,
 		Options: bridge.RequestOptions{
-			Provider:       bc.config.DefaultProvider,
-			Model:          bc.config.DefaultModel,
-			SystemPrompt:   cronParseSystemPrompt,
-			MaxTurns:       1,
-			PermissionMode: "bypassPermissions",
+			Provider:     bc.config.DefaultProvider,
+			Model:        bc.config.DefaultModel,
+			SystemPrompt: cronParseSystemPrompt,
 		},
 	})
 	if err != nil {

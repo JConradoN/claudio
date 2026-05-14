@@ -37,8 +37,6 @@ func (o *Orchestrator) Validate(
 		Prompt:  buildValidationUserPrompt(task, result),
 		Options: bridge.RequestOptions{
 			SystemPrompt:   validationPrompt,
-			MaxTurns:       1,
-			PermissionMode: "bypassPermissions",
 			NoUserSettings: true,
 		},
 	}

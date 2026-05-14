@@ -14,35 +14,24 @@ import {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-interface MCPServerConfig {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  type?: string;
-  url?: string;
-  id?: string;
-}
-
 interface ImageAttachment {
   path?: string;
   data?: string;
   media_type?: string;
 }
 
+// Mirrors RequestOptions in internal/bridge/protocol.go. The legacy Claude SDK
+// fields (max_turns, permission_mode, mcp_servers, agents, disabled_tools)
+// have no analogue in the PI SDK and were dropped.
 interface RequestOptions {
   provider?: string;
   model?: string;
   cwd?: string;
   system_prompt?: string;
   resume?: string;
-  max_turns?: number;
-  permission_mode?: string;
-  mcp_servers?: Record<string, MCPServerConfig>;
   allowed_tools?: string[];
   continue?: boolean;
-  agents?: Record<string, unknown>;
   no_user_settings?: boolean;
-  disabled_tools?: string[];
   persist_session?: boolean;
   images?: ImageAttachment[];
 }

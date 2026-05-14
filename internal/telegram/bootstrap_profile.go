@@ -132,11 +132,9 @@ func (bc *BotController) bootstrapGenerate(prompt string) (string, error) {
 		Command: "query",
 		Prompt:  prompt,
 		Options: bridge.RequestOptions{
-			Provider:       bc.config.DefaultProvider,
-			Model:          bc.config.DefaultModel,
-			SystemPrompt:   "Voce e um gerador de arquivos de configuracao de persona. Responda apenas com o conteudo solicitado, sem explicacoes adicionais.",
-			MaxTurns:       1,
-			PermissionMode: "bypassPermissions",
+			Provider:     bc.config.DefaultProvider,
+			Model:        bc.config.DefaultModel,
+			SystemPrompt: "Voce e um gerador de arquivos de configuracao de persona. Responda apenas com o conteudo solicitado, sem explicacoes adicionais.",
 		},
 	})
 	if err != nil {

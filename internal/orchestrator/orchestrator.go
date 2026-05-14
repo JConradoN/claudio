@@ -58,8 +58,6 @@ func (o *Orchestrator) Consolidate(ctx context.Context, plan *Plan, results []Ta
 		Command: "query",
 		Prompt:  systemPrompt,
 		Options: bridge.RequestOptions{
-			MaxTurns:       1,
-			PermissionMode: "bypassPermissions",
 			NoUserSettings: true,
 		},
 	}

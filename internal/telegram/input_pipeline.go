@@ -131,11 +131,9 @@ func (bc *BotController) classifyFunc() agents.ClassifyFunc {
 			Command: "query",
 			Prompt:  prompt,
 			Options: bridge.RequestOptions{
-				Provider:       bc.config.DefaultProvider,
-				Model:          bc.config.DefaultModel,
-				SystemPrompt:   system,
-				MaxTurns:       1,
-				PermissionMode: "bypassPermissions",
+				Provider:     bc.config.DefaultProvider,
+				Model:        bc.config.DefaultModel,
+				SystemPrompt: system,
 			},
 		})
 		if err != nil {
@@ -152,12 +150,9 @@ func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent
 		Command: "query",
 		Prompt:  userText,
 		Options: bridge.RequestOptions{
-			Provider:       bc.config.DefaultProvider,
-			Model:          bc.config.DefaultModel,
-			SystemPrompt:   systemPrompt,
-			MaxTurns:       bc.config.MaxIterations,
-			PermissionMode: "bypassPermissions",
-			DisabledTools:  bridge.TelegramPluginTools,
+			Provider:     bc.config.DefaultProvider,
+			Model:        bc.config.DefaultModel,
+			SystemPrompt: systemPrompt,
 		},
 	}
 
@@ -168,17 +163,9 @@ func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent
 		if agent.Cwd != "" {
 			req.Options.Cwd = agent.Cwd
 		}
-		if len(agent.MCPServers) > 0 {
-			req.Options.MCPServers = agent.MCPServers
-		}
 		if len(agent.AllowedTools) > 0 {
 			req.Options.AllowedTools = agent.AllowedTools
 		}
-	}
-
-	// Pass all agents to SDK for native delegation
-	if sdkAgents := agents.BuildSDKAgents(bc.agents); sdkAgents != nil {
-		req.Options.Agents = sdkAgents
 	}
 
 	// PI resumes sessions by ID/path. Always pass the stored session ID so

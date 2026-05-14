@@ -31,8 +31,6 @@ func (o *Orchestrator) ExecuteTask(
 			Model:          cfg.Model,
 			Cwd:            cwd,
 			SystemPrompt:   systemPrompt,
-			MaxTurns:       cfg.MaxTurns,
-			PermissionMode: "bypassPermissions",
 			AllowedTools:   cfg.Tools,
 			NoUserSettings: true,
 		},
