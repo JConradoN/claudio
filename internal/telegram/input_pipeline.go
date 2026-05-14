@@ -185,10 +185,14 @@ func (bc *BotController) buildBridgeRequest(userText, systemPrompt string, agent
 	// the Bridge can reuse warm sessions or reopen persisted ones after restart.
 	if sessionID, active := bc.sessions.GetWithState(chatID, threadID); sessionID != "" {
 		req.Options.Resume = sessionID
+		sidPreview := sessionID
+		if len(sidPreview) > 8 {
+			sidPreview = sidPreview[:8]
+		}
 		if active {
-			log.Printf("session: chat=%d thread=%d mode=continue sid=%s (len=%d)", chatID, threadID, sessionID[:8], len(sessionID))
+			log.Printf("session: chat=%d thread=%d mode=continue sid=%s (len=%d)", chatID, threadID, sidPreview, len(sessionID))
 		} else {
-			log.Printf("session: chat=%d thread=%d mode=resume sid=%s (len=%d)", chatID, threadID, sessionID[:8], len(sessionID))
+			log.Printf("session: chat=%d thread=%d mode=resume sid=%s (len=%d)", chatID, threadID, sidPreview, len(sessionID))
 		}
 	} else {
 		log.Printf("session: chat=%d thread=%d mode=new", chatID, threadID)

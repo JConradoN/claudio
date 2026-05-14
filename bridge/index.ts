@@ -125,13 +125,7 @@ function translateToolName(name: string): string {
 
 function translateAllowedTools(tools: string[] | undefined): string[] | undefined {
   if (!tools || tools.length === 0) return undefined;
-  const mapped = [...new Set(tools.map(translateToolName))];
-  // Always include web_search so the model can search the web
-  // regardless of the agent's allowed_tools config
-  if (!mapped.includes("web_search")) {
-    mapped.push("web_search");
-  }
-  return mapped;
+  return [...new Set(tools.map(translateToolName))];
 }
 
 function textFromContent(content: unknown): string {
@@ -280,9 +274,11 @@ async function handleQuery(req: Request): Promise<void> {
   }, timeoutMs);
 
   let turnCount = 0;
+  let session: Awaited<ReturnType<typeof createPiSession>>["session"] | undefined;
+  const startedAt = Date.now();
 
   try {
-    const { session } = await createPiSession(opts);
+    ({ session } = await createPiSession(opts));
     const sessionID = session.sessionId;
     lastSessionID = sessionID;
     sessionByID.set(sessionID, { id: sessionID, file: session.sessionFile });
@@ -359,19 +355,24 @@ async function handleQuery(req: Request): Promise<void> {
       content,
       cost_usd: stats.cost,
       session_id: sessionID,
-      duration_ms: 0,
+      duration_ms: Date.now() - startedAt,
       num_turns: turnCount || stats.assistantMessages,
       input_tokens: stats.tokens.input,
       output_tokens: stats.tokens.output,
     });
-
-    session.dispose();
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`query error: rid=${reqId} ${errMsg}`);
     emitReq({ event: "error", message: errMsg });
   } finally {
     clearTimeout(timeout);
+    if (session) {
+      try {
+        session.dispose();
+      } catch (disposeErr) {
+        log(`session dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+      }
+    }
   }
 }
 

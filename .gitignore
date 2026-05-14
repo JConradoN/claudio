@@ -73,3 +73,9 @@ specs/
 
 # Local planning workspace
 .planning/
+
+# Build output
+/build/
+
+# Misplaced PI agent data (created when ~ was passed literally instead of expanded)
+/~/

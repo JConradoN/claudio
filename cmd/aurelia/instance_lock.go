@@ -38,13 +38,15 @@ func acquireLock() (release func(), err error) {
 			if findErr == nil {
 				if signalErr := proc.Signal(syscall.Signal(0)); signalErr == nil {
 					return nil, fmt.Errorf("outra instância já está rodando (PID %d).\n"+
-						"Use 'kill %d' ou reinicie o daemon com 'launchctl kickstart'.",
+						"Use 'kill %d' para encerrá-la ou 'launchctl stop com.aurelia.agent'",
 						existingPID, existingPID)
 				}
 			}
 		}
 		// Stale or corrupt — remove so we can acquire the lock below.
-		os.Remove(path)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("warning: instance lock cleanup: %v", err)
+		}
 	}
 
 	// 2. Open (or create) the lock file with RDWR so we can flock it.

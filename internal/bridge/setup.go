@@ -32,8 +32,12 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		needsNpmInstall = true
 	}
 
-	existing, readErr := os.ReadFile(bundlePath)
-	bundleUpToDate := readErr == nil && string(existing) == string(bundleJS)
+	// Fast path: compare sizes first to avoid reading 12MB on every startup
+	bundleUpToDate := false
+	if info, err := os.Stat(bundlePath); err == nil && info.Size() == int64(len(bundleJS)) {
+		existing, readErr := os.ReadFile(bundlePath)
+		bundleUpToDate = readErr == nil && string(existing) == string(bundleJS)
+	}
 
 	if bundleUpToDate && !needsNpmInstall {
 		return targetDir, nil
@@ -49,10 +53,18 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		return "", fmt.Errorf("create bridge dir: %w", err)
 	}
 
-	// Always write latest bundle.js
+	// Always write latest bundle.js (atomic: write to temp, then rename)
 	if !bundleUpToDate {
-		if err := os.WriteFile(bundlePath, bundleJS, 0600); err != nil {
-			return "", fmt.Errorf("write bundle.js: %w", err)
+		tmpPath := bundlePath + ".tmp"
+		if err := os.WriteFile(tmpPath, bundleJS, 0600); err != nil {
+			os.Remove(tmpPath)
+			return "", fmt.Errorf("write bundle.js.tmp: %w", err)
+		}
+		// Rename is atomic on Unix within the same filesystem — if the process
+		// crashes mid-rename, the target either has the old file or the new one.
+		if err := os.Rename(tmpPath, bundlePath); err != nil {
+			os.Remove(tmpPath)
+			return "", fmt.Errorf("rename bundle.js.tmp → bundle.js: %w", err)
 		}
 	}
 

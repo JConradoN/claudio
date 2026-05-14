@@ -199,9 +199,30 @@ func setupBridge() *bridge.Bridge {
 		bridgeDir = aureliBridgeDir
 	}
 	bundlePath := filepath.Join(bridgeDir, "bundle.js")
-	if _, err := os.Stat(bundlePath); os.IsNotExist(err) {
-		bundlePath = ""
+	
+	// Validate bundle.js before using it
+	if _, err := os.Stat(bundlePath); err == nil {
+		// File exists, now check if it's valid
+		if info, err := os.Stat(bundlePath); err == nil {
+			// Check if file is not empty and has reasonable size (> 10KB)
+			if info.Size() > 10240 {
+				// Optional: do a quick content check to see if it looks like JS
+				// For now, we'll trust that if it's big enough, it's probably OK
+				// In production, we might want to check for JS syntax markers
+				return bridge.New(bridgeDir, bundlePath)
+			} else {
+				log.Printf("Warning: bridge bundle.js exists but is too small (%d bytes), using tsx fallback", info.Size())
+				bundlePath = "" // Force fallback to tsx
+			}
+		} else {
+			log.Printf("Warning: failed to stat bridge bundle.js: %v, using tsx fallback", err)
+			bundlePath = "" // Force fallback to tsx
+		}
+	} else {
+		// bundle.js doesn't exist, which is fine - we'll use tsx
+		bundlePath = "" // Explicitly set to empty string for clarity
 	}
+	
 	return bridge.New(bridgeDir, bundlePath)
 }
 
