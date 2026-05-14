@@ -425,5 +425,9 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 		log.Printf("model callback persist: %v", err)
 	}
 
+	if bc.refreshProviderEnv != nil {
+		bc.refreshProviderEnv()
+	}
+
 	return c.Edit(fmt.Sprintf("✅ Modelo alterado para **%s**\nProvedor: **%s**\n\nSessão resetada.", modelID, provider))
 }

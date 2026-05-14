@@ -3,8 +3,8 @@ package dream
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,10 +51,10 @@ func (d *Dreamer) flushNudgeBuffer(chatID int64, threadID int, cwd string, buffe
 		return
 	}
 
-	go d.runNudge(messages, threadID, cwd)
+	go d.runNudge(messages, chatID, threadID, cwd)
 }
 
-func (d *Dreamer) runNudge(messages []session.NudgeMessage, threadID int, cwd string) {
+func (d *Dreamer) runNudge(messages []session.NudgeMessage, chatID int64, threadID int, cwd string) {
 	defer d.nudgeRunning.Store(false)
 
 	log.Printf("[nudge] starting review with %d messages...", len(messages))
@@ -67,7 +67,7 @@ func (d *Dreamer) runNudge(messages []session.NudgeMessage, threadID int, cwd st
 	}
 
 	// Build system prompt with memory directories
-	sysPrompt := d.buildNudgePrompt(cwd, threadID)
+	sysPrompt := d.buildNudgePrompt(cwd, chatID, threadID)
 
 	prompt := fmt.Sprintf(`TASK: Extract facts from the conversation below and save them using the Write tool.
 
@@ -118,11 +118,13 @@ IMPORTANT: You MUST call the Write tool at least once. If the conversation has a
 		time.Since(start).Round(time.Second), ev.CostUSD, ev.NumTurns)
 }
 
-func (d *Dreamer) buildNudgePrompt(cwd string, threadID int) string {
+func (d *Dreamer) buildNudgePrompt(cwd string, chatID int64, threadID int) string {
 	globalDir := d.memoryDir
 	topicDir := ""
 	if threadID > 0 {
-		topicDir = filepath.Join(globalDir, "topics", fmt.Sprint(threadID))
+		// Mirrors topicMemoryDir() in internal/telegram: keep chat scope so
+		// two groups with the same Telegram thread id don't share memory.
+		topicDir = filepath.Join(globalDir, "topics", fmt.Sprintf("chat_%d", chatID), fmt.Sprintf("thread_%d", threadID))
 	}
 
 	// When no project context, use global-only prompt

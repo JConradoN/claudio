@@ -36,7 +36,7 @@ func TestChatActionLoop_SendsRepeatedNotificationsUntilStopped(t *testing.T) {
 	sender := &fakeActionSender{}
 	recipient := fakeRecipient{id: 1}
 
-	stop := startChatActionLoop(sender, recipient, telebot.Typing, 15*time.Millisecond)
+	stop := startChatActionLoop(sender, recipient, telebot.Typing, 15*time.Millisecond, 0)
 	time.Sleep(55 * time.Millisecond)
 	stop()
 

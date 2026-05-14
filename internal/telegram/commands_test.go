@@ -417,6 +417,30 @@ func TestCmdListModels_RequiresBridge(t *testing.T) {
 	}
 }
 
+func TestExtractModelName(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"slash model", "/model claude-opus-4-6", "claude-opus-4-6"},
+		{"slash model with extra spaces", "  /model  kimi-k2.5  ", "kimi-k2.5"},
+		{"muda modelo para", "muda modelo para claude-sonnet", "claude-sonnet"},
+		{"trocar modelo para", "trocar modelo para gpt-4", "gpt-4"},
+		{"escolhe modelo", "escolhe modelo gemini", "gemini"},
+		{"no known prefix returns empty (regression)", "olá tudo bem amigo", ""},
+		{"empty input", "", ""},
+		{"prefix without name returns empty", "muda modelo para ", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractModelName(tc.text); got != tc.want {
+				t.Errorf("extractModelName(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
 }

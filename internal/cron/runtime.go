@@ -35,18 +35,14 @@ func NewBridgeCronRuntime(
 	ag AgentRegistry,
 	p PersonaBuilder,
 	memoryDir string,
-	defaultProvider ...string,
+	defaultProvider string,
 ) *BridgeCronRuntime {
-	provider := ""
-	if len(defaultProvider) > 0 {
-		provider = defaultProvider[0]
-	}
 	return &BridgeCronRuntime{
 		bridge:          b,
 		agents:          ag,
 		persona:         p,
 		memoryDir:       memoryDir,
-		defaultProvider: provider,
+		defaultProvider: defaultProvider,
 	}
 }
 

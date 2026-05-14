@@ -111,7 +111,7 @@ func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, 
 		finalText = buildFallbackConsolidation(results)
 	}
 
-	if err := SendTextReply(bc.bot, chat, finalText, messageID); err != nil {
+	if err := SendTextReply(bc.bot, chat, finalText); err != nil {
 		log.Printf("Failed to send consolidation: %v", err)
 	}
 }

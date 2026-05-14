@@ -54,8 +54,23 @@ interface SessionLookup {
   file?: string;
 }
 
+// Bounded LRU-ish cache of session id → session file. The bridge is long-lived
+// in daemon mode, so an unbounded map would grow over time. Insertion-ordered
+// Map iteration lets us evict the oldest entry once we hit the cap.
+const MAX_SESSION_CACHE = 256;
 const sessionByID = new Map<string, SessionLookup>();
 let lastSessionID = "";
+
+function rememberSession(id: string, lookup: SessionLookup): void {
+  // Touch on update so re-resumed sessions stay warm.
+  if (sessionByID.has(id)) sessionByID.delete(id);
+  sessionByID.set(id, lookup);
+  while (sessionByID.size > MAX_SESSION_CACHE) {
+    const oldest = sessionByID.keys().next().value;
+    if (oldest === undefined) break;
+    sessionByID.delete(oldest);
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -270,7 +285,7 @@ async function handleQuery(req: Request): Promise<void> {
     ({ session } = await createPiSession(opts));
     const sessionID = session.sessionId;
     lastSessionID = sessionID;
-    sessionByID.set(sessionID, { id: sessionID, file: session.sessionFile });
+    rememberSession(sessionID, { id: sessionID, file: session.sessionFile });
 
     emitReq({
       event: "system",

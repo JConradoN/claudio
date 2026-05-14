@@ -166,7 +166,6 @@ func looksNarrative(prefix string) bool {
 func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) error {
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	messageID := c.Message().ID
 	log.Printf("command: type=%d chat=%d thread=%d text=%q", cmd.Type, chatID, threadID, cmd.Text)
 
 	var reply string
@@ -198,7 +197,7 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 		return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro ao executar comando: %v", err), threadID)
 	}
 
-	return SendTextReplyWithThread(bc.bot, c.Chat(), reply, messageID, threadID)
+	return SendTextReplyWithThread(bc.bot, c.Chat(), reply, threadID)
 }
 
 // --- P1 handlers ---
@@ -583,29 +582,35 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 		return "", fmt.Errorf("falha ao salvar configuração: %w", err)
 	}
 
+	// Re-export provider env so the bridge sees the new API key on its next query.
+	if bc.refreshProviderEnv != nil {
+		bc.refreshProviderEnv()
+	}
+
 	return fmt.Sprintf("✅ Modelo alterado para **%s** (provedor: **%s**)\nPróxima mensagem usará o novo modelo.", matched.ID, matched.Provider), nil
 }
 
-// extractModelName pulls the model name from a set-model command.
+// extractModelName pulls the model name from a set-model command. Returns
+// empty when the text doesn't match a known prefix — earlier versions used
+// the last word as a fallback, which caused arbitrary messages classified as
+// CmdSetModel to attempt model switches with garbage (e.g. "amigo").
 func extractModelName(text string) string {
-	lower := strings.ToLower(strings.TrimSpace(text))
+	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed)
 
-	// Try /model <name> syntax
-	if strings.HasPrefix(lower, "/model ") {
-		return strings.TrimSpace(text[len("/model "):])
+	prefixes := []string{
+		"/model ",
+		"muda modelo para ",
+		"mudar modelo para ",
+		"troca modelo para ",
+		"trocar modelo para ",
+		"escolhe modelo ",
+		"seleciona modelo ",
 	}
-
-	// Try "muda modelo para <name>" or similar
-	for _, prefix := range []string{"muda modelo para ", "mudar modelo para ", "troca modelo para ", "trocar modelo para ", "escolhe modelo ", "seleciona modelo "} {
+	for _, prefix := range prefixes {
 		if strings.HasPrefix(lower, prefix) {
-			return strings.TrimSpace(text[len(prefix):])
+			return strings.TrimSpace(trimmed[len(prefix):])
 		}
-	}
-
-	// Last word as model name fallback
-	words := strings.Fields(text)
-	if len(words) > 0 {
-		return words[len(words)-1]
 	}
 
 	return ""
@@ -644,8 +649,15 @@ func (bc *BotController) saveDefaultModel(provider, model string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(cfgPath, updated, 0600); err != nil {
-		return fmt.Errorf("write config: %w", err)
+	// Atomic write: temp file in the same directory, then rename. Prevents
+	// truncated configs (and the loss of API keys) if the process dies mid-write.
+	tmp := cfgPath + ".tmp"
+	if err := os.WriteFile(tmp, updated, 0600); err != nil {
+		return fmt.Errorf("write config tmp: %w", err)
+	}
+	if err := os.Rename(tmp, cfgPath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename config: %w", err)
 	}
 
 	return nil

@@ -70,7 +70,7 @@ func (bc *BotController) completeBootstrapAssistant(c telebot.Context, state boo
 		return SendContextText(c, bootstrapFailureMessage)
 	}
 
-	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval)
+	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval, c.Message().ThreadID)
 	defer stopTyping()
 
 	prompt := buildAssistantGeneratePrompt(preset, text)
@@ -103,7 +103,7 @@ func (bc *BotController) completeBootstrapAssistant(c telebot.Context, state boo
 func (bc *BotController) completeBootstrapProfile(c telebot.Context, state bootstrapState, text string) error {
 	fallbackName := bootstrapFallbackName(c.Sender())
 
-	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval)
+	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval, c.Message().ThreadID)
 	defer stopTyping()
 
 	prompt := buildUserGeneratePrompt(text, fallbackName)

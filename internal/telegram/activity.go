@@ -11,7 +11,7 @@ type actionSender interface {
 	Notify(to telebot.Recipient, action telebot.ChatAction, until ...int) error
 }
 
-func startChatActionLoop(sender actionSender, recipient telebot.Recipient, action telebot.ChatAction, interval time.Duration, threadID ...int) func() {
+func startChatActionLoop(sender actionSender, recipient telebot.Recipient, action telebot.ChatAction, interval time.Duration, threadID int) func() {
 	if sender == nil || recipient == nil {
 		return func() {}
 	}
@@ -20,8 +20,8 @@ func startChatActionLoop(sender actionSender, recipient telebot.Recipient, actio
 	}
 
 	notify := func() {
-		if len(threadID) > 0 {
-			_ = sender.Notify(recipient, action, threadID[0])
+		if threadID > 0 {
+			_ = sender.Notify(recipient, action, threadID)
 		} else {
 			_ = sender.Notify(recipient, action)
 		}

@@ -47,8 +47,9 @@ type BotController struct {
 		AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 		FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 	}
-	modelCache   []bridge.ModelInfo
-	modelCacheMu sync.Mutex
+	modelCache       []bridge.ModelInfo
+	modelCacheMu     sync.Mutex
+	refreshProviderEnv func() // optional hook to re-export provider env vars after /model
 }
 
 type albumBuffer struct {
@@ -129,6 +130,14 @@ func NewBotController(
 // Called separately to avoid changing the NewBotController signature.
 func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 	bc.orchestrator = o
+}
+
+// SetProviderEnvRefresher installs a callback that will be invoked after the
+// user changes the default model via /model. The callback is expected to
+// re-export the API key env vars for the new provider so the bridge picks
+// them up on the next query.
+func (bc *BotController) SetProviderEnvRefresher(f func()) {
+	bc.refreshProviderEnv = f
 }
 
 // SetDreamer injects the dream system after construction.

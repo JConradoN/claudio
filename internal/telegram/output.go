@@ -91,15 +91,18 @@ func bestSplitIndex(text string, limit int) int {
 	return len(string(runes[:limit]))
 }
 
-func SendTextReply(bot *telebot.Bot, chat *telebot.Chat, text string, replyToID int) error {
-	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, replyToID, 0)
+// SendTextReply sends text without reply-to quoting. Kept as a thin alias so
+// existing callers do not need to switch to SendText; reply quoting was
+// removed in v0.5.0 since the bot is the only participant alongside the user.
+func SendTextReply(bot *telebot.Bot, chat *telebot.Chat, text string) error {
+	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, 0)
 }
 
-func SendTextReplyWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, replyToID int, threadID int) error {
-	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, replyToID, threadID)
+func SendTextReplyWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, threadID int) error {
+	return sendTextReplyWithSender(bot, chat, text, telegramMessageLimit, threadID)
 }
 
-func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, replyToID int, threadID int) error {
+func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, threadID int) error {
 	chunks := splitTelegramMarkdown(text, limit)
 
 	for _, chunk := range chunks {

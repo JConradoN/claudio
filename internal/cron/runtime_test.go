@@ -57,7 +57,7 @@ func TestBridgeCronRuntime_ExecuteJob(t *testing.T) {
 	}}
 	persona := &fakePersona{prompt: "I am Aurelia."}
 
-	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory")
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory", "")
 
 	job := CronJob{
 		ID:           "job-1",
@@ -109,7 +109,7 @@ func TestBridgeCronRuntime_NoAgent(t *testing.T) {
 	registry := &fakeRegistry{agents: map[string]*agents.Agent{}}
 	persona := &fakePersona{prompt: "base"}
 
-	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory")
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory", "")
 
 	job := CronJob{
 		ID:     "job-2",
@@ -136,7 +136,7 @@ func TestBridgeCronRuntime_BridgeError(t *testing.T) {
 	}}
 	persona := &fakePersona{prompt: "base"}
 
-	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory")
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory", "")
 
 	job := CronJob{ID: "job-3", AgentName: "test", Prompt: "test"}
 
@@ -159,7 +159,7 @@ func TestBridgeCronRuntime_BridgeExecuteFailure(t *testing.T) {
 	}}
 	persona := &fakePersona{prompt: "base"}
 
-	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory")
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory", "")
 
 	job := CronJob{ID: "job-4", AgentName: "test", Prompt: "test"}
 
@@ -181,7 +181,7 @@ func TestBridgeCronRuntime_PersonaError(t *testing.T) {
 	}}
 	persona := &fakePersona{err: errors.New("file not found")}
 
-	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory")
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "/tmp/test-memory", "")
 
 	job := CronJob{ID: "job-5", AgentName: "test", Prompt: "test"}
 

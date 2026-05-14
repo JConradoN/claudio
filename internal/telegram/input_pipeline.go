@@ -420,7 +420,7 @@ func (bc *BotController) processBridgeEventsAsyncWithThread(chat *telebot.Chat, 
 					// Strip the plan block from the displayed text
 					displayText := orchestrator.StripPlanBlock(finalText)
 					if displayText != "" {
-						_ = SendTextReplyWithThread(bc.bot, chat, displayText, messageID, threadID)
+						_ = SendTextReplyWithThread(bc.bot, chat, displayText, threadID)
 					}
 					// Launch execution in background
 					go bc.executeApprovedPlan(chat, messageID, plan)
@@ -428,7 +428,7 @@ func (bc *BotController) processBridgeEventsAsyncWithThread(chat *telebot.Chat, 
 				}
 			}
 
-			if err := SendTextReplyWithThread(bc.bot, chat, finalText, messageID, threadID); err != nil {
+			if err := SendTextReplyWithThread(bc.bot, chat, finalText, threadID); err != nil {
 				log.Printf("Failed to send reply to chat %d: %v", chat.ID, err)
 			}
 			if bc.dreamer != nil {
@@ -509,13 +509,13 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 	sections = append(sections, cronSection)
 
 	// Telegram interaction instructions
-	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID)
+	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent)
 	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
 
 	// Auto-memory instructions (SDK auto-memory doesn't activate via programmatic API,
 	// so we instruct the model explicitly)
-	memorySection := bc.buildMemoryInstructions(chatID, threadID)
+	memorySection := bc.buildMemoryInstructions(chatID, threadID, agent)
 	sections = append(sections, memorySection)
 
 	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
@@ -810,8 +810,18 @@ func extractFrontmatterField(content string, field string) string {
 	return ""
 }
 
+// effectiveCwd resolves the working directory the same way the bridge does:
+// agent.Cwd takes priority over the session-level cwd (which itself falls
+// back from topic → group inside Store.GetCwd).
+func (bc *BotController) effectiveCwd(agent *agents.Agent, chatID int64, threadID int) string {
+	if agent != nil && agent.Cwd != "" {
+		return agent.Cwd
+	}
+	return bc.sessions.GetCwd(chatID, threadID)
+}
+
 // buildTelegramInstructions returns instructions for interacting with the Telegram chat.
-func (bc *BotController) buildTelegramInstructions(chatID int64, messageID int, threadID int) string {
+func (bc *BotController) buildTelegramInstructions(chatID int64, messageID int, threadID int, agent *agents.Agent) string {
 	bin := "aurelia"
 	if bc.exePath != "" {
 		bin = bc.exePath
@@ -846,20 +856,31 @@ IMPORTANT rules about the working directory:
 - Only perform file operations (Read, Write, Edit, Bash, Glob, Grep) when a cwd is explicitly set.
 - If the user asks about "this project" or "the project", refer to conversation context and memory — do NOT go reading random directories.`,
 		chatID, messageID, bin, chatID, messageID, func() string {
-			if cwd := bc.sessions.GetCwd(chatID, threadID); cwd != "" {
+			if cwd := bc.effectiveCwd(agent, chatID, threadID); cwd != "" {
 				return cwd
 			}
 			return "(none — no project set)"
 		}())
 }
 
+// topicMemoryDir returns the directory used to store memories scoped to a
+// forum topic. Empty when threadID is 0 (private chats / non-forum groups).
+// The path includes chatID so the same topic ID in different groups does not
+// collide (Telegram threadIDs are unique only within a chat).
+func topicMemoryDir(memoryDir string, chatID int64, threadID int) string {
+	if threadID <= 0 {
+		return ""
+	}
+	return filepath.Join(memoryDir, "topics", fmt.Sprintf("chat_%d", chatID), fmt.Sprintf("thread_%d", threadID))
+}
+
 // buildMemoryInstructions returns the system prompt section for persistent memory.
 // It reads memory files from up to 3 layers (global + project-private + project-team)
 // and injects their contents so the model always has context — even after SDK context compaction.
-func (bc *BotController) buildMemoryInstructions(chatID int64, threadID int) string {
+func (bc *BotController) buildMemoryInstructions(chatID int64, threadID int, agent *agents.Agent) string {
 	var sb strings.Builder
 
-	cwd := bc.sessions.GetCwd(chatID, threadID)
+	cwd := bc.effectiveCwd(agent, chatID, threadID)
 	hasProject := cwd != "" && bc.resolver != nil
 
 	topicSuffix := ""
@@ -872,14 +893,12 @@ func (bc *BotController) buildMemoryInstructions(chatID int64, threadID int) str
 IMPORTANT: Unlike standard coding agents, you DO have persistent memory across conversations. Your memory contents are loaded below. NEVER say you "don't have memory" or that "each session starts from zero" — that is FALSE. Always check your memory contents below before answering questions about past conversations.`))
 
 	// Saving instructions depend on whether project context is active
+	topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID)
+
 	if hasProject {
 		projectDir := bc.resolver.ProjectMemoryDir(cwd)
 		teamDir := bc.resolver.ProjectTeamMemoryDir(cwd)
 		projectName := filepath.Base(cwd)
-		topicMemoryDir := ""
-		if threadID > 0 {
-			topicMemoryDir = filepath.Join(bc.memoryDir, "topics", fmt.Sprint(threadID))
-		}
 
 		sb.WriteString("\n\n### Memory Layers" + topicSuffix + "\n\n")
 		sb.WriteString("Save each fact in the correct layer:\n\n")
@@ -888,8 +907,8 @@ IMPORTANT: Unlike standard coding agents, you DO have persistent memory across c
 		sb.WriteString("| **Global** | " + bc.memoryDir + " | Personal facts, preferences, communication style — applies across all projects |\n")
 		sb.WriteString("| **Project Private** | " + projectDir + " | Your personal notes, work log, individual decisions for project \"" + projectName + "\" |\n")
 		sb.WriteString("| **Project Team** | " + teamDir + " | Stack, conventions, architecture, known bugs — useful for any team member on \"" + projectName + "\" |\n")
-		if topicMemoryDir != "" {
-			sb.WriteString("| **Topic** | " + topicMemoryDir + " | Facts specific to this forum topic — isolated from other topics |\n")
+		if topicDir != "" {
+			sb.WriteString("| **Topic** | " + topicDir + " | Facts specific to this forum topic — isolated from other topics |\n")
 		}
 
 		sb.WriteString("\n### Saving memory\n")
@@ -898,14 +917,9 @@ IMPORTANT: Unlike standard coding agents, you DO have persistent memory across c
 		sb.WriteString("2. Update the MEMORY.md index in that directory: one line per file as - [Title](file.md) — summary\n\n")
 		sb.WriteString("Do NOT just promise to save — actually call Write before your response ends.")
 	} else {
-		topicMemoryDir := ""
-		if threadID > 0 {
-			topicMemoryDir = filepath.Join(bc.memoryDir, "topics", fmt.Sprint(threadID))
-		}
-
 		dirList := bc.memoryDir
-		if topicMemoryDir != "" {
-			dirList += " (global) and " + topicMemoryDir + " (this topic)"
+		if topicDir != "" {
+			dirList += " (global) and " + topicDir + " (this topic)"
 		}
 
 		sb.WriteString("\n\n### Saving memory" + topicSuffix + "\n")
@@ -924,7 +938,7 @@ If the user asks to forget or remove something, delete the file with Bash (rm) a
 Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversation. Only reference them when a working directory is set AND the user asks about project configuration.`)
 
 	// Inject actual memory contents
-	memoryContent := bc.loadMemoryContents(chatID, threadID)
+	memoryContent := bc.loadMemoryContents(chatID, threadID, agent)
 	if memoryContent != "" {
 		sb.WriteString("\n\n### Current Memory Contents"+topicSuffix+"\n\n")
 		sb.WriteString(memoryContent)
@@ -935,7 +949,7 @@ Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversati
 
 // loadMemoryContents reads memory files from all available layers and returns
 // their contents for injection into the system prompt.
-func (bc *BotController) loadMemoryContents(chatID int64, threadID int) string {
+func (bc *BotController) loadMemoryContents(chatID int64, threadID int, agent *agents.Agent) string {
 	var sb strings.Builder
 
 	// Layer 1: Global memory (always)
@@ -946,17 +960,16 @@ func (bc *BotController) loadMemoryContents(chatID int64, threadID int) string {
 	}
 
 	// Layer 2: Topic memory (only when threadID > 0, i.e. forum topics)
-	if threadID > 0 {
-		topicDir := filepath.Join(bc.memoryDir, "topics", fmt.Sprint(threadID))
+	if topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID); topicDir != "" {
 		topicContent := loadMemoryDir(topicDir)
 		if topicContent != "" {
-			fmt.Fprintf(&sb, "\n\n#### Topic %d\n\n", threadID)
+			fmt.Fprintf(&sb, "\n\n#### Topic %d (chat %d)\n\n", threadID, chatID)
 			sb.WriteString(topicContent)
 		}
 	}
 
 	// Layers 3 & 4: Project memory (only when cwd is set)
-	cwd := bc.sessions.GetCwd(chatID, threadID)
+	cwd := bc.effectiveCwd(agent, chatID, threadID)
 	if cwd != "" && bc.resolver != nil {
 		projectName := filepath.Base(cwd)
 

@@ -136,6 +136,11 @@ func bootstrapApp() (*app, error) {
 	})
 	bot.SetOrchestrator(orch)
 
+	// When the user changes the default model via /model, the live cfg has been
+	// mutated already; re-export the provider env vars so the bridge picks up
+	// the right API key on its next query.
+	bot.SetProviderEnvRefresher(func() { setProviderEnv(cfg) })
+
 	// Wire dreamer — background memory consolidation + nudge review.
 	// Fall back to the user's default model so dream/nudge work on any provider
 	// (avoids 402 errors when the hardcoded Anthropic models aren't available).
@@ -199,30 +204,20 @@ func setupBridge() *bridge.Bridge {
 		bridgeDir = aureliBridgeDir
 	}
 	bundlePath := filepath.Join(bridgeDir, "bundle.js")
-	
-	// Validate bundle.js before using it
-	if _, err := os.Stat(bundlePath); err == nil {
-		// File exists, now check if it's valid
-		if info, err := os.Stat(bundlePath); err == nil {
-			// Check if file is not empty and has reasonable size (> 10KB)
-			if info.Size() > 10240 {
-				// Optional: do a quick content check to see if it looks like JS
-				// For now, we'll trust that if it's big enough, it's probably OK
-				// In production, we might want to check for JS syntax markers
-				return bridge.New(bridgeDir, bundlePath)
-			} else {
-				log.Printf("Warning: bridge bundle.js exists but is too small (%d bytes), using tsx fallback", info.Size())
-				bundlePath = "" // Force fallback to tsx
-			}
-		} else {
-			log.Printf("Warning: failed to stat bridge bundle.js: %v, using tsx fallback", err)
-			bundlePath = "" // Force fallback to tsx
-		}
-	} else {
-		// bundle.js doesn't exist, which is fine - we'll use tsx
-		bundlePath = "" // Explicitly set to empty string for clarity
+
+	// minBundleSize guards against a truncated bundle.js (e.g. an aborted
+	// esbuild run leaving an empty file). The real bundle is ~12 MB; below
+	// this threshold we assume corruption and fall back to running tsx.
+	const minBundleSize = 10 * 1024
+	switch info, err := os.Stat(bundlePath); {
+	case err != nil:
+		// Missing bundle — let the bridge fall back to tsx.
+		bundlePath = ""
+	case info.Size() < minBundleSize:
+		log.Printf("warning: bridge bundle.js exists but is only %d bytes (<%d); using tsx fallback", info.Size(), minBundleSize)
+		bundlePath = ""
 	}
-	
+
 	return bridge.New(bridgeDir, bundlePath)
 }
 

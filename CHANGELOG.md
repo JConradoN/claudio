@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.5.1] - 2026-05-14
+
+### Changed
+- Forum topic memory is now scoped per chat:
+  `topics/chat_<chatID>/thread_<threadID>/` instead of `topics/<threadID>/`.
+  Telegram threadIDs are only unique within a chat, so two groups with the
+  same numeric topic id used to share memory. Existing memory under
+  `topics/<id>/` will need to be moved manually (or left to be re-built by
+  future nudges).
+- `/cwd` display, memory layers, and Telegram instructions all resolve the
+  effective working directory the same way the bridge does
+  (`agent.Cwd > topic > group > none`). Previously the display claimed agent
+  CWD was highest priority but only the bridge cwd and project-docs section
+  honored it.
+- `/model` (and its callback) now re-export the provider API key env vars
+  after persisting, so the new provider's key is in place for the next query.
+- Atomic write for `~/.aurelia/config/app.json` when `/model` changes the
+  default — prevents truncated configs and lost API keys on mid-write crash.
+- Bounded session-lookup cache in the bridge (256 entries, LRU-ish), so a
+  long-running daemon does not grow it forever.
+
+### Fixed
+- `extractModelName` no longer falls back to the last word of the message.
+  Messages misclassified as `CmdSetModel` (e.g. "olá tudo bem amigo") used to
+  attempt model changes to garbage strings.
+- `extractModelName` correctly handles leading whitespace; the prefix offset
+  was computed off the trimmed text but slicing happened on the original.
+
+### Refactor
+- `NewBridgeCronRuntime` takes `defaultProvider string` instead of a variadic
+  for a single optional argument; `startChatActionLoop` does the same for
+  `threadID int`.
+- `setupBridge` collapsed to a single `os.Stat` and a single return; the
+  10 KB guard threshold now has a named constant and a comment explaining
+  the reasoning (bundle is ~12 MB, anything tiny means a failed esbuild run).
+- Dropped the unused `replyToID` parameter from `SendTextReply` /
+  `SendTextReplyWithThread`.
+- `gofmt` import order in `internal/dream/nudge.go`.
+
 ## [v0.5.0] - 2026-05-14
 
 ### Security
