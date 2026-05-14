@@ -1,0 +1,134 @@
+package telegram
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+// memoryCache caches pre-rendered memory directory content by mtime.
+// A directory's content is re-read when any .md file's mtime changes, a new
+// .md file appears, or an existing one is deleted.
+type memoryCache struct {
+	mu      sync.RWMutex
+	entries map[string]memoryCacheEntry
+}
+
+type memoryCacheEntry struct {
+	content   string
+	mtimes    map[string]time.Time // filename → mtime (set of files at put time)
+	filenames map[string]struct{}  // set of .md filenames for new/deleted detection
+}
+
+func newMemoryCache() *memoryCache {
+	return &memoryCache{entries: make(map[string]memoryCacheEntry, 16)}
+}
+
+// get returns cached content for dir if the directory's .md files haven't
+// changed (mtime, additions, or deletions). Returns false on first access
+// or when any change is detected.
+func (c *memoryCache) get(dir string) (string, bool) {
+	c.mu.RLock()
+	entry, ok := c.entries[dir]
+	c.mu.RUnlock()
+	if !ok {
+		return "", false
+	}
+
+	// Read current dir to detect new or deleted .md files.
+	// The mtimes map is never mutated after put() publishes it (immutable),
+	// so it's safe to read outside the lock.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+
+	// Quick count check: if the number of .md files differs, something changed.
+	var mdCount int
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			mdCount++
+		}
+	}
+	if mdCount != len(entry.filenames) {
+		return "", false
+	}
+
+	// Verify every known file still has the same mtime.
+	for name, cachedMtime := range entry.mtimes {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || !fi.ModTime().Equal(cachedMtime) {
+			return "", false
+		}
+	}
+
+	return entry.content, true
+}
+
+// put stores pre-rendered content for dir, recording mtimes of all .md files.
+// mtimes is a map of filename → ModTime already collected by the caller to
+// avoid a redundant ReadDir. If nil, put will read the dir itself.
+func (c *memoryCache) put(dir string, content string, mtimes map[string]time.Time) {
+	if mtimes == nil {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		mtimes = make(map[string]time.Time, len(entries))
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			fi, err := e.Info()
+			if err != nil {
+				continue
+			}
+			mtimes[e.Name()] = fi.ModTime()
+		}
+	}
+
+	filenames := make(map[string]struct{}, len(mtimes))
+	for name := range mtimes {
+		filenames[name] = struct{}{}
+	}
+
+	c.mu.Lock()
+	c.entries[dir] = memoryCacheEntry{
+		content:   content,
+		mtimes:    mtimes,
+		filenames: filenames,
+	}
+	c.mu.Unlock()
+}
+
+// invalidate removes the cached entry for dir, forcing a re-read on next access.
+func (c *memoryCache) invalidate(dir string) {
+	c.mu.Lock()
+	delete(c.entries, dir)
+	c.mu.Unlock()
+}
+
+// invalidateMemoryDirs clears cached entries for all memory directories that may
+// have been modified. Called after nudge/dream writes and CWD changes.
+func (bc *BotController) invalidateMemoryDirs(chatID int64, threadID int, cwd string) {
+	if bc.memoryCache == nil {
+		return
+	}
+
+	bc.memoryCache.invalidate(bc.memoryDir)
+
+	if topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID); topicDir != "" {
+		bc.memoryCache.invalidate(topicDir)
+	}
+
+	if cwd != "" && bc.resolver != nil {
+		if projectDir := bc.resolver.ProjectMemoryDir(cwd); projectDir != "" {
+			bc.memoryCache.invalidate(projectDir)
+		}
+		if teamDir := bc.resolver.ProjectTeamMemoryDir(cwd); teamDir != "" {
+			bc.memoryCache.invalidate(teamDir)
+		}
+	}
+}

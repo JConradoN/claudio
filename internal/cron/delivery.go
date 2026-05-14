@@ -3,7 +3,7 @@ package cron
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // ChatSender sends text messages to a chat by ID.
@@ -24,7 +24,7 @@ func NewTelegramDelivery(sender ChatSender) *TelegramDelivery {
 // Deliver sends the cron job result or error to the target chat.
 func (d *TelegramDelivery) Deliver(ctx context.Context, job CronJob, result *ExecutionResult, execErr error) error {
 	if job.TargetChatID == 0 {
-		log.Println("Cron delivery skipped: no chat ID")
+		slog.Warn("Cron delivery skipped: no chat ID")
 		return nil
 	}
 
@@ -32,7 +32,7 @@ func (d *TelegramDelivery) Deliver(ctx context.Context, job CronJob, result *Exe
 	if result != nil {
 		output = result.Output
 	}
-	log.Printf("Cron delivery: job=%s chat=%d output_len=%d err=%v", job.ID[:8], job.TargetChatID, len(output), execErr)
+	slog.Info("Cron delivery", "job_id", job.ID[:8], "chat", job.TargetChatID, "output_len", len(output), "error", execErr)
 
 	if execErr != nil {
 		return d.sender.Send(job.TargetChatID, fmt.Sprintf("❌ Cron job %s falhou: %v", job.ID[:8], execErr))

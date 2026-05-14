@@ -1,0 +1,168 @@
+package telegram
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestMemoryCache_HitAfterPut(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	// Create a memory file
+	writeFile(t, filepath.Join(dir, "note.md"), "hello world")
+
+	// Cache miss on first call
+	_, ok := cache.get(dir)
+	if ok {
+		t.Fatal("expected cache miss before put")
+	}
+
+	cache.put(dir, "cached content", nil)
+
+	// Cache hit after put
+	got, ok := cache.get(dir)
+	if !ok {
+		t.Fatal("expected cache hit after put")
+	}
+	if got != "cached content" {
+		t.Fatalf("expected 'cached content', got %q", got)
+	}
+}
+
+func TestMemoryCache_MissAfterMtimeChange(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	filePath := filepath.Join(dir, "data.md")
+	writeFile(t, filePath, "version 1")
+
+	cache.put(dir, "version 1", nil)
+
+	// Modify the file
+	time.Sleep(10 * time.Millisecond) // ensure different mtime
+	writeFile(t, filePath, "version 2")
+
+	// Cache should miss because mtime changed
+	_, ok := cache.get(dir)
+	if ok {
+		t.Fatal("expected cache miss after file modification")
+	}
+}
+
+func TestMemoryCache_InvalidateRemovesEntry(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	writeFile(t, filepath.Join(dir, "data.md"), "content")
+
+	cache.put(dir, "content", nil)
+
+	// Confirm cache hit
+	if _, ok := cache.get(dir); !ok {
+		t.Fatal("expected cache hit before invalidation")
+	}
+
+	cache.invalidate(dir)
+
+	// Cache miss after invalidation
+	if _, ok := cache.get(dir); ok {
+		t.Fatal("expected cache miss after invalidation")
+	}
+}
+
+func TestMemoryCache_IgnoresNonMdFiles(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	// Only .md files should be tracked for mtime
+	writeFile(t, filepath.Join(dir, "note.md"), "content")
+	writeFile(t, filepath.Join(dir, "data.txt"), "ignored")
+
+	cache.put(dir, "content", nil)
+
+	// Modify the .txt file (should NOT invalidate cache)
+	time.Sleep(10 * time.Millisecond)
+	writeFile(t, filepath.Join(dir, "data.txt"), "changed")
+
+	_, ok := cache.get(dir)
+	if !ok {
+		t.Fatal("expected cache hit when only non-md file changed")
+	}
+}
+
+func TestMemoryCache_EmptyDirProducesCacheHit(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	// Put empty content for empty dir
+	cache.put(dir, "", nil)
+
+	got, ok := cache.get(dir)
+	if !ok {
+		t.Fatal("expected cache hit for empty dir")
+	}
+	if got != "" {
+		t.Fatalf("expected empty content, got %q", got)
+	}
+}
+
+func TestMemoryCache_MissAfterNewFileAdded(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	writeFile(t, filepath.Join(dir, "a.md"), "file a")
+	cache.put(dir, "file a only", nil)
+
+	// Add a new .md file
+	writeFile(t, filepath.Join(dir, "b.md"), "file b")
+
+	// Cache should miss because .md file count changed
+	_, ok := cache.get(dir)
+	if ok {
+		t.Fatal("expected cache miss after new file added")
+	}
+}
+
+func TestMemoryCache_MissAfterFileDeleted(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	dir := t.TempDir()
+
+	writeFile(t, filepath.Join(dir, "a.md"), "file a")
+	writeFile(t, filepath.Join(dir, "b.md"), "file b")
+	cache.put(dir, "two files", nil)
+
+	// Delete one .md file
+	if err := os.Remove(filepath.Join(dir, "b.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cache should miss because .md file count changed
+	_, ok := cache.get(dir)
+	if ok {
+		t.Fatal("expected cache miss after file deleted")
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}

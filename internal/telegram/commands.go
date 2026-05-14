@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -302,18 +303,17 @@ type cronCreateParsed struct {
 	Prompt   string `json:"prompt"`
 }
 
+// fenceRe strips markdown code fences (with optional "json" language tag)
+// from LLM responses before JSON parsing.
+var fenceRe = regexp.MustCompile("(?s)^```(?:json)?\\s*(.+?)\\s*```$")
+
 // parseCronCreateResponse extracts JSON from the LLM response, tolerating markdown fences.
 func parseCronCreateResponse(raw string) (*cronCreateParsed, error) {
 	// Strip markdown code fences if present
 	cleaned := strings.TrimSpace(raw)
-	if strings.HasPrefix(cleaned, "```") {
-		// Remove first line (```json) and last line (```)
-		lines := strings.Split(cleaned, "\n")
-		if len(lines) >= 3 {
-			cleaned = strings.Join(lines[1:len(lines)-1], "\n")
-		}
+	if m := fenceRe.FindStringSubmatch(cleaned); m != nil {
+		cleaned = strings.TrimSpace(m[1])
 	}
-	cleaned = strings.TrimSpace(cleaned)
 
 	var parsed cronCreateParsed
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
@@ -491,7 +491,7 @@ func (bc *BotController) cmdListModels() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	models, err := bc.bridge.ListModels(ctx)
+	models, err := bc.getModels(ctx)
 	if err != nil {
 		return currentLine + fmt.Sprintf("\n\nLista não disponível: %v", err), nil
 	}
@@ -554,7 +554,7 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	available, err := bc.bridge.ListModels(ctx)
+	available, err := bc.getModels(ctx)
 	if err != nil {
 		return "", fmt.Errorf("falha ao consultar modelos: %w", err)
 	}

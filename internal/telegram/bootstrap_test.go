@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/igormaneschy/aurelia/internal/config"
 	"gopkg.in/telebot.v3"
 )
 
@@ -77,9 +76,9 @@ func TestExtractNameFromProfile(t *testing.T) {
 
 func TestBotController_IsAllowedUser(t *testing.T) {
 	bc := &BotController{
-		config: &config.AppConfig{
-			TelegramAllowedUserIDs: []int64{42, 99},
-			Providers:              map[string]config.ProviderConfig{},
+		allowedUsers: map[int64]struct{}{
+			42: {},
+			99: {},
 		},
 	}
 
@@ -88,6 +87,22 @@ func TestBotController_IsAllowedUser(t *testing.T) {
 	}
 	if bc.isAllowedUser(7) {
 		t.Fatal("expected user 7 to be blocked")
+	}
+}
+
+func TestBotController_IsAllowedGroup(t *testing.T) {
+	bc := &BotController{
+		allowedGroups: map[int64]struct{}{
+			100: {},
+			200: {},
+		},
+	}
+
+	if !bc.isAllowedGroup(100) {
+		t.Fatal("expected group 100 to be allowed")
+	}
+	if bc.isAllowedGroup(300) {
+		t.Fatal("expected group 300 to be blocked")
 	}
 }
 

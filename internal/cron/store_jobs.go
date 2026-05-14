@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -97,6 +98,9 @@ func (s *SQLiteCronStore) DeleteJob(ctx context.Context, jobID string) error {
 // ResolveJobID resolves a short (prefix) ID to the full UUID.
 // Returns the full ID if exactly one match is found.
 func (s *SQLiteCronStore) ResolveJobID(ctx context.Context, prefix string) (string, error) {
+	if strings.ContainsAny(prefix, "%_") {
+		return "", fmt.Errorf("invalid job id prefix: %q", prefix)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM cron_jobs WHERE id LIKE ?`, prefix+"%")
 	if err != nil {
 		return "", fmt.Errorf("resolve job id: %w", err)

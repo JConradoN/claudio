@@ -68,6 +68,7 @@ type AppConfig struct {
 
 	MaxIterations    int    `json:"max_iterations"`
 	MaxSessionTokens int    `json:"max_session_tokens"`
+	MaxImageBytes    int    `json:"max_image_bytes,omitempty"`
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
 
@@ -80,6 +81,8 @@ type AppConfig struct {
 
 	VisionModel    string `json:"vision_model,omitempty"`
 	VisionProvider string `json:"vision_provider,omitempty"`
+	LogLevel       string `json:"log_level,omitempty"`
+	LogFormat      string `json:"log_format,omitempty"`
 }
 
 // VisionFallback returns the configured vision model and provider for image inputs.
@@ -129,11 +132,14 @@ type fileConfig struct {
 
 	MaxIterations    int    `json:"max_iterations"`
 	MaxSessionTokens int    `json:"max_session_tokens"`
+	MaxImageBytes    int    `json:"max_image_bytes,omitempty"`
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
 
 	VisionModel    string `json:"vision_model,omitempty"`
 	VisionProvider string `json:"vision_provider,omitempty"`
+	LogLevel       string `json:"log_level,omitempty"`
+	LogFormat      string `json:"log_format,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -251,19 +257,27 @@ func writeConfigFile(path string, cfg fileConfig) error {
 }
 
 func toAppConfig(cfg fileConfig) *AppConfig {
+	// Normalize provider keys once so lookups don't need repeated normalization.
+	normalized := make(map[string]ProviderConfig, len(cfg.Providers))
+	for name, pc := range cfg.Providers {
+		normalized[NormalizeProvider(name)] = pc
+	}
 	return &AppConfig{
 		DefaultProvider:        cfg.DefaultProvider,
 		DefaultModel:           cfg.DefaultModel,
-		Providers:              cfg.Providers,
+		Providers:              normalized,
 		TelegramBotToken:        cfg.TelegramBotToken,
 		TelegramAllowedUserIDs:  cfg.TelegramAllowedUserIDs,
 		TelegramAllowedGroupIDs: cfg.TelegramAllowedGroupIDs,
 		STTProvider:            cfg.STTProvider,
 		MaxIterations:          cfg.MaxIterations,
 		MaxSessionTokens:       cfg.MaxSessionTokens,
+		MaxImageBytes:          cfg.MaxImageBytes,
 		DBPath:                 cfg.DBPath,
 		MCPConfigPath:          cfg.MCPConfigPath,
 		VisionModel:            cfg.VisionModel,
 		VisionProvider:         cfg.VisionProvider,
+		LogLevel:               cfg.LogLevel,
+		LogFormat:              cfg.LogFormat,
 	}
 }

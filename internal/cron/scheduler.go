@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +87,7 @@ func (s *Scheduler) runSingleJob(ctx context.Context, now time.Time, job CronJob
 	defer s.running.Delete(job.ID)
 
 	startedAt := now
-	log.Printf("cron.scheduler: executing job %s", job.ID)
+		slog.Info("cron.scheduler: executing job", "job_id", job.ID)
 
 	result, runErr := s.runtime.ExecuteJob(ctx, job)
 	finishedAt := s.clock.Now().UTC()
@@ -129,7 +129,7 @@ func (s *Scheduler) runSingleJob(ctx context.Context, now time.Time, job CronJob
 		}
 		job.NextRunAt = &nextRunAt
 	} else {
-		log.Printf("cron.scheduler: unknown schedule_type %q for job %s, deactivating", job.ScheduleType, job.ID)
+		slog.Warn("cron.scheduler: unknown schedule type, deactivating", "type", job.ScheduleType, "job_id", job.ID)
 		job.Active = false
 		job.NextRunAt = nil
 	}

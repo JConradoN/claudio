@@ -77,5 +77,9 @@ specs/
 # Build output
 /build/
 
+# Bridge bundle (built from TypeScript source, not versioned)
+internal/bridge/bundle.js
+
 # Misplaced PI agent data (created when ~ was passed literally instead of expanded)
 /~/
+

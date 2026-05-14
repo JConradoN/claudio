@@ -39,18 +39,20 @@ func (bc *BotController) handlePhoto(c telebot.Context) error {
 
 func (bc *BotController) handlePhotoAlbum(c telebot.Context, photo *telebot.Photo) error {
 	albumID := c.Message().AlbumID
-	isOwner := bc.albums.store(albumID, c.Message().ID, strings.TrimSpace(c.Message().Caption), *photo)
+	isOwner := bc.albums.store(
+		albumID, c.Message().ID, strings.TrimSpace(c.Message().Caption), *photo,
+		c.Chat().ID, c.Message().ThreadID, c.Sender().ID,
+	)
 	if !isOwner {
 		return nil
 	}
 
-	time.Sleep(900 * time.Millisecond)
+	// Schedule async flush after 900ms window — handler returns immediately
+	time.AfterFunc(900*time.Millisecond, func() {
+		bc.flushAlbumAndProcess(albumID)
+	})
 
-	caption, photos, ok := bc.albums.flush(albumID)
-	if !ok {
-		return nil
-	}
-	return bc.processPhotoInput(c, caption, photos)
+	return nil
 }
 
 func (bc *BotController) processPhotoInput(c telebot.Context, caption string, photos []albumPhoto) error {
@@ -70,13 +72,18 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 		}
 	}
 
-	var images []bridge.ImageAttachment
+	var (
+		images     []bridge.ImageAttachment
+		downloaded []string
+	)
+	defer func() { removeAll(downloaded) }()
 	for _, p := range photos {
 		filePath, err := bc.downloadTelegramFile(&p.photo.File, fmt.Sprintf("photo_%d.jpg", p.messageID))
 		if err != nil {
 			log.Printf("Failed to download photo: %v", err)
 			continue
 		}
+		downloaded = append(downloaded, filePath)
 		img, err := encodeImageAttachment(filePath, "image/jpeg")
 		if err != nil {
 			log.Printf("Failed to encode photo: %v", err)
@@ -90,10 +97,15 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 
 // encodeImageAttachment reads an image file, base64-encodes it, and returns
 // an ImageAttachment suitable for the bridge protocol.
+// If the file exceeds maxImageBytes, it returns an error.
 func encodeImageAttachment(filePath, defaultMIME string) (bridge.ImageAttachment, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return bridge.ImageAttachment{}, fmt.Errorf("read image %q: %w", filePath, err)
+	}
+	const maxImageBytes = 10 * 1024 * 1024 // 10 MB default
+	if len(data) > maxImageBytes {
+		return bridge.ImageAttachment{}, fmt.Errorf("image %q is %d bytes, exceeds %d byte limit", filePath, len(data), maxImageBytes)
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return bridge.ImageAttachment{
@@ -146,6 +158,7 @@ func (bc *BotController) handleImageDocument(c telebot.Context, doc *telebot.Doc
 		log.Printf("Failed to download image document: %v", err)
 		return bc.processInput(c, text)
 	}
+	defer func() { _ = os.Remove(filePath) }()
 
 	// Determine MIME from filename extension, fall back to doc MIME
 	mimeType := doc.MIME
@@ -235,14 +248,67 @@ func buildDocumentInput(caption, filename, mimeType, filePath string) string {
 	return fmt.Sprintf("%s\n\n[Analise o anexo %s]:\n%s", caption, filename, extractedText)
 }
 
-func (ab *albumBuffer) store(albumID string, messageID int, caption string, photo telebot.Photo) bool {
+// flushAlbumAndProcess flushes a pending album and processes it asynchronously.
+// Called by the 900ms flush timer; runs outside the telebot handler goroutine.
+func (bc *BotController) flushAlbumAndProcess(albumID string) {
+	fa, ok := bc.albums.flush(albumID)
+	if !ok {
+		return
+	}
+
+	stopTyping := startChatActionLoop(bc.bot, &telebot.Chat{ID: fa.chatID}, telebot.UploadingPhoto, typingIndicatorInterval, fa.threadID)
+	defer stopTyping()
+
+	text := strings.TrimSpace(fa.caption)
+	if text == "" {
+		if len(fa.photos) > 1 {
+			text = "Analise estas imagens."
+		} else {
+			text = "Analise esta imagem."
+		}
+	}
+
+	var (
+		images     []bridge.ImageAttachment
+		downloaded []string
+	)
+	defer func() { removeAll(downloaded) }()
+	for _, p := range fa.photos {
+		filePath, err := bc.downloadTelegramFile(&p.photo.File, fmt.Sprintf("photo_%d.jpg", p.messageID))
+		if err != nil {
+			log.Printf("Failed to download photo: %v", err)
+			continue
+		}
+		downloaded = append(downloaded, filePath)
+		img, err := encodeImageAttachment(filePath, "image/jpeg")
+		if err != nil {
+			log.Printf("Failed to encode photo: %v", err)
+			continue
+		}
+		images = append(images, img)
+	}
+
+	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images); err != nil {
+		log.Printf("album: pipeline error for %s: %v", albumID, err)
+	}
+}
+
+func (ab *albumBuffer) store(albumID string, messageID int, caption string, photo telebot.Photo, chatID int64, threadID int, senderID int64) bool {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
 	album, ok := ab.pending[albumID]
 	if !ok {
-		album = &pendingAlbum{ownerMessageID: messageID}
+		album = &pendingAlbum{
+			ownerMessageID: messageID,
+			chatID:         chatID,
+			threadID:       threadID,
+			senderID:       senderID,
+			firstMessageID: messageID,
+		}
 		ab.pending[albumID] = album
+		// Schedule GC: if album owner never arrives, clean up after 5 minutes
+		time.AfterFunc(5*time.Minute, func() { ab.gcExpired(albumID) })
 	}
 	if caption != "" && album.caption == "" {
 		album.caption = caption
@@ -251,13 +317,23 @@ func (ab *albumBuffer) store(albumID string, messageID int, caption string, phot
 	return album.ownerMessageID == messageID
 }
 
-func (ab *albumBuffer) flush(albumID string) (string, []albumPhoto, bool) {
+// flushedAlbum holds all data extracted from a pending album after flush.
+type flushedAlbum struct {
+	caption string
+	photos  []albumPhoto
+	chatID  int64
+	threadID int
+	senderID int64
+	messageID int
+}
+
+func (ab *albumBuffer) flush(albumID string) (*flushedAlbum, bool) {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
 	album, ok := ab.pending[albumID]
 	if !ok {
-		return "", nil, false
+		return nil, false
 	}
 	delete(ab.pending, albumID)
 
@@ -265,7 +341,26 @@ func (ab *albumBuffer) flush(albumID string) (string, []albumPhoto, bool) {
 	sort.SliceStable(photos, func(i, j int) bool {
 		return photos[i].messageID < photos[j].messageID
 	})
-	return album.caption, photos, true
+	return &flushedAlbum{
+		caption:   album.caption,
+		photos:    photos,
+		chatID:    album.chatID,
+		threadID:  album.threadID,
+		senderID:  album.senderID,
+		messageID: album.firstMessageID,
+	}, true
+}
+
+// gcExpired removes an album from pending if it still exists.
+// Called by the TTL timer when the album owner never arrives.
+func (ab *albumBuffer) gcExpired(albumID string) {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+
+	if _, ok := ab.pending[albumID]; ok {
+		delete(ab.pending, albumID)
+		log.Printf("album: gc orphan %s", albumID)
+	}
 }
 
 func resolveAudioAttachment(c telebot.Context) (string, string, bool) {
@@ -305,6 +400,14 @@ func SendContextTextError(message string) error {
 
 func (e sendContextTextError) Error() string {
 	return string(e)
+}
+
+// removeAll removes every path in the slice, ignoring errors.
+// Used by deferred cleanup for downloaded temp files.
+func removeAll(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
 }
 
 func errorAs(err error, target *sendContextTextError) bool {

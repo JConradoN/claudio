@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"gopkg.in/telebot.v3"
-
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
@@ -27,6 +25,7 @@ import (
 )
 
 type app struct {
+	config     *config.AppConfig
 	resolver   *runtime.PathResolver
 	bridge     *bridge.Bridge
 	agents     *agents.Registry
@@ -72,10 +71,10 @@ func bootstrapApp() (*app, error) {
 	checkResult := deps.CheckAll()
 	for _, d := range checkResult.Deps {
 		if d.Required && !d.Found {
-			log.Fatalf("%s is required but not found. Install: %s", d.Name, d.InstallURL)
+			return nil, fmt.Errorf("%s is required but not found. Install: %s", d.Name, d.InstallURL)
 		}
 		if d.Required && d.Found && !d.VersionOK {
-			log.Fatalf("%s v%s found but >= %s required. Update: %s", d.Name, d.Version, d.MinVersion, d.InstallURL)
+			return nil, fmt.Errorf("%s v%s found but >= %s required. Update: %s", d.Name, d.Version, d.MinVersion, d.InstallURL)
 		}
 		if !d.Required && !d.Found {
 			log.Printf("Warning: %s not found — some features may be limited", d.Name)
@@ -170,6 +169,32 @@ func bootstrapApp() (*app, error) {
 	dreamer := dream.New(resolver.Memory(), resolver, br, dreamCfg)
 	bot.SetDreamer(dreamer)
 
+	// Wire project index for fast project lookup.
+	home, _ := os.UserHomeDir()
+	jsonPath := runtime.PersistPath(filepath.Join(home, ".aurelia"))
+	projectIndex := runtime.NewProjectIndex(nil, jsonPath)
+	bot.SetProjectIndex(projectIndex)
+	go func() {
+		rebuildCtx, rebuildCancel := context.WithCancel(context.Background())
+		defer rebuildCancel()
+		// Initial rebuild in background.
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		if err := projectIndex.Rebuild(rebuildCtx); err != nil {
+			log.Printf("project index: initial rebuild error: %v", err)
+		}
+		for {
+			select {
+			case <-ticker.C:
+				if err := projectIndex.Rebuild(rebuildCtx); err != nil {
+					log.Printf("project index: rebuild error: %v", err)
+				}
+			case <-rebuildCtx.Done():
+				return
+			}
+		}
+	}()
+
 	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider)
 	if err != nil {
 		if closeErr := cronStore.Close(); closeErr != nil {
@@ -181,6 +206,7 @@ func bootstrapApp() (*app, error) {
 	cronCtx, cronCancel := context.WithCancel(context.Background())
 
 	return &app{
+		config:     cfg,
 		resolver:   resolver,
 		bridge:     br,
 		agents:     agentReg,
@@ -251,18 +277,6 @@ func setupPersona(resolver *runtime.PathResolver) *persona.CanonicalIdentityServ
 	)
 }
 
-// telegramChatSender adapts a telebot.Bot to the cron.ChatSender interface.
-type telegramChatSender struct {
-	bot *telebot.Bot
-}
-
-func (s *telegramChatSender) Send(chatID int64, text string) error {
-	chat := &telebot.Chat{ID: chatID}
-	return telegram.SendText(s.bot, chat, text)
-}
-
-// setupCronScheduler creates the cron scheduler with Telegram delivery.
-// Returns nil scheduler if agentReg is nil.
 func setupCronScheduler(
 	cronStore *cron.SQLiteCronStore,
 	br *bridge.Bridge,
@@ -284,7 +298,7 @@ func setupCronScheduler(
 		defaultProvider,
 	)
 
-	delivery := cron.NewTelegramDelivery(&telegramChatSender{bot: bot.GetBot()})
+	delivery := cron.NewTelegramDelivery(bot.ChatSender())
 	deliverFn := func(ctx context.Context, job cron.CronJob, result *cron.ExecutionResult, execErr error) error {
 		return delivery.Deliver(ctx, job, result, execErr)
 	}

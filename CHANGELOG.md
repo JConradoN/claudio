@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.1] - 2026-05-14
+
+### Added
+- Memory cache by mtime — avoids redundant disk reads on every turn
+- Project index for fast project lookup with background rebuild
+- Album TTL GC — orphan albums cleaned up after 5 minutes
+- Async album flush — handler returns immediately, no 900ms blocking
+- Event drop logging + counter in bridge readLoop
+- Structured logging (log/slog) with configurable level and format
+- Image size limit (10 MB default) with validation
+- Model list cache with 5-minute TTL
+- ChatSender adapter — removes GetBot() leak
+- Tests for album GC, memory cache, frontmatter extraction, dropped events
+
+### Changed
+- Whitelist lookup from O(n) slice to O(1) map
+- SQLite DSN with busy_timeout=5000, synchronous=NORMAL, foreign_keys=ON
+- Bridge readLoop: bufio.Scanner → bufio.Reader (no 1MB cap)
+- Separated real tokens from estimated tokens in Tracker
+- Session GC — periodic cleanup of stale entries
+- Split input_pipeline.go (1138→5 files)
+- Bundle.js removed from git — built from TS source on first use
+- parseCronCreateResponse uses regex instead of manual fence stripping
+- handleCwdCommand no longer triggers LLM classify
+- deps.Check returns errors instead of log.Fatalf
+- Normalized provider keys cached at startup
+
+### Fixed
+- Temp photo files now cleaned up after upload
+- Bridge process.Kill checks ProcessState before killing
+- SetOnDeath callback dispatched in goroutine
+- Slice copy in bridgeFailureTracker to avoid backing array leak
+- ResolveJobID rejects prefixes with % or _
+- Silent event drops now logged + countable
+
 ## [v0.5.1] - 2026-05-14
 
 ### Changed

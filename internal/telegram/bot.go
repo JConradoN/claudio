@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/cron"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
 	"github.com/igormaneschy/aurelia/internal/runtime"
@@ -49,7 +51,12 @@ type BotController struct {
 	}
 	modelCache       []bridge.ModelInfo
 	modelCacheMu     sync.Mutex
+	modelCacheExpiry time.Time
 	refreshProviderEnv func() // optional hook to re-export provider env vars after /model
+	allowedUsers     map[int64]struct{}
+	allowedGroups    map[int64]struct{}
+	memoryCache      *memoryCache
+	projectIndex     *runtime.ProjectIndex
 }
 
 type albumBuffer struct {
@@ -67,6 +74,10 @@ type pendingAlbum struct {
 	ownerMessageID int
 	caption        string
 	photos         []albumPhoto
+	chatID         int64
+	threadID       int
+	senderID       int64
+	firstMessageID int
 }
 
 type albumPhoto struct {
@@ -102,6 +113,15 @@ func NewBotController(
 
 	botCwd, _ := os.Getwd()
 
+	allowedUsers := make(map[int64]struct{}, len(cfg.TelegramAllowedUserIDs))
+	for _, id := range cfg.TelegramAllowedUserIDs {
+		allowedUsers[id] = struct{}{}
+	}
+	allowedGroups := make(map[int64]struct{}, len(cfg.TelegramAllowedGroupIDs))
+	for _, id := range cfg.TelegramAllowedGroupIDs {
+		allowedGroups[id] = struct{}{}
+	}
+
 	bc := &BotController{
 		bot:              b,
 		config:           cfg,
@@ -120,6 +140,9 @@ func NewBotController(
 		botCwd:           botCwd,
 		pendingBootstrap: make(map[int64]bootstrapState),
 		albums:           newAlbumBuffer(),
+		allowedUsers:     allowedUsers,
+		allowedGroups:    allowedGroups,
+		memoryCache:      newMemoryCache(),
 	}
 
 	bc.setupRoutes()
@@ -140,6 +163,11 @@ func (bc *BotController) SetProviderEnvRefresher(f func()) {
 	bc.refreshProviderEnv = f
 }
 
+// SetProjectIndex injects a cached project name index for fast lookup.
+func (bc *BotController) SetProjectIndex(pi *runtime.ProjectIndex) {
+	bc.projectIndex = pi
+}
+
 // SetDreamer injects the dream system after construction.
 func (bc *BotController) SetDreamer(d interface {
 	AfterTurn()
@@ -149,9 +177,41 @@ func (bc *BotController) SetDreamer(d interface {
 	bc.dreamer = d
 }
 
-// GetBot exposes the underlying Telebot instance.
-func (bc *BotController) GetBot() *telebot.Bot {
-	return bc.bot
+// ChatSender returns a cron.ChatSender backed by this bot instance.
+func (bc *BotController) ChatSender() cron.ChatSender {
+	return &botChatSender{bot: bc.bot}
+}
+
+// botChatSender adapts a telebot.Bot to the cron.ChatSender interface.
+type botChatSender struct {
+	bot *telebot.Bot
+}
+
+func (s *botChatSender) Send(chatID int64, text string) error {
+	_, err := s.bot.Send(&telebot.Chat{ID: chatID}, text, &telebot.SendOptions{DisableWebPagePreview: true})
+	return err
+}
+
+// getModels returns cached models or fetches from bridge with 5-minute TTL.
+func (bc *BotController) getModels(ctx context.Context) ([]bridge.ModelInfo, error) {
+	bc.modelCacheMu.Lock()
+	if bc.modelCache != nil && time.Now().Before(bc.modelCacheExpiry) {
+		cached := bc.modelCache
+		bc.modelCacheMu.Unlock()
+		return cached, nil
+	}
+	bc.modelCacheMu.Unlock()
+
+	models, err := bc.bridge.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	bc.modelCacheMu.Lock()
+	bc.modelCache = models
+	bc.modelCacheExpiry = time.Now().Add(5 * time.Minute)
+	bc.modelCacheMu.Unlock()
+	return models, nil
 }
 
 // Start begins Telegram polling.
@@ -166,27 +226,19 @@ func (bc *BotController) Stop() {
 }
 
 func (bc *BotController) isAllowedUser(userID int64) bool {
-	if bc == nil || bc.config == nil {
+	if bc == nil || bc.allowedUsers == nil {
 		return false
 	}
-	for _, id := range bc.config.TelegramAllowedUserIDs {
-		if id == userID {
-			return true
-		}
-	}
-	return false
+	_, ok := bc.allowedUsers[userID]
+	return ok
 }
 
 func (bc *BotController) isAllowedGroup(chatID int64) bool {
-	if bc == nil || bc.config == nil {
+	if bc == nil || bc.allowedGroups == nil {
 		return false
 	}
-	for _, id := range bc.config.TelegramAllowedGroupIDs {
-		if id == chatID {
-			return true
-		}
-	}
-	return false
+	_, ok := bc.allowedGroups[chatID]
+	return ok
 }
 
 func (bc *BotController) setupRoutes() {

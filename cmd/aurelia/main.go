@@ -4,12 +4,41 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/igormaneschy/aurelia/internal/version"
 )
+
+// setupSlog configures structured logging based on app config.
+func setupSlog(logLevel, logFormat string) {
+	var level slog.Level
+	switch strings.ToLower(logLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+
+	var handler slog.Handler
+	switch strings.ToLower(logFormat) {
+	case "json":
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	default:
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	}
+
+	slog.SetDefault(slog.New(handler))
+}
 
 func main() {
 	if len(os.Args) > 1 {
@@ -44,6 +73,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to bootstrap Aurelia: %v", err)
 	}
+
+	// Set up structured logging from config.
+	setupSlog(app.config.LogLevel, app.config.LogFormat)
+	slog.Info("starting aurelia", "version", version.BuildInfo())
+
 	defer app.close()
 	defer unlock()
 

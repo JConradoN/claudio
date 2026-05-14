@@ -21,13 +21,6 @@ func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
 			sender := c.Sender()
 			chat := c.Chat()
 
-			log.Printf("whitelist check: user=%d chat=%d type=%q title=%q\n",
-				safeSenderID(sender), chat.ID, chat.Type, chat.Title)
-
-			for _, id := range bc.config.TelegramAllowedGroupIDs {
-				log.Printf("  allowed group ID: %d (match=%v)", id, id == chat.ID)
-			}
-
 			switch chat.Type {
 			case telebot.ChatPrivate:
 				if sender != nil && bc.isAllowedUser(sender.ID) {
@@ -137,7 +130,7 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		// Determine agent cwd if an agent is active
 		agentCwd := ""
 		text := c.Message().Text
-		if agent := bc.routeAgent(text); agent != nil && agent.Cwd != "" {
+		if agent := bc.agents.Route(text); agent != nil && agent.Cwd != "" {
 			agentCwd = agent.Cwd
 		}
 
@@ -187,6 +180,8 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 			log.Printf("cwd: failed to bootstrap project memory for %s: %v", args, err)
 		}
 	}
+	// Invalidate memory cache — project changed, memory files may differ
+	bc.invalidateMemoryDirs(chatID, threadID, args)
 
 	msg := fmt.Sprintf("✅ Diretório configurado para este tópico: `%s`", args)
 	if threadID == 0 {
@@ -202,6 +197,7 @@ func (bc *BotController) handleResetCommand(c telebot.Context) error {
 	if bc.dreamer != nil {
 		cwd := bc.sessions.GetCwd(chatID, threadID)
 		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
+		bc.invalidateMemoryDirs(chatID, threadID, cwd)
 	}
 	bc.sessions.Clear(chatID, threadID)
 	bc.tracker.Clear(chatID)
@@ -255,7 +251,7 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	models, err := bc.bridge.ListModels(ctx)
+	models, err := bc.getModels(ctx)
 	if err != nil {
 		return SendText(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err))
 	}
