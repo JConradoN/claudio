@@ -2,10 +2,12 @@ package bridge
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +15,7 @@ import (
 	"sync/atomic"
 )
 
-const eventChannelBuffer = 16
+const eventChannelBuffer = 128
 
 // safeClose closes a channel, recovering from panic if already closed.
 func safeClose(ch chan Event) {
@@ -34,7 +36,7 @@ type Bridge struct {
 	mu      sync.Mutex // guards stdin writes and process lifecycle
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
-	scanner *bufio.Scanner
+	reader  *bufio.Reader
 
 	// pending maps request_id → channel for routing events.
 	pending   map[string]chan Event
@@ -51,6 +53,9 @@ type Bridge struct {
 
 	// onDeath is called when the process exits unexpectedly (not via Stop).
 	onDeath func()
+
+	// droppedEvents counts events dropped due to slow consumers.
+	droppedEvents atomic.Uint64
 }
 
 // New creates a Bridge that runs in bridgeDir.
@@ -118,8 +123,7 @@ func (b *Bridge) startLocked() error {
 
 	b.cmd = cmd
 	b.stdin = stdinPipe
-	b.scanner = bufio.NewScanner(stdoutPipe)
-	b.scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	b.reader = bufio.NewReaderSize(stdoutPipe, 64*1024)
 	b.started = true
 	b.stopping = false
 	b.done = make(chan struct{})
@@ -134,41 +138,43 @@ func (b *Bridge) startLocked() error {
 func (b *Bridge) readLoop() {
 	defer close(b.done)
 
-	for b.scanner.Scan() {
-		line := b.scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		line, err := b.reader.ReadBytes('\n')
+		buf := bytes.TrimRight(line, "\n\r")
+
+		if len(buf) > 0 {
+			var ev Event
+			if parseErr := json.Unmarshal(buf, &ev); parseErr == nil {
+				rid := ev.RequestID
+
+				b.pendingMu.Lock()
+				ch, ok := b.pending[rid]
+				b.pendingMu.Unlock()
+
+				if ok {
+					// Non-blocking send — channel has buffer.
+					select {
+					case ch <- ev:
+					default:
+						b.droppedEvents.Add(1)
+						slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
+					}
+
+					if ev.IsTerminal() {
+						b.pendingMu.Lock()
+						delete(b.pending, rid)
+						b.pendingMu.Unlock()
+						safeClose(ch)
+					}
+				}
+			}
 		}
 
-		var ev Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			// Can't route without request_id, skip.
-			continue
-		}
-
-		rid := ev.RequestID
-
-		b.pendingMu.Lock()
-		ch, ok := b.pending[rid]
-		b.pendingMu.Unlock()
-
-		if !ok {
-			// No listener for this request_id — drop event.
-			continue
-		}
-
-		// Non-blocking send — channel has buffer.
-		select {
-		case ch <- ev:
-		default:
-			// Buffer full — drop event rather than block reader.
-		}
-
-		if ev.IsTerminal() {
-			b.pendingMu.Lock()
-			delete(b.pending, rid)
-			b.pendingMu.Unlock()
-			safeClose(ch)
+		if err != nil {
+			if err != io.EOF {
+				slog.Error("bridge: read error", "error", err)
+			}
+			break
 		}
 	}
 
@@ -178,7 +184,7 @@ func (b *Bridge) readLoop() {
 	cb := b.onDeath
 	b.mu.Unlock()
 	if !stopping && cb != nil {
-		cb()
+		go cb()
 	}
 
 	// Process exited or stdout closed — close all pending channels.
@@ -220,7 +226,7 @@ func (b *Bridge) Stop() {
 
 	// Ensure process is reaped.
 	if cmd != nil {
-		if cmd.Process != nil {
+		if cmd.Process != nil && (cmd.ProcessState == nil || !cmd.ProcessState.Exited()) {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
@@ -232,11 +238,16 @@ func (b *Bridge) Stop() {
 	b.stopping = false
 	b.cmd = nil
 	b.stdin = nil
-	b.scanner = nil
+	b.reader = nil
 	b.pendingMu.Lock()
 	b.pending = make(map[string]chan Event)
 	b.pendingMu.Unlock()
 	b.mu.Unlock()
+}
+
+// DroppedEvents returns the number of events dropped due to slow consumers.
+func (b *Bridge) DroppedEvents() uint64 {
+	return b.droppedEvents.Load()
 }
 
 // Execute sends a request to the long-lived Bridge process and returns a

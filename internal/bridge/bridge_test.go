@@ -462,6 +462,54 @@ rl.on('close', () => process.exit(0));
 	time.Sleep(100 * time.Millisecond)
 }
 
+// floodMockJS sends count assistant events followed by a result event.
+const floodMockJS = `
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+
+rl.on('line', (line) => {
+    let req;
+    try { req = JSON.parse(line); } catch(e) { return; }
+    const rid = req.request_id || "";
+    if (req.command === "flood") {
+        const count = parseInt(req.prompt) || 400;
+        for (let i = 0; i < count; i++) {
+            process.stdout.write(JSON.stringify({event:"assistant",request_id:rid,text:"msg " + i}) + "\n");
+        }
+        process.stdout.write(JSON.stringify({event:"result",request_id:rid,content:"done"}) + "\n");
+    }
+});
+
+rl.on('close', () => { process.exit(0); });
+`
+
+func TestBridge_DroppedEvents_WhenConsumerSlow(t *testing.T) {
+	dir := t.TempDir()
+	b := newMockBridge(t, dir, floodMockJS)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Send a flood of events — enough to overflow ch(128) + out(128) = 256
+	// total capacity. The consumer never reads, so every event beyond
+	// capacity hits the non-blocking send's default branch.
+	_, err := b.Execute(ctx, Request{Command: "flood", Prompt: "400", RequestID: "flood-1"})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+
+	// Wait for the bridge to finish processing: the flood mock JS sends all
+	// events synchronously then exits (no more stdin). readLoop reads the
+	// pipe, fills the channel (buffer=128), and drops the remaining events.
+	time.Sleep(500 * time.Millisecond)
+
+	dropped := b.DroppedEvents()
+	if dropped == 0 {
+		t.Fatal("expected dropped events > 0 when consumer never reads")
+	}
+	t.Logf("dropped %d events (buffer=%d)", dropped, eventChannelBuffer)
+}
+
 func TestBridge_Stop_And_Restart(t *testing.T) {
 	dir := t.TempDir()
 
