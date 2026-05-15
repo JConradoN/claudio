@@ -331,6 +331,11 @@ func (b *Bridge) Execute(ctx context.Context, req Request) (<-chan Event, error)
 	out := make(chan Event, eventChannelBuffer)
 	go func() {
 		defer close(out)
+		cleanupPending := func() {
+			b.pendingMu.Lock()
+			delete(b.pending, req.RequestID)
+			b.pendingMu.Unlock()
+		}
 		for {
 			select {
 			case ev, ok := <-ch:
@@ -340,15 +345,32 @@ func (b *Bridge) Execute(ctx context.Context, req Request) (<-chan Event, error)
 				select {
 				case out <- ev:
 				case <-ctx.Done():
+					cleanupPending()
 					return
 				}
 			case <-ctx.Done():
+				cleanupPending()
 				return
 			}
 		}
 	}()
 
 	return out, nil
+}
+
+// CancelRequest asks the bridge process to cancel an in-flight request.
+func (b *Bridge) CancelRequest(ctx context.Context, requestID string) error {
+	if requestID == "" {
+		return nil
+	}
+	ev, err := b.ExecuteSync(ctx, Request{Command: "cancel", TargetRequestID: requestID})
+	if err != nil {
+		return fmt.Errorf("bridge: cancel request %s: %w", requestID, err)
+	}
+	if ev.Type == "error" {
+		return fmt.Errorf("bridge: cancel request %s: %s", requestID, ev.Message)
+	}
+	return nil
 }
 
 // ExecuteSync sends a request and blocks until a terminal event (result or error)

@@ -2,10 +2,11 @@ package bridge
 
 // Request sent to Bridge process via stdin as JSON.
 type Request struct {
-	Command   string         `json:"command"`
-	Prompt    string         `json:"prompt,omitempty"`
-	RequestID string         `json:"request_id,omitempty"`
-	Options   RequestOptions `json:"options,omitempty"`
+	Command         string         `json:"command"`
+	Prompt          string         `json:"prompt,omitempty"`
+	RequestID       string         `json:"request_id,omitempty"`
+	TargetRequestID string         `json:"target_request_id,omitempty"`
+	Options         RequestOptions `json:"options,omitempty"`
 }
 
 // ImageAttachment represents a base64-encoded image to send alongside the prompt.

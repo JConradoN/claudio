@@ -40,6 +40,7 @@ interface Request {
   command: string;
   prompt: string;
   request_id?: string;
+  target_request_id?: string;
   options?: RequestOptions;
 }
 
@@ -60,6 +61,12 @@ interface SessionLookup {
 const MAX_SESSION_CACHE = 256;
 const sessionByID = new Map<string, SessionLookup>();
 let lastSessionID = "";
+
+interface ActiveRequest {
+  cancel(reason: string): void;
+}
+
+const activeRequests = new Map<string, ActiveRequest>();
 
 function rememberSession(id: string, lookup: SessionLookup): void {
   // Touch on update so re-resumed sessions stay warm.
@@ -272,17 +279,41 @@ async function handleQuery(req: Request): Promise<void> {
   );
 
   const timeoutMs = 10 * 60 * 1000;
-  const timeout = setTimeout(() => {
-    log(`query timeout — rid=${reqId} no result after 10 minutes`);
-    emitReq({ event: "error", message: "query timeout: no result after 10 minutes" });
-  }, timeoutMs);
-
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let canceled = false;
+  let terminalEmitted = false;
   let turnCount = 0;
   let session: Awaited<ReturnType<typeof createPiSession>>["session"] | undefined;
   const startedAt = Date.now();
 
+  const emitTerminalError = (message: string): void => {
+    if (terminalEmitted) return;
+    terminalEmitted = true;
+    emitReq({ event: "error", message });
+  };
+
+  const cancelActive = (reason: string): void => {
+    canceled = true;
+    log(`query cancel — rid=${reqId} reason=${reason}`);
+    try {
+      session?.dispose();
+    } catch (disposeErr) {
+      log(`session cancel dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+    }
+    emitTerminalError(reason);
+    activeRequests.delete(reqId);
+  };
+
+  activeRequests.set(reqId, { cancel: cancelActive });
+  timeout = setTimeout(() => {
+    log(`query timeout — rid=${reqId} no result after 10 minutes`);
+    cancelActive("query timeout: no result after 10 minutes");
+  }, timeoutMs);
+
   try {
     ({ session } = await createPiSession(opts));
+    if (canceled) throw new Error("request canceled");
+
     const sessionID = session.sessionId;
     lastSessionID = sessionID;
     rememberSession(sessionID, { id: sessionID, file: session.sessionFile });
@@ -295,6 +326,7 @@ async function handleQuery(req: Request): Promise<void> {
     });
 
     const unsubscribe = session.subscribe((event) => {
+      if (terminalEmitted) return;
       switch (event.type) {
         case "message_update": {
           const update = event.assistantMessageEvent;
@@ -331,12 +363,7 @@ async function handleQuery(req: Request): Promise<void> {
     try {
       const images = opts?.images;
       if (images && images.length > 0) {
-        // Build content blocks: text + image blocks
-        // Images use the PI AI SDK's ImageContent format:
-        // { type: "image", data: "<base64>", mimeType: "<mime>" }
-        const contentBlocks: Record<string, unknown>[] = [
-          { type: "text", text: req.prompt },
-        ];
+        const contentBlocks: Record<string, unknown>[] = [{ type: "text", text: req.prompt }];
         for (const img of images) {
           contentBlocks.push({
             type: "image",
@@ -352,24 +379,30 @@ async function handleQuery(req: Request): Promise<void> {
       unsubscribe();
     }
 
-    const stats = session.getSessionStats();
-    const content = session.getLastAssistantText() ?? "";
-    emitReq({
-      event: "result",
-      content,
-      cost_usd: stats.cost,
-      session_id: sessionID,
-      duration_ms: Date.now() - startedAt,
-      num_turns: turnCount || stats.assistantMessages,
-      input_tokens: stats.tokens.input,
-      output_tokens: stats.tokens.output,
-    });
+    if (!terminalEmitted) {
+      const stats = session.getSessionStats();
+      const content = session.getLastAssistantText() ?? "";
+      terminalEmitted = true;
+      emitReq({
+        event: "result",
+        content,
+        cost_usd: stats.cost,
+        session_id: sessionID,
+        duration_ms: Date.now() - startedAt,
+        num_turns: turnCount || stats.assistantMessages,
+        input_tokens: stats.tokens.input,
+        output_tokens: stats.tokens.output,
+      });
+    }
   } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    log(`query error: rid=${reqId} ${errMsg}`);
-    emitReq({ event: "error", message: errMsg });
+    if (!terminalEmitted) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`query error: rid=${reqId} ${errMsg}`);
+      emitTerminalError(errMsg);
+    }
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
+    activeRequests.delete(reqId);
     if (session) {
       try {
         session.dispose();
@@ -412,6 +445,22 @@ async function handleRequest(line: string): Promise<void> {
 
     case "ping": {
       emit({ event: "pong", request_id: reqId });
+      break;
+    }
+
+    case "cancel": {
+      const target = req.target_request_id || "";
+      if (!target) {
+        emitReq({ event: "error", message: "missing 'target_request_id' for cancel command" });
+        return;
+      }
+      const active = activeRequests.get(target);
+      if (!active) {
+        emitReq({ event: "result", content: `request ${target} is not active` });
+        return;
+      }
+      active.cancel("request canceled");
+      emitReq({ event: "result", content: `request ${target} canceled` });
       break;
     }
 

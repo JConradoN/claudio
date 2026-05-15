@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -27,25 +28,62 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 		return errors.New("pipeline output is nil")
 	}
 
-	agent := s.routeAgent(text)
-	userText := stripAgentPrefix(text, agent)
+	input := pipelineInput{chatID: chatID, threadID: threadID, messageID: messageID, text: text, images: images}
+	run, admission, active := s.runs.admit(input)
+	switch admission {
+	case admitStart:
+		go s.processRun(input, run)
+	case admitCancelOnly:
+		_, _ = s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior.")
+	case admitSupersede:
+		_, _ = s.output.SendText(chatID, threadID, "🔁 Interrompi o pedido anterior e vou seguir com sua correção.")
+	case admitStatus:
+		_, _ = s.output.SendText(chatID, threadID, "⏳ Ainda estou processando "+active.description()+".")
+	case admitQueued:
+		_, _ = s.output.SendText(chatID, threadID, "📥 Ainda estou processando o pedido anterior; coloquei sua mensagem na fila.")
+	case admitReplacedQueued:
+		_, _ = s.output.SendText(chatID, threadID, "🔁 Atualizei a próxima instrução na fila.")
+	}
+	return nil
+}
 
-	if _, active := s.sessions.GetWithState(chatID, threadID); !active {
-		s.autoDetectProject(chatID, threadID, userText)
+func (s *Service) processRun(input pipelineInput, run *activeRun) {
+	defer s.startQueuedAfter(run)
+
+	agent := s.routeAgent(input.text)
+	userText := stripAgentPrefix(input.text, agent)
+
+	if run.ctx.Err() != nil {
+		return
+	}
+	if _, active := s.sessions.GetWithState(input.chatID, input.threadID); !active {
+		s.autoDetectProject(input.chatID, input.threadID, userText)
 	}
 
-	systemPrompt, err := s.buildSystemPrompt(userText, agent, chatID, messageID, threadID)
+	if run.ctx.Err() != nil {
+		return
+	}
+	systemPrompt, err := s.buildSystemPrompt(userText, agent, input.chatID, input.messageID, input.threadID)
 	if err != nil {
 		log.Printf("Failed to build system prompt: %v", err)
-		return s.output.SendError(chatID, threadID, "Falha ao montar o prompt de sistema.")
+		_ = s.output.SendError(input.chatID, input.threadID, "Falha ao montar o prompt de sistema.")
+		return
 	}
 
-	req := s.buildBridgeRequest(userText, systemPrompt, agent, chatID, threadID)
-	req.Options.Images = images
-	s.applyVisionFallback(&req, images)
+	req := s.buildBridgeRequest(userText, systemPrompt, agent, input.chatID, input.threadID)
+	req.RequestID = fmt.Sprintf("run-%d", run.id)
+	req.Options.Images = input.images
+	s.applyVisionFallback(&req, input.images)
 
-	go s.executeAsync(chatID, threadID, messageID, req, userText)
-	return nil
+	s.executeAsync(run.ctx, input.chatID, input.threadID, input.messageID, req, userText)
+}
+
+func (s *Service) startQueuedAfter(run *activeRun) {
+	nextRun, nextInput := s.runs.finish(run)
+	if nextRun == nil || nextInput == nil {
+		return
+	}
+	go s.processRun(*nextInput, nextRun)
 }
 
 func stripAgentPrefix(text string, agent *agents.Agent) string {
@@ -176,15 +214,17 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 }
 
 // executeAsync runs bridge execution with typing/progress reporting.
-func (s *Service) executeAsync(chatID int64, threadID int, messageID int, req bridge.Request, userText string) {
+func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID int, messageID int, req bridge.Request, userText string) {
 	stopTyping := s.output.StartTyping(chatID, threadID)
 	defer stopTyping()
 
 	progress := s.output.NewProgress(chatID, threadID)
 	defer progress.Delete()
 
-	ctx, cancel := context.WithTimeout(context.Background(), bridgeExecutionTimeout)
+	ctx, cancel := context.WithTimeout(parentCtx, bridgeExecutionTimeout)
 	defer cancel()
+	cancelDone := s.cancelBridgeOnContextDone(ctx, req.RequestID)
+	defer cancelDone()
 
 	ch, err := s.bridge.Execute(ctx, req)
 	if err != nil {
@@ -196,6 +236,9 @@ func (s *Service) executeAsync(chatID int64, threadID int, messageID int, req br
 	}
 
 	outcome := s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
+	if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
+		return
+	}
 	if outcome == OutcomeSuccess {
 		s.bridgeFailures.reset()
 		return
@@ -232,7 +275,39 @@ func (s *Service) executeAsync(chatID int64, threadID int, messageID int, req br
 	}
 
 	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
+	if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
+		return
+	}
 	s.handleRetryOutcome(chatID, threadID, outcome)
+}
+
+func (s *Service) cancelBridgeOnContextDone(ctx context.Context, requestID string) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := s.bridge.CancelRequest(cancelCtx, requestID); err != nil {
+				log.Printf("bridge: cancel request %s failed: %v", requestID, err)
+			}
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Context, chatID int64, threadID int) bool {
+	if parentCtx.Err() != nil {
+		log.Printf("pipeline: run canceled chat=%d thread=%d", chatID, threadID)
+		return true
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Printf("pipeline: run timeout chat=%d thread=%d", chatID, threadID)
+		_ = s.output.SendError(chatID, threadID, "Tempo limite atingido antes de concluir. Interrompi o processamento para evitar travamento.")
+		return true
+	}
+	return false
 }
 
 func shortSessionID(sid string) string {

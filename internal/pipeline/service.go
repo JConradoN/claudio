@@ -71,6 +71,7 @@ type Service struct {
 	memoryCache    *memoryCache
 	projectIndex   *runtime.ProjectIndex
 	bridgeFailures FailureTracker
+	runs           *runSupervisor
 }
 
 // NewService builds a pipeline service with explicit dependencies.
@@ -92,6 +93,7 @@ func NewService(cfg Config) *Service {
 		nudgeBuffer:  session.NewNudgeBuffer(),
 		memoryCache:  newMemoryCache(),
 		projectIndex: cfg.ProjectIndex,
+		runs:         newRunSupervisor(),
 	}
 }
 

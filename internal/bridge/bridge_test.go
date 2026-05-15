@@ -206,6 +206,54 @@ rl.on('close', () => process.exit(0));
 	}
 }
 
+func TestBridge_CancelRequest(t *testing.T) {
+	dir := t.TempDir()
+
+	cancelMockJS := `
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+const active = new Set();
+rl.on('line', (line) => {
+    const req = JSON.parse(line);
+    const rid = req.request_id || "";
+    if (req.command === "query") {
+        active.add(rid);
+        process.stdout.write(JSON.stringify({event:"system",request_id:rid,session_id:"sess"}) + "\n");
+        return;
+    }
+    if (req.command === "cancel") {
+        const target = req.target_request_id || "";
+        active.delete(target);
+        process.stdout.write(JSON.stringify({event:"error",request_id:target,message:"request canceled"}) + "\n");
+        process.stdout.write(JSON.stringify({event:"result",request_id:rid,content:"canceled " + target}) + "\n");
+        return;
+    }
+});
+rl.on('close', () => process.exit(0));
+`
+	b := newMockBridge(t, dir, cancelMockJS)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := b.Execute(ctx, Request{Command: "query", RequestID: "query-1", Prompt: "test"})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+
+	if ev := <-ch; ev.Type != "system" {
+		t.Fatalf("first event = %q, want system", ev.Type)
+	}
+	if err := b.CancelRequest(ctx, "query-1"); err != nil {
+		t.Fatalf("CancelRequest() error: %v", err)
+	}
+
+	ev := <-ch
+	if ev.Type != "error" || ev.Message != "request canceled" {
+		t.Fatalf("cancel event = %+v, want request canceled error", ev)
+	}
+}
+
 func TestBridge_Ping(t *testing.T) {
 	dir := t.TempDir()
 	b := newMockBridge(t, dir, longLivedMockJS)

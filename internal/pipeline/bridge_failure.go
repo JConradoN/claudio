@@ -12,6 +12,8 @@ const (
 	OutcomeSuccess      Outcome = iota // terminal "result" event
 	OutcomeLLMError                    // terminal "error" event
 	OutcomeProcessDeath                // channel closed without terminal event
+	OutcomeCanceled                    // user canceled the active run
+	OutcomeTimeout                     // run exceeded its deadline
 )
 
 const (

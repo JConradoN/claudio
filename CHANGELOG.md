@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.4] - 2026-05-15
+
+### Added
+- Run supervisor per chat/thread to serialize active Telegram agent work while allowing independent topics to run in parallel.
+- Concurrent message handling for cancel, supersede/correction, status, and queued follow-up intents.
+- Bridge cancel command for best-effort interruption of active PI SDK requests.
+
+### Fixed
+- Context cancellation and timeouts no longer look like bridge process death or trigger retry loops.
+- Bridge pending requests are cleaned up when callers cancel.
+
 ## [v0.6.3] - 2026-05-14
 
 ### Refactor
