@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.3] - 2026-05-14
+
+### Refactor
+- Extracted the LLM/message pipeline into `internal/pipeline.Service`, moving prompt building, project detection, memory cache, bridge execution, and event handling out of `internal/telegram`.
+- Kept `BotController` focused on Telegram bootstrap, commands, and I/O through a `pipeline.Output` adapter.
+
+### Changed
+- Moved pipeline-focused tests for memory cache, prompt building, and project detection into `internal/pipeline`.
+- Marked the optimization plan as fully complete after T14.
+
 ## [v0.6.2] - 2026-05-14
 
 ### Fixed

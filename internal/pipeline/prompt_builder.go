@@ -1,4 +1,4 @@
-package telegram
+package pipeline
 
 import (
 	"fmt"
@@ -17,8 +17,12 @@ const (
 	maxMemoryTotalChars = 40000
 )
 
-// buildSystemPrompt assembles all system prompt sections for a request.
-func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int) (string, error) {
+// BuildSystemPrompt assembles all system prompt sections for a request.
+func (bc *Service) BuildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int) (string, error) {
+	return bc.buildSystemPrompt(userText, agent, chatID, messageID, threadID)
+}
+
+func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int) (string, error) {
 	var sections []string
 	var personaLen, agentLen, cronLen, telegramLen int
 
@@ -86,7 +90,7 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 }
 
 // effectiveCwd resolves the working directory: agent override → chat-level.
-func (bc *BotController) effectiveCwd(agent *agents.Agent, chatID int64, threadID int) string {
+func (bc *Service) effectiveCwd(agent *agents.Agent, chatID int64, threadID int) string {
 	if agent != nil && agent.Cwd != "" {
 		return agent.Cwd
 	}
@@ -94,7 +98,7 @@ func (bc *BotController) effectiveCwd(agent *agents.Agent, chatID int64, threadI
 }
 
 // buildTelegramInstructions returns instructions for interacting with the Telegram chat.
-func (bc *BotController) buildTelegramInstructions(chatID int64, messageID int, threadID int, agent *agents.Agent) string {
+func (bc *Service) buildTelegramInstructions(chatID int64, messageID int, threadID int, agent *agents.Agent) string {
 	bin := "aurelia"
 	if bc.exePath != "" {
 		bin = bc.exePath
@@ -146,7 +150,7 @@ func topicMemoryDir(memoryDir string, chatID int64, threadID int) string {
 }
 
 // buildMemoryInstructions returns the system prompt section for persistent memory.
-func (bc *BotController) buildMemoryInstructions(chatID int64, threadID int, agent *agents.Agent) string {
+func (bc *Service) buildMemoryInstructions(chatID int64, threadID int, agent *agents.Agent) string {
 	var sb strings.Builder
 
 	cwd := bc.effectiveCwd(agent, chatID, threadID)
@@ -219,7 +223,7 @@ Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversati
 // loadMemoryContents reads memory files from all available layers and returns
 // their contents for injection into the system prompt.
 // Total output is capped at maxMemoryTotalChars; layers beyond the cap are skipped.
-func (bc *BotController) loadMemoryContents(chatID int64, threadID int, agent *agents.Agent) string {
+func (bc *Service) loadMemoryContents(chatID int64, threadID int, agent *agents.Agent) string {
 	var sb strings.Builder
 	var total int
 
@@ -264,7 +268,7 @@ func (bc *BotController) loadMemoryContents(chatID int64, threadID int, agent *a
 
 // loadMemoryDir reads MEMORY.md and all .md files from a directory.
 // Results are cached by mtime to avoid redundant disk reads.
-func (bc *BotController) loadMemoryDir(dir string) string {
+func (bc *Service) loadMemoryDir(dir string) string {
 	if dir == "" {
 		return ""
 	}
@@ -339,7 +343,7 @@ func truncateToBudget(content string, budget int) string {
 }
 
 // buildProjectDocsSection reads CLAUDE.md and AGENTS.md from the active cwd.
-func (bc *BotController) buildProjectDocsSection(chatID int64, agent *agents.Agent, threadID int) string {
+func (bc *Service) buildProjectDocsSection(chatID int64, agent *agents.Agent, threadID int) string {
 	cwd := ""
 	if agent != nil && agent.Cwd != "" {
 		cwd = agent.Cwd
@@ -370,7 +374,7 @@ func (bc *BotController) buildProjectDocsSection(chatID int64, agent *agents.Age
 }
 
 // buildCronInstructions returns the system prompt section for cron scheduling.
-func (bc *BotController) buildCronInstructions(chatID int64) string {
+func (bc *Service) buildCronInstructions(chatID int64) string {
 	bin := "aurelia"
 	if bc.exePath != "" {
 		bin = bc.exePath

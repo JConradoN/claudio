@@ -16,6 +16,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/cron"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
+	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 	"github.com/igormaneschy/aurelia/internal/version"
@@ -43,20 +44,20 @@ type BotController struct {
 	bridgeFailures   bridgeFailureTracker
 	orchestrator     *orchestrator.Orchestrator
 	nudgeBuffer      *session.NudgeBuffer
-	botCwd          string // working directory of the aurelia daemon
+	botCwd           string // working directory of the aurelia daemon
 	dreamer          interface {
 		AfterTurn()
 		AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 		FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 	}
-	modelCache       []bridge.ModelInfo
-	modelCacheMu     sync.Mutex
-	modelCacheExpiry time.Time
+	modelCache         []bridge.ModelInfo
+	modelCacheMu       sync.Mutex
+	modelCacheExpiry   time.Time
 	refreshProviderEnv func() // optional hook to re-export provider env vars after /model
-	allowedUsers     map[int64]struct{}
-	allowedGroups    map[int64]struct{}
-	memoryCache      *memoryCache
-	projectIndex     *runtime.ProjectIndex
+	allowedUsers       map[int64]struct{}
+	allowedGroups      map[int64]struct{}
+	projectIndex       *runtime.ProjectIndex
+	pipeline           *pipelinepkg.Service
 }
 
 type albumBuffer struct {
@@ -142,8 +143,21 @@ func NewBotController(
 		albums:           newAlbumBuffer(),
 		allowedUsers:     allowedUsers,
 		allowedGroups:    allowedGroups,
-		memoryCache:      newMemoryCache(),
 	}
+	bc.pipeline = pipelinepkg.NewService(pipelinepkg.Config{
+		AppConfig: bc.config,
+		Bridge:    bc.bridge,
+		Agents:    bc.agents,
+		Persona:   bc.persona,
+		Sessions:  bc.sessions,
+		Tracker:   bc.tracker,
+		Resolver:  bc.resolver,
+		MemoryDir: bc.memoryDir,
+		ExePath:   bc.exePath,
+		BotCwd:    bc.botCwd,
+		Output:    telegramPipelineOutput{bc: bc},
+	})
+	bc.nudgeBuffer = bc.pipeline.NudgeBuffer()
 
 	bc.setupRoutes()
 	return bc, nil
@@ -153,6 +167,7 @@ func NewBotController(
 // Called separately to avoid changing the NewBotController signature.
 func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 	bc.orchestrator = o
+	bc.ensurePipeline().SetOrchestrator(o)
 }
 
 // SetProviderEnvRefresher installs a callback that will be invoked after the
@@ -166,6 +181,7 @@ func (bc *BotController) SetProviderEnvRefresher(f func()) {
 // SetProjectIndex injects a cached project name index for fast lookup.
 func (bc *BotController) SetProjectIndex(pi *runtime.ProjectIndex) {
 	bc.projectIndex = pi
+	bc.ensurePipeline().SetProjectIndex(pi)
 }
 
 // SetDreamer injects the dream system after construction.
@@ -175,6 +191,7 @@ func (bc *BotController) SetDreamer(d interface {
 	FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
 }) {
 	bc.dreamer = d
+	bc.ensurePipeline().SetDreamer(d)
 }
 
 // ChatSender returns a cron.ChatSender backed by this bot instance.

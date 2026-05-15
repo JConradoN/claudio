@@ -119,5 +119,3 @@ Responda de forma polida, prestativa e organizada.
 NUNCA use tools internas de scheduling — elas morrem com a sessao.
 Para TODOS os agendamentos, use o CLI da Aurelia via Bash. O sistema prompt contem as instrucoes.
 `
-
-

@@ -1,4 +1,4 @@
-package telegram
+package pipeline
 
 import "testing"
 
@@ -18,21 +18,21 @@ name: my-project
 ---
 Some content`,
 			field: "name",
-			want: "my-project",
+			want:  "my-project",
 		},
 		{
 			name: "no frontmatter",
 			content: `Just content.
 No frontmatter here.`,
 			field: "name",
-			want: "",
+			want:  "",
 		},
 		{
 			name: "empty frontmatter",
 			content: `---
 ---`,
 			field: "name",
-			want: "",
+			want:  "",
 		},
 		{
 			name: "field not present",
@@ -41,7 +41,7 @@ other: value
 ---
 Content`,
 			field: "name",
-			want: "",
+			want:  "",
 		},
 	}
 

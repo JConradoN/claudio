@@ -393,11 +393,11 @@ go vet ./...                # baseline sem warnings
 4. `BotController` mantém só I/O do Telegram + dispatch para `pipelineService.Process(ctx, input)`.
 5. Atualizar `cmd/aurelia/app.go` para construir Service antes do Controller.
 
-**Done when** (deferido — PR futuro):
-- [ ] `internal/pipeline/` criado.
-- [ ] `BotController` reduzido a ~400 linhas (de ~700+).
-- [ ] Testes adaptados ou movidos.
-- [ ] Build + testes verdes.
+**Done when**:
+- [x] `internal/pipeline/` criado.
+- [x] `BotController` reduzido a ~400 linhas (de ~700+).
+- [x] Testes adaptados ou movidos.
+- [x] Build + testes verdes.
 
 **Risco**: alto — toca em muitos arquivos. Fazer em PR isolado, depois do T13.
 
@@ -710,13 +710,13 @@ if m := fenceRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
 |------|---------|-----------|-----------|
 | 1 — Quick wins | T1-T5 | 5/5 | — |
 | 2 — Médias | T6-T12 | 7/7 | — |
-| 3 — Estruturais | T13-T16 | 3/4 | T14 |
-| 4 — Qualidade | T17-T34 | 17/18 | T14 |
-| **Total** | **34** | **32/34** | **2** |
+| 3 — Estruturais | T13-T16 | 4/4 | — |
+| 4 — Qualidade | T17-T34 | 18/18 | — |
+| **Total** | **34** | **34/34** | — |
 
 **Status atual (última atualização: 2026-05-14):**
-- ✅ 32 tarefas implementadas e commitadas (v0.5.1 → v0.6.1)
-- ⏳ T14 (PipelineService) — deferido para PR isolado (alto risco)
+- ✅ 34 tarefas implementadas.
+- ✅ T14 (PipelineService) extraído para `internal/pipeline/`; mudanças locais ainda não commitadas.
 
 **T25** (nudge/dream .tmpl) e **T26** (onboarding move) — ✅ COMPLETOS nestas últimas sessões.
 

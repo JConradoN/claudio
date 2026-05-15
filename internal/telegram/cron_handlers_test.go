@@ -203,5 +203,3 @@ func TestCronCommandHandler_HandleText_PropagatesServiceError(t *testing.T) {
 		t.Fatalf("expected service error %v, got %v", expectedErr, err)
 	}
 }
-
-

@@ -1,4 +1,4 @@
-package telegram
+package pipeline
 
 import (
 	"os"
@@ -110,9 +110,9 @@ func (c *memoryCache) invalidate(dir string) {
 	c.mu.Unlock()
 }
 
-// invalidateMemoryDirs clears cached entries for all memory directories that may
+// InvalidateMemoryDirs clears cached entries for all memory directories that may
 // have been modified. Called after nudge/dream writes and CWD changes.
-func (bc *BotController) invalidateMemoryDirs(chatID int64, threadID int, cwd string) {
+func (bc *Service) InvalidateMemoryDirs(chatID int64, threadID int, cwd string) {
 	if bc.memoryCache == nil {
 		return
 	}

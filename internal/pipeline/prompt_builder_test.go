@@ -1,4 +1,4 @@
-package telegram
+package pipeline
 
 import (
 	"fmt"
@@ -20,7 +20,7 @@ func TestLoadMemoryContents_RespectsTotalCap(t *testing.T) {
 		}
 	}
 
-	bc := &BotController{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
+	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
 	got := bc.loadMemoryContents(1, 0, nil)
 
 	if len(got) > maxMemoryTotalChars {

@@ -1,4 +1,4 @@
-package telegram
+package pipeline
 
 import (
 	"context"
@@ -163,7 +163,7 @@ func scanForProject(ctx context.Context, text string) string {
 
 // detectProjectPath tries to find a project path from the user message.
 // ctx controls timeout — the function checks ctx.Err() between I/O operations.
-func (bc *BotController) detectProjectPath(ctx context.Context, text string) string {
+func (bc *Service) detectProjectPath(ctx context.Context, text string) string {
 	// 1. Absolute path in text
 	for _, word := range strings.Fields(text) {
 		if ctx.Err() != nil {
@@ -217,7 +217,7 @@ func (bc *BotController) detectProjectPath(ctx context.Context, text string) str
 }
 
 // detectFromMemoryFiles searches memory files for projects mentioned in text.
-func (bc *BotController) detectFromMemoryFiles(text string) string {
+func (bc *Service) detectFromMemoryFiles(text string) string {
 	entries, err := os.ReadDir(bc.memoryDir)
 	if err != nil {
 		return ""

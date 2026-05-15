@@ -138,5 +138,3 @@ func formatCronJobs(jobs []cron.CronJob) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-

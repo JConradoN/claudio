@@ -18,7 +18,7 @@ func TestBuildSystemPrompt_WithoutDependencies(t *testing.T) {
 
 	bc := &BotController{
 		config: &config.AppConfig{
-			Providers:        map[string]config.ProviderConfig{},
+			Providers: map[string]config.ProviderConfig{},
 		},
 		sessions: session.NewStore(),
 	}
@@ -37,7 +37,7 @@ func TestBuildSystemPrompt_WithAgent(t *testing.T) {
 
 	bc := &BotController{
 		config: &config.AppConfig{
-			Providers:        map[string]config.ProviderConfig{},
+			Providers: map[string]config.ProviderConfig{},
 		},
 		sessions: session.NewStore(),
 	}
@@ -64,7 +64,7 @@ func TestBuildSystemPrompt_AgentWithEmptyPrompt(t *testing.T) {
 
 	bc := &BotController{
 		config: &config.AppConfig{
-			Providers:        map[string]config.ProviderConfig{},
+			Providers: map[string]config.ProviderConfig{},
 		},
 		sessions: session.NewStore(),
 	}
@@ -253,4 +253,3 @@ func TestBridgeFailureTracker_EmptyNotInCooldown(t *testing.T) {
 		t.Fatal("empty tracker should not be in cooldown")
 	}
 }
-
