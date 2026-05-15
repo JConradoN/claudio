@@ -448,6 +448,93 @@ func TestClassifyNone(t *testing.T) {
 	}
 }
 
+func TestRegistry_DisallowedTools(t *testing.T) {
+	dir := t.TempDir()
+
+	content := `---
+name: readonly
+description: Read-only agent
+disallowed_tools: [Bash, Write, Edit]
+---
+
+You are a read-only agent.
+`
+	if err := os.WriteFile(filepath.Join(dir, "readonly.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	a := reg.Get("readonly")
+	if a == nil {
+		t.Fatal("Get('readonly') returned nil")
+	}
+	if len(a.DisallowedTools) != 3 || a.DisallowedTools[0] != "Bash" || a.DisallowedTools[1] != "Write" || a.DisallowedTools[2] != "Edit" {
+		t.Errorf("expected disallowed_tools [Bash, Write, Edit], got %v", a.DisallowedTools)
+	}
+}
+
+func TestAgent_IsReadOnly(t *testing.T) {
+	tests := []struct {
+		name      string
+		allowed   []string
+		disallowed []string
+		want      bool
+	}{
+		{"no restrictions", nil, nil, false}, // all tools available
+		{"allowed read only", []string{"Read", "Grep"}, nil, true},
+		{"allowed with write", []string{"Read", "Write"}, nil, false},
+		{"deny write only", nil, []string{"Write", "Edit", "Bash"}, true},
+		{"deny bash keep write", nil, []string{"Bash"}, false},
+		{"allow write deny write", []string{"Read", "Write"}, []string{"Write"}, true},
+		{"allow edit deny bash", []string{"Read", "Edit"}, []string{"Bash"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Agent{AllowedTools: tt.allowed, DisallowedTools: tt.disallowed}
+			if got := a.IsReadOnly(); got != tt.want {
+				t.Errorf("IsReadOnly() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegistry_UnknownToolNames(t *testing.T) {
+	dir := t.TempDir()
+
+	content := `---
+name: risky
+description: Has unknown tools
+allowed_tools: [Read, UnknownTool1]
+disallowed_tools: [Bash, UnknownTool2]
+---
+
+Prompt.
+`
+	if err := os.WriteFile(filepath.Join(dir, "risky.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	a := reg.Get("risky")
+	if a == nil {
+		t.Fatal("Get('risky') returned nil")
+	}
+	if len(a.AllowedTools) != 2 || a.AllowedTools[0] != "Read" || a.AllowedTools[1] != "UnknownTool1" {
+		t.Errorf("expected allowed_tools preserved as-is, got %v", a.AllowedTools)
+	}
+	if len(a.DisallowedTools) != 2 || a.DisallowedTools[0] != "Bash" || a.DisallowedTools[1] != "UnknownTool2" {
+		t.Errorf("expected disallowed_tools preserved as-is, got %v", a.DisallowedTools)
+	}
+}
+
 func writeAgent(t *testing.T, dir, filename, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0644); err != nil {

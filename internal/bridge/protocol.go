@@ -28,8 +28,9 @@ type RequestOptions struct {
 	Cwd            string            `json:"cwd,omitempty"`
 	SystemPrompt   string            `json:"system_prompt,omitempty"`
 	Resume         string            `json:"resume,omitempty"`
-	AllowedTools   []string          `json:"allowed_tools,omitempty"`
-	Continue       bool              `json:"continue,omitempty"`
+	AllowedTools    []string          `json:"allowed_tools,omitempty"`
+	DisallowedTools []string          `json:"disallowed_tools,omitempty"`
+	Continue        bool              `json:"continue,omitempty"`
 	NoUserSettings bool              `json:"no_user_settings,omitempty"`
 	PersistSession *bool             `json:"persist_session,omitempty"`
 	Images         []ImageAttachment `json:"images,omitempty"`

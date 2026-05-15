@@ -72,6 +72,7 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 		opts.Model = agent.Model
 		opts.Cwd = agent.Cwd
 		opts.AllowedTools = agent.AllowedTools
+		opts.DisallowedTools = agent.DisallowedTools
 	}
 
 	// 4. Execute via Bridge

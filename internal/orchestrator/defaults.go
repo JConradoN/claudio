@@ -52,6 +52,7 @@ func agentToWorkerConfig(a *agents.Agent) WorkerConfig {
 	} else {
 		cfg.Tools = DefaultWorkerConfig.Tools
 	}
+	cfg.DisallowedTools = a.DisallowedTools
 	if cfg.Model == "" {
 		cfg.Model = DefaultWorkerConfig.Model
 	}
@@ -76,6 +77,7 @@ func mergeWorkerConfig(base WorkerConfig, override *agents.Agent) WorkerConfig {
 	if len(override.AllowedTools) > 0 {
 		base.Tools = override.AllowedTools
 	}
+	base.DisallowedTools = override.DisallowedTools
 	if override.Prompt != "" {
 		base.Prompt = override.Prompt
 	}

@@ -188,6 +188,9 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 		if len(agent.AllowedTools) > 0 {
 			req.Options.AllowedTools = agent.AllowedTools
 		}
+		if len(agent.DisallowedTools) > 0 {
+			req.Options.DisallowedTools = agent.DisallowedTools
+		}
 	}
 
 	if sessionID, active := s.sessions.GetWithState(chatID, threadID); sessionID != "" {

@@ -153,18 +153,11 @@ func (bc *BotController) buildAgentSummaries() []orchestrator.AgentSummary {
 	}
 	var summaries []orchestrator.AgentSummary
 	for _, a := range bc.agents.Agents() {
-		readOnly := true
-		for _, t := range a.AllowedTools {
-			if t == "Write" || t == "Edit" || t == "Bash" {
-				readOnly = false
-				break
-			}
-		}
 		summaries = append(summaries, orchestrator.AgentSummary{
 			Name:        a.Name,
 			Description: a.Description,
 			Tools:       a.AllowedTools,
-			ReadOnly:    readOnly,
+			ReadOnly:    a.IsReadOnly(),
 		})
 	}
 	return summaries

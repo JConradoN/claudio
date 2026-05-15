@@ -40,10 +40,11 @@ type WorkerEvent struct {
 
 // WorkerConfig holds resolved configuration for a worker.
 type WorkerConfig struct {
-	Model    string
-	MaxTurns int
-	Tools    []string
-	Prompt   string
+	Model           string
+	MaxTurns        int
+	Tools           []string
+	DisallowedTools []string
+	Prompt          string
 }
 
 // ParsePlan parses a JSON plan from bytes.

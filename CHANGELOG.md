@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.5] - 2026-05-15
+
+### Fixed
+- `disallowed_tools` in agent frontmatter is now respected and filters tools sent to the PI SDK.
+- Empty tool restriction (e.g. denylist removing all allowed tools) now returns `[]` instead of falling back to all default PI SDK tools.
+
+### Added
+- `Agent.IsReadOnly()` computes effective tool set considering both `allowed_tools` and `disallowed_tools`.
+- Validation of unknown tool names in agent YAML frontmatter logs a warning instead of silently ignoring.
+- `DisallowedTools` propagated through the full pipeline: pipeline, cron, orchestrator, and Telegram summaries.
+
 ## [v0.6.4] - 2026-05-15
 
 ### Added

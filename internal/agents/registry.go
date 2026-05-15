@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,14 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// knownToolNames holds the set of tool names recognized by Aurelia.
+// These map to PI SDK built-in tools via the bridge.
+var knownToolNames = map[string]bool{
+	"Read": true, "Write": true, "Edit": true, "Bash": true,
+	"Grep": true, "Glob": true, "LS": true, "List": true,
+	"WebSearch": true, "WebSearchPremium": true, "WebFetch": true,
+}
 
 // ClassifyFunc sends a text prompt and returns the LLM response.
 // Defined in agents package to avoid importing bridge.
@@ -146,6 +155,17 @@ func (r *Registry) ClassifyPrompt(message string) string {
 	return sb.String()
 }
 
+// validateToolNames returns any tool names that are not in the known set.
+func validateToolNames(tools []string) []string {
+	var unknown []string
+	for _, t := range tools {
+		if !knownToolNames[t] {
+			unknown = append(unknown, t)
+		}
+	}
+	return unknown
+}
+
 // parseAgentFile splits a markdown file on --- markers, parses YAML frontmatter,
 // and extracts the prompt body. Returns nil if the file has no valid frontmatter
 // or the name field is empty.
@@ -162,6 +182,13 @@ func parseAgentFile(data []byte) (*Agent, error) {
 
 	if agent.Name == "" {
 		return nil, nil
+	}
+
+	if unknown := validateToolNames(agent.AllowedTools); len(unknown) > 0 {
+		slog.Warn("agent has unknown allowed_tools", "agent", agent.Name, "tools", unknown)
+	}
+	if unknown := validateToolNames(agent.DisallowedTools); len(unknown) > 0 {
+		slog.Warn("agent has unknown disallowed_tools", "agent", agent.Name, "tools", unknown)
 	}
 
 	agent.Prompt = string(bytes.TrimSpace(parts[2]))

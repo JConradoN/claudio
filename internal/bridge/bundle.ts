@@ -30,6 +30,7 @@ interface RequestOptions {
   system_prompt?: string;
   resume?: string;
   allowed_tools?: string[];
+  disallowed_tools?: string[];
   continue?: boolean;
   no_user_settings?: boolean;
   persist_session?: boolean;
@@ -134,9 +135,42 @@ function translateToolName(name: string): string {
   return toolMap[normalized] ?? normalized.toLowerCase();
 }
 
-function translateAllowedTools(tools: string[] | undefined): string[] | undefined {
-  if (!tools || tools.length === 0) return undefined;
-  return [...new Set(tools.map(translateToolName))];
+// Full list of PI SDK built-in tools for denylist-only mode.
+const allBuiltinTools = [
+  "read", "write", "edit", "bash", "grep", "find", "ls",
+  "web_search", "web_search_premium",
+];
+
+function translateAllowedTools(
+  allowed: string[] | undefined,
+  disallowed: string[] | undefined,
+): string[] | undefined {
+  const hasRestriction = (allowed && allowed.length > 0) || (disallowed && disallowed.length > 0);
+
+  // Start with allowed list (or all built-ins if none specified)
+  let result: string[] | undefined;
+  if (allowed && allowed.length > 0) {
+    result = [...new Set(allowed.map(translateToolName))];
+  }
+
+  // Apply denylist
+  if (disallowed && disallowed.length > 0) {
+    const denied = new Set(disallowed.map(translateToolName));
+    if (result) {
+      result = result.filter((t) => !denied.has(t));
+    } else {
+      // No allowlist: denylist means "all except these"
+      result = allBuiltinTools.filter((t) => !denied.has(t));
+    }
+  }
+
+  if (!result || result.length === 0) {
+    // If the user explicitly restricted tools and the result is empty,
+    // return an empty array so the PI SDK receives no tools instead of
+    // falling back to all defaults.
+    return hasRestriction ? [] : undefined;
+  }
+  return result;
 }
 
 function textFromContent(content: unknown): string {
@@ -263,7 +297,7 @@ async function createPiSession(opts: RequestOptions | undefined) {
     resourceLoader,
     sessionManager,
     settingsManager,
-    tools: translateAllowedTools(opts?.allowed_tools),
+    tools: translateAllowedTools(opts?.allowed_tools, opts?.disallowed_tools),
   });
 }
 

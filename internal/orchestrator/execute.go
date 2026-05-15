@@ -28,11 +28,12 @@ func (o *Orchestrator) ExecuteTask(
 		Command: "query",
 		Prompt:  task.Prompt,
 		Options: bridge.RequestOptions{
-			Model:          cfg.Model,
-			Cwd:            cwd,
-			SystemPrompt:   systemPrompt,
-			AllowedTools:   cfg.Tools,
-			NoUserSettings: true,
+			Model:           cfg.Model,
+			Cwd:             cwd,
+			SystemPrompt:    systemPrompt,
+			AllowedTools:    cfg.Tools,
+			DisallowedTools: cfg.DisallowedTools,
+			NoUserSettings:  true,
 		},
 	}
 
