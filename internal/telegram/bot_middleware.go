@@ -56,6 +56,7 @@ func (bc *BotController) registerContentRoutes() {
 	bc.bot.Handle("/new", bc.handleResetCommand)
 	bc.bot.Handle("/compact", bc.handleResetCommand)
 	bc.bot.Handle("/usage", bc.handleUsageCommand)
+	bc.bot.Handle("/status", bc.handleStatusCommand)
 	bc.bot.Handle("/cron", bc.handleCronCommand)
 	bc.bot.Handle("/agents", bc.handleAgentsCommand)
 	bc.bot.Handle("/model", bc.handleModelCommand)
@@ -71,6 +72,7 @@ func (bc *BotController) registerSlashMenu() {
 	commands := []telebot.Command{
 		{Text: "new", Description: "Nova sessão (limpa contexto)"},
 		{Text: "usage", Description: "Ver uso de tokens da sessão"},
+		{Text: "status", Description: "Ver estado atual da Aurelia"},
 		{Text: "cwd", Description: "Definir diretório de trabalho"},
 		{Text: "cron", Description: "Gerenciar agendamentos"},
 		{Text: "agents", Description: "Listar agentes disponíveis"},
@@ -83,19 +85,31 @@ func (bc *BotController) registerSlashMenu() {
 }
 
 func (bc *BotController) handleHelpCommand(c telebot.Context) error {
-	help := "Comandos disponíveis:\n\n" +
+	defer bc.confirmMessage(c.Message())
+	return SendTextWithThread(bc.bot, c.Chat(), helpMessage(), c.Message().ThreadID)
+}
+
+func helpMessage() string {
+	return "Comandos disponíveis:\n\n" +
 		"/new — Nova sessão (limpa contexto)\n" +
 		"/usage — Ver uso de tokens da sessão\n" +
+		"/status — Ver estado atual da Aurelia\n" +
 		"/cwd <path> — Definir diretório de trabalho\n" +
 		"/cron — Gerenciar agendamentos\n" +
 		"/agents — Listar agentes disponíveis\n" +
 		"/model — Ver/trocar modelo ativo\n" +
 		"/help — Mostrar esta mensagem\n\n" +
+		"---\n\n" +
+		"💡 Também entendo comandos naturais:\n" +
+		"• \"agenda todo dia às 9h revisar emails\"\n" +
+		"• \"muda modelo para claude-sonnet\"\n" +
+		"• \"limpa o contexto\"\n" +
+		"• \"quais modelos\"\n\n" +
 		"Ou simplesmente envie uma mensagem e eu respondo."
-	return SendText(bc.bot, c.Chat(), help)
 }
 
 func (bc *BotController) handleAgentsCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
 	if bc.agents == nil || len(bc.agents.Agents()) == 0 {
 		return SendText(bc.bot, c.Chat(), "Nenhum agente configurado. Crie arquivos .md em ~/.aurelia/agents/")
 	}
@@ -114,6 +128,7 @@ func (bc *BotController) handleAgentsCommand(c telebot.Context) error {
 }
 
 func (bc *BotController) handleCwdCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
 	args := strings.TrimSpace(c.Message().Payload)
@@ -193,30 +208,40 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 }
 
 func (bc *BotController) handleResetCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	// Flush pending nudge buffer so conversation memories are saved.
-	if bc.dreamer != nil {
-		cwd := bc.sessions.GetCwd(chatID, threadID)
-		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
-		bc.invalidateMemoryDirs(chatID, threadID, cwd)
+	reply, err := bc.resetCurrentSession(chatID, threadID, true)
+	if err != nil {
+		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
 	}
-	bc.sessions.Clear(chatID, threadID)
-	bc.tracker.Clear(chatID)
-	return SendTextWithThread(bc.bot, c.Chat(), "Sessão resetada. Próxima mensagem inicia conversa nova.", threadID)
+	return SendTextWithThread(bc.bot, c.Chat(), reply, threadID)
 }
 
 func (bc *BotController) handleUsageCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
+	threadID := c.Message().ThreadID
 	usage := bc.tracker.Get(c.Chat().ID)
 	if usage.NumTurns == 0 {
-		return SendText(bc.bot, c.Chat(), "Nenhum uso registrado na sessão atual.")
+		return SendTextWithThread(bc.bot, c.Chat(), "Nenhum uso registrado na sessão atual.", threadID)
 	}
 	maxTokens := bc.config.MaxSessionTokens
 	msg := fmt.Sprintf("📊 Sessão atual:\n\n%s\nAuto-reset em: %d tokens", usage, maxTokens)
-	return SendText(bc.bot, c.Chat(), msg)
+	return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
+}
+
+func (bc *BotController) handleStatusCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
+	threadID := c.Message().ThreadID
+	reply, err := bc.cmdStatus(c.Chat().ID, threadID)
+	if err != nil {
+		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
+	}
+	return SendTextWithThread(bc.bot, c.Chat(), reply, threadID)
 }
 
 func (bc *BotController) handleCronCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
 	if bc.cronHandler == nil {
 		return SendText(bc.bot, c.Chat(), "Cron não está disponível.")
 	}
@@ -226,10 +251,10 @@ func (bc *BotController) handleCronCommand(c telebot.Context) error {
 
 	reply, err := bc.cronHandler.HandleText(context.Background(), userID, chatID, text)
 	if err != nil {
-		return SendError(bc.bot, c.Chat(), err.Error())
+		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), c.Message().ThreadID)
 	}
 	if reply != "" {
-		return SendText(bc.bot, c.Chat(), reply)
+		return SendTextWithThread(bc.bot, c.Chat(), reply, c.Message().ThreadID)
 	}
 	return nil
 }
@@ -237,28 +262,30 @@ func (bc *BotController) handleCronCommand(c telebot.Context) error {
 const modelsPerPage = 10
 
 func (bc *BotController) handleModelCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
 	args := strings.TrimSpace(c.Message().Payload)
+	threadID := c.Message().ThreadID
 	if args != "" {
 		reply, err := bc.cmdSetModel(c, "/model "+args)
 		if err != nil {
-			return SendError(bc.bot, c.Chat(), fmt.Sprintf("Erro: %v", err))
+			return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro: %v", err), threadID)
 		}
-		return SendText(bc.bot, c.Chat(), reply)
+		return SendTextWithThread(bc.bot, c.Chat(), reply, threadID)
 	}
 
 	currentLine := fmt.Sprintf("Modelo atual: **%s** (provedor: **%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
 	if bc.bridge == nil {
-		return SendText(bc.bot, c.Chat(), currentLine+"\n\nBridge indisponível.")
+		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nBridge indisponível.", threadID)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	models, err := bc.getModels(ctx)
 	if err != nil {
-		return SendText(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err))
+		return SendTextWithThread(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err), threadID)
 	}
 	if len(models) == 0 {
-		return SendText(bc.bot, c.Chat(), currentLine+"\n\nNenhum modelo disponível.")
+		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nNenhum modelo disponível.", threadID)
 	}
 
 	bc.modelCacheMu.Lock()
@@ -296,7 +323,7 @@ func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
 	if edit {
 		return c.Edit(msg, menu)
 	}
-	_, err := bc.bot.Send(c.Chat(), msg, menu)
+	_, err := bc.bot.Send(c.Chat(), msg, menu, &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	return err
 }
 
@@ -417,7 +444,8 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 	bc.config.DefaultProvider = provider
 
 	chatID := c.Chat().ID
-	bc.sessions.ClearAll(chatID)
+	threadID := callbackThreadID(c)
+	resetMsg := bc.resetCurrentModelSession(chatID, threadID)
 
 	if err := bc.saveDefaultModel(provider, modelID); err != nil {
 		log.Printf("model callback persist: %v", err)
@@ -427,5 +455,13 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 		bc.refreshProviderEnv()
 	}
 
-	return c.Edit(fmt.Sprintf("✅ Modelo alterado para **%s**\nProvedor: **%s**\n\nSessão resetada.", modelID, provider))
+	return c.Edit(fmt.Sprintf("✅ Modelo alterado para **%s**\nProvedor: **%s**\n\n%s", modelID, provider, resetMsg))
+}
+
+func callbackThreadID(c telebot.Context) int {
+	cb := c.Callback()
+	if cb == nil || cb.Message == nil {
+		return 0
+	}
+	return cb.Message.ThreadID
 }

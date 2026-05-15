@@ -260,8 +260,43 @@ func (bc *BotController) isAllowedGroup(chatID int64) bool {
 
 func (bc *BotController) setupRoutes() {
 	bc.bot.Use(bc.whitelistMiddleware())
+	bc.bot.Use(bc.ackMiddleware())
 
 	bc.setupBootstrapRoutes()
 	bc.registerContentRoutes()
 	bc.registerSlashMenu()
+}
+
+func (bc *BotController) ackMiddleware() telebot.MiddlewareFunc {
+	return func(next telebot.HandlerFunc) telebot.HandlerFunc {
+		return func(c telebot.Context) error {
+			if c.Callback() == nil {
+				bc.ackMessage(c.Message())
+			}
+			return next(c)
+		}
+	}
+}
+
+func (bc *BotController) ackMessage(msg *telebot.Message) {
+	bc.reactToUserMessage(msg, "👀")
+}
+
+func (bc *BotController) confirmMessage(msg *telebot.Message) {
+	bc.reactToUserMessage(msg, "✅")
+}
+
+func (bc *BotController) reactToUserMessage(msg *telebot.Message, emoji string) {
+	if bc == nil || bc.bot == nil || msg == nil || msg.ID == 0 || msg.Chat == nil {
+		return
+	}
+	if msg.Sender != nil && msg.Sender.IsBot {
+		return
+	}
+	err := bc.bot.React(msg.Chat, msg, telebot.ReactionOptions{
+		Reactions: []telebot.Reaction{{Type: "emoji", Emoji: emoji}},
+	})
+	if err != nil {
+		log.Printf("telegram reaction %q error: %v", emoji, err)
+	}
 }

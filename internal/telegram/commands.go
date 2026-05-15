@@ -15,6 +15,7 @@ import (
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 // CommandType identifies a system command that can be handled locally without LLM.
@@ -168,6 +169,7 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
 	log.Printf("command: type=%d chat=%d thread=%d text=%q", cmd.Type, chatID, threadID, cmd.Text)
+	defer bc.confirmMessage(c.Message())
 
 	var reply string
 	var err error
@@ -182,7 +184,7 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 	case CmdCronCreate:
 		reply, err = bc.cmdCronCreate(c, cmd.Text)
 	case CmdStatus:
-		reply, err = bc.cmdStatus(chatID)
+		reply, err = bc.cmdStatus(chatID, threadID)
 	case CmdListAgents:
 		reply, err = bc.cmdListAgents()
 	case CmdListModels:
@@ -204,15 +206,48 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 // --- P1 handlers ---
 
 func (bc *BotController) cmdSessionReset(chatID int64, threadID int) (string, error) {
-	// Flush pending nudge buffer so short conversations are not lost.
-	if bc.dreamer != nil {
+	return bc.resetCurrentSession(chatID, threadID, true)
+}
+
+func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalidate bool) (string, error) {
+	canceledActive := bc.cancelActiveRun(chatID, threadID)
+	var usage session.Usage
+	if bc.tracker != nil {
+		usage = bc.tracker.Get(chatID)
+	}
+	if bc.dreamer != nil && bc.sessions != nil {
 		cwd := bc.sessions.GetCwd(chatID, threadID)
 		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
+		if invalidate {
+			bc.invalidateMemoryDirs(chatID, threadID, cwd)
+		}
 	}
-	bc.sessions.Clear(chatID, threadID)
-	bc.tracker.Clear(chatID)
+	if bc.sessions != nil {
+		bc.sessions.ClearSession(chatID, threadID)
+	}
+	if bc.tracker != nil {
+		bc.tracker.Clear(chatID)
+	}
 	log.Printf("command: session reset for chat=%d thread=%d", chatID, threadID)
-	return "Sessão resetada. Próxima mensagem inicia conversa nova.", nil
+	return formatResetSummary(usage, canceledActive), nil
+}
+
+func (bc *BotController) cancelActiveRun(chatID int64, threadID int) bool {
+	if bc == nil || bc.pipeline == nil {
+		return false
+	}
+	return bc.pipeline.Cancel(chatID, threadID)
+}
+
+func formatResetSummary(usage session.Usage, canceledActive bool) string {
+	prefix := ""
+	if canceledActive {
+		prefix = "🛑 Processamento em andamento interrompido.\n"
+	}
+	if usage.NumTurns <= 0 {
+		return prefix + "Sessão resetada. Próxima mensagem inicia conversa nova."
+	}
+	return prefix + fmt.Sprintf("🗑️ Sessão resetada (%d mensagens, ~%d tokens).\nPróxima mensagem inicia conversa nova.", usage.NumTurns, usage.TotalTokens())
 }
 
 func (bc *BotController) cmdCronList(chatID int64) (string, error) {
@@ -362,7 +397,7 @@ func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, 
 		},
 	})
 	if err != nil {
-		return "Não consegui interpretar o agendamento. Tente de novo com mais detalhes.", nil
+		return "Não consegui interpretar o agendamento. Tente algo como: \"agenda todo dia às 9h revisar emails\"", nil
 	}
 
 	parsed, parseErr := parseCronCreateResponse(result.Content)
@@ -396,9 +431,9 @@ func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, 
 	}
 }
 
-func (bc *BotController) cmdStatus(chatID int64) (string, error) {
+func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 	var lines []string
-	lines = append(lines, "**Status do Sistema**\n")
+	lines = append(lines, "**Status da Aurelia**\n")
 
 	// Bridge status
 	bridgeStatus := "desligado"
@@ -411,14 +446,15 @@ func (bc *BotController) cmdStatus(chatID int64) (string, error) {
 			bridgeStatus = "offline"
 		}
 	}
-	lines = append(lines, fmt.Sprintf("Processador: **%s**", bridgeStatus))
+	lines = append(lines, fmt.Sprintf("🧠 Processador: **%s**", bridgeStatus))
+	lines = append(lines, statusWorkLines(bc.currentWorkStatus(chatID, threadID))...)
 
 	// Agents
 	agentCount := 0
 	if bc.agents != nil {
 		agentCount = len(bc.agents.Agents())
 	}
-	lines = append(lines, fmt.Sprintf("Agents: **%d**", agentCount))
+	lines = append(lines, fmt.Sprintf("🤖 Agents disponíveis: **%d**", agentCount))
 
 	// Cron jobs
 	if bc.cronHandler != nil {
@@ -431,27 +467,51 @@ func (bc *BotController) cmdStatus(chatID int64) (string, error) {
 					active++
 				}
 			}
-			lines = append(lines, fmt.Sprintf("Agendamentos ativos: **%d**", active))
+			lines = append(lines, fmt.Sprintf("⏰ Agendamentos ativos: **%d**", active))
 		}
 	}
 
 	// Model
 	if bc.config != nil && bc.config.DefaultModel != "" {
-		lines = append(lines, fmt.Sprintf("Modelo padrão: **%s**", bc.config.DefaultModel))
+		lines = append(lines, fmt.Sprintf("⚙️ Modelo: **%s**", bc.config.DefaultModel))
 	}
 
-	// Session
-	if sid, active := bc.sessions.GetWithState(chatID, 0); sid != "" {
-		state := "cold"
-		if active {
-			state = "warm"
+	if bc.sessions != nil {
+		if cwd := bc.sessions.GetCwd(chatID, threadID); cwd != "" {
+			lines = append(lines, fmt.Sprintf("📂 Diretório: `%s`", cwd))
 		}
-		lines = append(lines, fmt.Sprintf("Sessão: `%s` (%s)", sid[:8], state))
-	} else {
-		lines = append(lines, "Sessão: nenhuma")
+	}
+
+	if bc.tracker != nil {
+		usage := bc.tracker.Get(chatID)
+		if usage.NumTurns > 0 {
+			lines = append(lines, fmt.Sprintf("💬 Sessão: **%d mensagens**, **%d tokens**, **$%.4f**", usage.NumTurns, usage.TotalTokens(), usage.CostUSD))
+		} else {
+			lines = append(lines, "💬 Sessão: Nenhuma conversa ativa no momento.")
+		}
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+func (bc *BotController) currentWorkStatus(chatID int64, threadID int) (string, int) {
+	if bc == nil || bc.pipeline == nil {
+		return "", 0
+	}
+	return bc.pipeline.WorkStatus(chatID, threadID)
+}
+
+func statusWorkLines(description string, queueSize int) []string {
+	if strings.TrimSpace(description) == "" {
+		return nil
+	}
+	lines := []string{fmt.Sprintf("⏳ Em andamento: %s", description)}
+	if queueSize == 1 {
+		lines = append(lines, "📥 Fila: **1 mensagem** aguardando")
+	} else if queueSize > 1 {
+		lines = append(lines, fmt.Sprintf("📥 Fila: **%d mensagens** aguardando", queueSize))
+	}
+	return lines
 }
 
 func (bc *BotController) cmdListAgents() (string, error) {
@@ -587,7 +647,32 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 		bc.refreshProviderEnv()
 	}
 
-	return fmt.Sprintf("✅ Modelo alterado para **%s** (provedor: **%s**)\nPróxima mensagem usará o novo modelo.", matched.ID, matched.Provider), nil
+	resetMsg := bc.resetCurrentModelSession(c.Chat().ID, c.Message().ThreadID)
+
+	return fmt.Sprintf("✅ Modelo alterado para **%s** (provedor: **%s**)\n%s\nPróxima mensagem usará o novo modelo.", matched.ID, matched.Provider, resetMsg), nil
+}
+
+func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int) string {
+	var usage session.Usage
+	if bc.tracker != nil {
+		usage = bc.tracker.Get(chatID)
+		bc.tracker.Clear(chatID)
+	}
+	if bc.sessions != nil {
+		bc.sessions.ClearSession(chatID, threadID)
+	}
+	return formatModelResetSummary(threadID, usage)
+}
+
+func formatModelResetSummary(threadID int, usage session.Usage) string {
+	scope := "Sessão privada resetada."
+	if threadID > 0 {
+		scope = "Sessão deste tópico foi resetada."
+	}
+	if usage.NumTurns <= 0 {
+		return scope
+	}
+	return fmt.Sprintf("%s (%d mensagens, ~%d tokens).", strings.TrimSuffix(scope, "."), usage.NumTurns, usage.TotalTokens())
 }
 
 // extractModelName pulls the model name from a set-model command. Returns

@@ -15,6 +15,7 @@ func (bc *BotController) setupBootstrapRoutes() {
 }
 
 func (bc *BotController) handleStart(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
 	identityExists := bootstrapIdentityExists(bc.personasDir)
 
 	message, menu := bootstrapStartResponse(identityExists)

@@ -89,6 +89,39 @@ func (rs *runSupervisor) admit(input pipelineInput) (*activeRun, admissionKind, 
 	}
 }
 
+func (rs *runSupervisor) cancel(key runKey) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	current := rs.active[key]
+	if current == nil {
+		delete(rs.queued, key)
+		return false
+	}
+	current.cancel()
+	delete(rs.queued, key)
+	return true
+}
+
+func (rs *runSupervisor) activeDescription(key runKey) string {
+	description, _ := rs.status(key)
+	return description
+}
+
+func (rs *runSupervisor) queueSize(key runKey) int {
+	_, size := rs.status(key)
+	return size
+}
+
+func (rs *runSupervisor) status(key runKey) (string, int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	queueSize := 0
+	if _, ok := rs.queued[key]; ok {
+		queueSize = 1
+	}
+	return rs.active[key].description(), queueSize
+}
+
 func (rs *runSupervisor) finish(run *activeRun) (*activeRun, *pipelineInput) {
 	if run == nil {
 		return nil, nil

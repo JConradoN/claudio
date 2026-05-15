@@ -19,6 +19,7 @@ func (bc *BotController) processInput(c telebot.Context, text string) error {
 
 func (bc *BotController) processInputWithImages(c telebot.Context, text string, images []bridge.ImageAttachment) error {
 	if state, ok := bc.popPendingBootstrap(c.Sender().ID); ok {
+		defer bc.confirmMessage(c.Message())
 		switch state.Step {
 		case bootstrapStepAssistant:
 			return bc.completeBootstrapAssistant(c, state, text)
@@ -123,6 +124,13 @@ func (o telegramPipelineOutput) DeleteMessage(message any) {
 		return
 	}
 	_ = o.bc.bot.Delete(msg)
+}
+
+func (o telegramPipelineOutput) ConfirmMessage(chatID int64, messageID int) {
+	if o.bc == nil || o.bc.bot == nil || messageID == 0 {
+		return
+	}
+	ReactToMessage(o.bc.bot, &telebot.Chat{ID: chatID}, messageID, "✅")
 }
 
 func (o telegramPipelineOutput) ExecuteApprovedPlan(chatID int64, messageID int, plan *orchestrator.Plan) {

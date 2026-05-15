@@ -86,6 +86,14 @@ func (s *Store) Clear(chatID int64, threadID int) {
 	delete(s.cwdSeen, key)
 }
 
+// ClearSession removes only the session ID for a specific chat thread.
+func (s *Store) ClearSession(chatID int64, threadID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKeyFor(chatID, threadID)
+	delete(s.sessions, key)
+}
+
 // ClearAll removes all sessions and cwds for a chat (all threads).
 func (s *Store) ClearAll(chatID int64) {
 	s.mu.Lock()

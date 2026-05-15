@@ -17,7 +17,49 @@ import (
 const (
 	classifyTimeout        = 15 * time.Second
 	bridgeExecutionTimeout = 10 * time.Minute
+
+	bridgeConnectErrorMessage = "Falha ao conectar com o processador.\n\n" +
+		"Dica: verifique se o daemon está rodando. Se persistir, tente /new para reiniciar a sessão."
+	bridgeRetryFailedMessage = "Processador reiniciado mas não conseguiu completar. Tente novamente.\n\n" +
+		"Dica: se persistir, use /new para reiniciar a sessão."
+	bridgeTimeoutMessage = "Tempo limite atingido antes de concluir.\n\n" +
+		"A solicitação foi muito complexa. Tente dividir em partes menores."
 )
+
+func bridgeCooldownMessage(remaining time.Duration) string {
+	seconds := int((remaining + time.Second - time.Nanosecond) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("⏳ Processador em recuperação. Tente novamente em ~%d segundos.", seconds)
+}
+
+func queueStatusMessage(active *activeRun, queueSize int) string {
+	description := strings.TrimSpace(active.description())
+	queueText := queueStatusSuffix(queueSize)
+	if description == "" {
+		return "⏳ Ainda estou processando o pedido anterior." + queueText
+	}
+	return "⏳ Ainda estou processando: " + description + "." + queueText
+}
+
+func queueStatusSuffix(queueSize int) string {
+	if queueSize <= 0 {
+		return ""
+	}
+	if queueSize == 1 {
+		return "\n📥 Fila: 1 mensagem aguardando."
+	}
+	return fmt.Sprintf("\n📥 Fila: %d mensagens aguardando.", queueSize)
+}
+
+func queueAdmittedMessage(active *activeRun) string {
+	description := strings.TrimSpace(active.description())
+	if description == "" {
+		return "📥 Sua mensagem é a próxima na fila."
+	}
+	return "📥 Ainda estou processando: " + description + ". Sua mensagem será a próxima na fila."
+}
 
 // Process handles a user message after transport-level bootstrap and command checks.
 func (s *Service) Process(chatID int64, threadID int, messageID int, text string, images []bridge.ImageAttachment) error {
@@ -35,14 +77,19 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 		go s.processRun(input, run)
 	case admitCancelOnly:
 		_, _ = s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior.")
+		s.output.ConfirmMessage(chatID, messageID)
 	case admitSupersede:
 		_, _ = s.output.SendText(chatID, threadID, "🔁 Interrompi o pedido anterior e vou seguir com sua correção.")
+		s.output.ConfirmMessage(chatID, messageID)
 	case admitStatus:
-		_, _ = s.output.SendText(chatID, threadID, "⏳ Ainda estou processando "+active.description()+".")
+		queueSize := s.runs.queueSize(runKey{chatID: chatID, threadID: threadID})
+		_, _ = s.output.SendText(chatID, threadID, queueStatusMessage(active, queueSize))
+		s.output.ConfirmMessage(chatID, messageID)
 	case admitQueued:
-		_, _ = s.output.SendText(chatID, threadID, "📥 Ainda estou processando o pedido anterior; coloquei sua mensagem na fila.")
+		_, _ = s.output.SendText(chatID, threadID, queueAdmittedMessage(active))
 	case admitReplacedQueued:
 		_, _ = s.output.SendText(chatID, threadID, "🔁 Atualizei a próxima instrução na fila.")
+		s.output.ConfirmMessage(chatID, messageID)
 	}
 	return nil
 }
@@ -67,6 +114,7 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 	if err != nil {
 		log.Printf("Failed to build system prompt: %v", err)
 		_ = s.output.SendError(input.chatID, input.threadID, "Falha ao montar o prompt de sistema.")
+		s.output.ConfirmMessage(input.chatID, input.messageID)
 		return
 	}
 
@@ -229,33 +277,65 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	cancelDone := s.cancelBridgeOnContextDone(ctx, req.RequestID)
 	defer cancelDone()
 
-	ch, err := s.bridge.Execute(ctx, req)
-	if err != nil {
-		log.Printf("Bridge execute error: %v", err)
-		if err := s.output.SendError(chatID, threadID, "Falha ao conectar com o processador."); err != nil {
-			log.Printf("Failed to send error to chat %d: %v", chatID, err)
+	var ch <-chan bridge.Event
+	var err error
+
+	if s.resilient != nil {
+		res := s.resilient.Execute(ctx, req, func(msg string) {
+			_, _ = s.output.SendText(chatID, threadID, msg)
+		})
+		if res.Err != nil {
+			err = res.Err
+		} else {
+			ch = res.Events
 		}
-		return
+	} else {
+		ch, err = s.bridge.Execute(ctx, req)
 	}
 
-	outcome := s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
-	if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
-		return
-	}
-	if outcome == OutcomeSuccess {
-		s.bridgeFailures.reset()
-		return
-	}
-	if outcome != OutcomeProcessDeath {
-		return
+	var outcome Outcome
+	if err != nil {
+		if errors.Is(err, errProcessDeath) {
+			// Let the existing process-death recovery below handle this.
+			outcome = OutcomeProcessDeath
+		} else if errors.Is(err, context.Canceled) {
+			log.Printf("pipeline: run canceled by user chat=%d thread=%d", chatID, threadID)
+			return
+		} else {
+			log.Printf("Bridge execute error: %v", err)
+			// Only send generic error when resilient bridge is not in use
+			// (it already sends specific messages via onNotify).
+			if s.resilient == nil {
+				if err := s.output.SendError(chatID, threadID, bridgeConnectErrorMessage); err != nil {
+					log.Printf("Failed to send error to chat %d: %v", chatID, err)
+				}
+			}
+			s.output.ConfirmMessage(chatID, messageID)
+			return
+		}
+	} else {
+		outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
+		if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
+			s.output.ConfirmMessage(chatID, messageID)
+			return
+		}
+		if outcome == OutcomeSuccess {
+			s.bridgeFailures.reset()
+			return
+		}
+		if outcome != OutcomeProcessDeath {
+			return
+		}
 	}
 
 	s.bridgeFailures.record()
 	log.Printf("bridge: process died mid-request, retrying for chat=%d thread=%d", chatID, threadID)
 
 	if s.bridgeFailures.inCooldown() {
+		remaining := s.bridgeFailures.cooldownRemaining()
 		log.Printf("bridge: in cooldown, skipping retry for chat=%d", chatID)
-		_ = s.output.SendError(chatID, threadID, "Processador temporariamente indisponível. Tente novamente em alguns segundos.")
+		_ = s.output.SendError(chatID, threadID, bridgeCooldownMessage(remaining))
+		s.output.ConfirmMessage(chatID, messageID)
 		return
 	}
 
@@ -273,15 +353,17 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	s.output.DeleteMessage(reconnectMsg)
 	if err != nil {
 		log.Printf("bridge: retry failed for chat=%d: %v", chatID, err)
-		_ = s.output.SendError(chatID, threadID, "Processador reiniciado mas não conseguiu completar. Tente novamente.")
+		_ = s.output.SendError(chatID, threadID, bridgeRetryFailedMessage)
+		s.output.ConfirmMessage(chatID, messageID)
 		return
 	}
 
 	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
 	if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
+		s.output.ConfirmMessage(chatID, messageID)
 		return
 	}
-	s.handleRetryOutcome(chatID, threadID, outcome)
+	s.handleRetryOutcome(chatID, threadID, messageID, outcome)
 }
 
 func (s *Service) cancelBridgeOnContextDone(ctx context.Context, requestID string) func() {
@@ -307,7 +389,7 @@ func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Co
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		log.Printf("pipeline: run timeout chat=%d thread=%d", chatID, threadID)
-		_ = s.output.SendError(chatID, threadID, "Tempo limite atingido antes de concluir. Interrompi o processamento para evitar travamento.")
+		_ = s.output.SendError(chatID, threadID, bridgeTimeoutMessage)
 		return true
 	}
 	return false
@@ -320,13 +402,14 @@ func shortSessionID(sid string) string {
 	return sid
 }
 
-func (s *Service) handleRetryOutcome(chatID int64, threadID int, outcome Outcome) {
+func (s *Service) handleRetryOutcome(chatID int64, threadID int, messageID int, outcome Outcome) {
 	switch outcome {
 	case OutcomeSuccess:
 		s.bridgeFailures.reset()
 	case OutcomeProcessDeath:
 		s.bridgeFailures.record()
-		_ = s.output.SendError(chatID, threadID, "Processador reiniciado mas não conseguiu completar. Tente novamente.")
+		_ = s.output.SendError(chatID, threadID, bridgeRetryFailedMessage)
+		s.output.ConfirmMessage(chatID, messageID)
 	}
 }
 
@@ -349,7 +432,7 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 		case "result":
 			return s.handleResultEvent(chatID, threadID, messageID, ev, &assistantText, userText)
 		case "error":
-			return s.handleErrorEvent(chatID, threadID, ev)
+			return s.handleErrorEvent(chatID, threadID, messageID, ev)
 		default:
 			log.Printf("Bridge event (ignored): %s", ev.Type)
 		}
@@ -391,12 +474,14 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	}
 
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
+		s.output.ConfirmMessage(chatID, messageID)
 		return OutcomeSuccess
 	}
 
 	if err := s.output.SendReply(chatID, threadID, finalText); err != nil {
 		log.Printf("Failed to send reply to chat %d: %v", chatID, err)
 	}
+	s.output.ConfirmMessage(chatID, messageID)
 	s.afterSuccessfulTurn(chatID, threadID, userText, finalText)
 	return OutcomeSuccess
 }
@@ -452,7 +537,7 @@ func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText strin
 	s.InvalidateMemoryDirs(chatID, threadID, cwd)
 }
 
-func (s *Service) handleErrorEvent(chatID int64, threadID int, ev bridge.Event) Outcome {
+func (s *Service) handleErrorEvent(chatID int64, threadID int, messageID int, ev bridge.Event) Outcome {
 	errMsg := ev.Message
 	if errMsg == "" {
 		errMsg = ev.Content
@@ -464,5 +549,6 @@ func (s *Service) handleErrorEvent(chatID int64, threadID int, ev bridge.Event) 
 	if err := s.output.SendError(chatID, threadID, errMsg); err != nil {
 		log.Printf("Failed to send error to chat %d: %v", chatID, err)
 	}
+	s.output.ConfirmMessage(chatID, messageID)
 	return OutcomeLLMError
 }

@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.6] - 2026-05-15
+
+### Added
+- Ack imediato 👀 com confirmação ✅ em todas as mensagens (middleware + pipeline)
+- `/status` registrado como comando Telegram, com informações humanizadas (modelo, CWD, sessão, trabalho ativo, fila)
+- Progress reporter com timer (⏱️ Xm Xs) e limite ampliado para 8 ferramentas
+- Supressão de edits duplicados no progress reporter
+- `/new` cancela processamento ativo (`pipeline.Cancel`) e mostra resumo da sessão resetada
+- Active work status + queue info no `/status` via `pipeline.WorkStatus()`
+- `pipeline.Service.Cancel()` e `runSupervisor.cancel()` para interromper execução ativa
+- Mensagens de erro do bridge com dicas acionáveis (conexão, cooldown, timeout, retry)
+- `FailureTracker.cooldownRemaining()` para mostrar tempo restante nas mensagens de cooldown
+- Help com exemplos de comandos naturais
+- Documentos não suportados com dica de conversão
+- Fila transparente: mensagens incluem contexto do trabalho atual (`queueAdmittedMessage`, `queueStatusMessage`)
+- `formatModelResetSummary()` com escopo (tópico/privado) e resumo de mensagens
+- `humanBytes()` — bytes formatados como MB/KB/B legíveis
+- Filtragem de formatos de imagem exóticos (`isSupportedImageMIME`)
+
+### Changed
+- `/model` agora limpa apenas a sessão do thread atual (`ClearSession(chatID, threadID)`, não `ClearAll`)
+- `cmdSessionReset` refatorado para usar `resetCurrentSession` com captura de uso antes de limpar
+- `cmdStatus` refatorado: remove session ID e warm/cold, adiciona CWD, resumo de sessão, emojis
+- `progressReporter.startTime` inicializado no construtor
+- `unsupportedDocumentMessage` atualizada com dica de conversão
+- Mensagens de bridge error movidas para constantes centralizadas com dicas
+- `imageTooLargeError.UserMessage()` usa `humanBytes()`
+
+### Fixed
+- Progress reporter não edita mensagem quando o texto não mudou (evita erro "message is not modified")
+- `handleModelCommand` e handlers de comando usam `SendTextWithThread`/`SendErrorWithThread` (thread-aware)
+- `handleCronCommand` usa `SendErrorWithThread` e `SendTextWithThread`
+- `ReactToMessage` protege contra `bot` nulo
+- `ackMiddleware` não reage a callbacks (só mensagens de texto/mídia)
+
+### Validation
+- **PI Resilience**: validation.md atualizado com evidências de todos os critérios (75 testes passando, circuit breaker, retry, fallback, error classification)
+- **Agent Tools Fix**: validation.md atualizado, bundle rebuildado e instalado em `~/.aurelia/bridge/bundle.js`
+- **UX Polish**: validation.md atualizado com status de cada user story e edge case
+
 ## [v0.6.5] - 2026-05-15
 
 ### Fixed

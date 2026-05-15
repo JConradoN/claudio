@@ -5,25 +5,28 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/telebot.v3"
 )
 
 type progressReporter struct {
-	bot      *telebot.Bot
-	chat     *telebot.Chat
-	msg      *telebot.Message
-	tools    []string
-	threadID int
-	mu       sync.Mutex
+	bot       *telebot.Bot
+	chat      *telebot.Chat
+	msg       *telebot.Message
+	tools     []string
+	threadID  int
+	startTime time.Time
+	lastText  string
+	mu        sync.Mutex
 }
 
 func newProgressReporter(bot *telebot.Bot, chat *telebot.Chat) *progressReporter {
-	return &progressReporter{bot: bot, chat: chat}
+	return &progressReporter{bot: bot, chat: chat, startTime: time.Now()}
 }
 
 func newProgressReporterWithThread(bot *telebot.Bot, chat *telebot.Chat, threadID int) *progressReporter {
-	return &progressReporter{bot: bot, chat: chat, threadID: threadID}
+	return &progressReporter{bot: bot, chat: chat, threadID: threadID, startTime: time.Now()}
 }
 
 func (p *progressReporter) ReportTool(toolName string) {
@@ -33,12 +36,10 @@ func (p *progressReporter) ReportTool(toolName string) {
 	label := toolDisplayName(toolName)
 	p.tools = append(p.tools, label)
 
-	display := p.tools
-	if len(display) > 5 {
-		display = display[len(display)-5:]
+	text := progressText(p.tools, time.Since(p.startTime))
+	if text == p.lastText {
+		return
 	}
-
-	text := strings.Join(display, "\n")
 
 	if p.msg == nil {
 		sent, err := p.bot.Send(p.chat, text, &telebot.SendOptions{ThreadID: p.threadID})
@@ -47,12 +48,34 @@ func (p *progressReporter) ReportTool(toolName string) {
 			return
 		}
 		p.msg = sent
+		p.lastText = text
 	} else {
 		_, err := p.bot.Edit(p.msg, text)
 		if err != nil {
 			log.Printf("Progress edit error: %v", err)
+			return
 		}
+		p.lastText = text
 	}
+}
+
+func progressText(tools []string, elapsed time.Duration) string {
+	display := tools
+	if len(display) > 8 {
+		display = display[len(display)-8:]
+	}
+	return fmt.Sprintf("⏱️ %s\n%s", formatProgressDuration(elapsed), strings.Join(display, "\n"))
+}
+
+func formatProgressDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	seconds := int(d.Round(time.Second).Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	return fmt.Sprintf("%dm %ds", seconds/60, seconds%60)
 }
 
 func (p *progressReporter) Delete() {

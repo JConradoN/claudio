@@ -1,6 +1,10 @@
 package pipeline
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestClassifyConcurrentMessage(t *testing.T) {
 	t.Parallel()
@@ -47,6 +51,65 @@ func TestRunSupervisorSerializesByChatThread(t *testing.T) {
 	nextRun, nextInput := rs.finish(run)
 	if nextRun == nil || nextInput == nil || nextInput.text != "second" {
 		t.Fatalf("finish next = (%v, %v), want queued second", nextRun, nextInput)
+	}
+}
+
+func TestQueueMessagesIncludeActiveContext(t *testing.T) {
+	t.Parallel()
+
+	active := &activeRun{prompt: "gerando relatório", startedAt: time.Now().Add(-2 * time.Minute)}
+	queued := queueAdmittedMessage(active)
+	if !strings.Contains(queued, "gerando relatório") || !strings.Contains(queued, "próxima") {
+		t.Fatalf("queued message should include active context and position, got %q", queued)
+	}
+	status := queueStatusMessage(active, 1)
+	if !strings.Contains(status, "gerando relatório") || !strings.Contains(status, "rodando") || !strings.Contains(status, "Fila: 1") {
+		t.Fatalf("status message should include active context and queue size, got %q", status)
+	}
+}
+
+func TestRunSupervisorQueueInfo(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 7, threadID: 11}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "primeiro"})
+	if admission != admitStart || run == nil {
+		t.Fatalf("first admit = (%v, %v), want start", run, admission)
+	}
+	_, admission, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "segundo"})
+	if admission != admitQueued {
+		t.Fatalf("second admission = %v, want queued", admission)
+	}
+	if got := rs.queueSize(key); got != 1 {
+		t.Fatalf("queueSize() = %d, want 1", got)
+	}
+	if got := rs.activeDescription(key); !strings.Contains(got, "primeiro") {
+		t.Fatalf("activeDescription() = %q, want active prompt", got)
+	}
+}
+
+func TestRunSupervisorCancelStopsActiveAndDropsQueue(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 1, threadID: 2}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	if admission != admitStart || run == nil {
+		t.Fatalf("first admit = (%v, %v), want start", run, admission)
+	}
+	_, admission, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "second"})
+	if admission != admitQueued {
+		t.Fatalf("second admission = %v, want queued", admission)
+	}
+	if !rs.cancel(key) {
+		t.Fatal("cancel should report active run")
+	}
+	if run.ctx.Err() == nil {
+		t.Fatal("active run should be canceled")
+	}
+	if got := rs.queueSize(key); got != 0 {
+		t.Fatalf("queueSize() after cancel = %d, want 0", got)
 	}
 }
 

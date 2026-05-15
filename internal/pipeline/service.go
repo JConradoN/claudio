@@ -24,6 +24,7 @@ type Output interface {
 	SendReply(chatID int64, threadID int, text string) error
 	SendText(chatID int64, threadID int, text string) (any, error)
 	DeleteMessage(message any)
+	ConfirmMessage(chatID int64, messageID int)
 	ExecuteApprovedPlan(chatID int64, messageID int, plan *orchestrator.Plan)
 }
 
@@ -56,6 +57,7 @@ type Config struct {
 type Service struct {
 	config         *config.AppConfig
 	bridge         *bridge.Bridge
+	resilient      *ResilientBridge
 	agents         *agents.Registry
 	persona        *persona.CanonicalIdentityService
 	sessions       *session.Store
@@ -76,7 +78,7 @@ type Service struct {
 
 // NewService builds a pipeline service with explicit dependencies.
 func NewService(cfg Config) *Service {
-	return &Service{
+	s := &Service{
 		config:       cfg.AppConfig,
 		bridge:       cfg.Bridge,
 		agents:       cfg.Agents,
@@ -95,6 +97,32 @@ func NewService(cfg Config) *Service {
 		projectIndex: cfg.ProjectIndex,
 		runs:         newRunSupervisor(),
 	}
+
+	if cfg.Bridge != nil {
+		rbCfg := DefaultResilientConfig()
+		if cfg.AppConfig != nil {
+			rbCfg.OpenRouterAPIKey = cfg.AppConfig.ProviderAPIKey("openrouter")
+		}
+		s.resilient = NewResilientBridge(cfg.Bridge, rbCfg)
+	}
+
+	return s
+}
+
+// Cancel stops the active run for a chat thread and drops its queued message.
+func (s *Service) Cancel(chatID int64, threadID int) bool {
+	if s == nil || s.runs == nil {
+		return false
+	}
+	return s.runs.cancel(runKey{chatID: chatID, threadID: threadID})
+}
+
+// WorkStatus returns the active run description and queued message count.
+func (s *Service) WorkStatus(chatID int64, threadID int) (string, int) {
+	if s == nil || s.runs == nil {
+		return "", 0
+	}
+	return s.runs.status(runKey{chatID: chatID, threadID: threadID})
 }
 
 // SetOrchestrator injects the orchestrator after construction.

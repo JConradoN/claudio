@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/telebot.v3"
@@ -22,6 +23,7 @@ func TestIsSupportedImageDocument(t *testing.T) {
 		{name: "extension fallback", filename: "photo.webp", mimeType: "", want: true},
 		{name: "pdf is not image", filename: "report.pdf", mimeType: "application/pdf", want: false},
 		{name: "markdown is not image", filename: "notes.md", mimeType: "text/markdown", want: false},
+		{name: "exotic image is unsupported", filename: "scan.heic", mimeType: "image/heic", want: false},
 	}
 
 	for _, tc := range cases {
@@ -84,6 +86,50 @@ func TestEncodeImageAttachment_RejectsOversizeImage(t *testing.T) {
 	}
 	if tooLarge.limit != 4 || tooLarge.size != 5 {
 		t.Fatalf("unexpected size/limit: %+v", tooLarge)
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		n    int
+		want string
+	}{
+		{name: "zero", n: 0, want: "0 B"},
+		{name: "bytes", n: 512, want: "512 B"},
+		{name: "one kilobyte", n: 1024, want: "1.0 KB"},
+		{name: "one megabyte", n: 1048576, want: "1.0 MB"},
+		{name: "configured max", n: 15728640, want: "15.0 MB"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := humanBytes(tc.n); got != tc.want {
+				t.Fatalf("humanBytes(%d) = %q, want %q", tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestImageTooLargeError_UserMessageUsesHumanBytes(t *testing.T) {
+	t.Parallel()
+
+	err := imageTooLargeError{size: 15728640, limit: 10485760}
+	want := "Imagem muito grande (15.0 MB). O limite configurado é 10.0 MB."
+	if got := err.UserMessage(); got != want {
+		t.Fatalf("UserMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestUnsupportedDocumentMessageIncludesConversionHint(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{".md", ".pdf", "Dica", "copie o texto"} {
+		if !strings.Contains(unsupportedDocumentMessage, want) {
+			t.Fatalf("unsupported document message missing %q: %q", want, unsupportedDocumentMessage)
+		}
 	}
 }
 

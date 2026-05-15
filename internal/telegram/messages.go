@@ -1,11 +1,13 @@
 package telegram
 
 const (
-	unsupportedDocumentMessage = "⚠️ **Formato nao suportado**\n\n" +
+	unsupportedDocumentMessage = "⚠️ **Formato não suportado**\n\n" +
 		"No momento eu consigo processar:\n" +
 		"- arquivos `.md`\n" +
 		"- arquivos `.pdf`\n" +
-		"- audio e voz\n"
+		"- imagens em `.jpg`, `.png`, `.gif` ou `.webp`\n" +
+		"- áudio e voz\n\n" +
+		"💡 Dica: converta para `.pdf` ou copie o texto diretamente."
 
 	downloadFailureMessage = "❌ **Falha no download**\n\n" +
 		"Nao consegui baixar o arquivo enviado pelo Telegram. Tente novamente."

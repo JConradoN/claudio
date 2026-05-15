@@ -61,6 +61,19 @@ func (t *FailureTracker) inCooldown() bool {
 	return time.Since(last) < cooldownDuration
 }
 
+func (t *FailureTracker) cooldownRemaining() time.Duration {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.failures) < failureWindowMax {
+		return 0
+	}
+	remaining := cooldownDuration - time.Since(t.failures[len(t.failures)-1])
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // reset clears the failure history after a successful execution.
 func (t *FailureTracker) reset() {
 	t.mu.Lock()

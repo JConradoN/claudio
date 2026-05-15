@@ -127,8 +127,26 @@ func TestCmdSessionReset(t *testing.T) {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
 
-	if reply == "" {
-		t.Fatal("expected non-empty reply")
+	if !strings.Contains(reply, "1 mensagens") || !strings.Contains(reply, "~1500 tokens") {
+		t.Fatalf("expected reset summary in reply, got %q", reply)
+	}
+}
+
+func TestCmdSessionReset_EmptySessionUsesSimpleMessage(t *testing.T) {
+	t.Parallel()
+
+	bc := &BotController{
+		config:   &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
+		sessions: session.NewStore(),
+		tracker:  session.NewTracker(),
+	}
+
+	reply, err := bc.cmdSessionReset(42, 0)
+	if err != nil {
+		t.Fatalf("cmdSessionReset() error = %v", err)
+	}
+	if reply != "Sessão resetada. Próxima mensagem inicia conversa nova." {
+		t.Fatalf("unexpected empty reset reply: %q", reply)
 	}
 }
 
@@ -304,6 +322,9 @@ func TestCmdStatus(t *testing.T) {
 	}
 	sessions := session.NewStore()
 	sessions.Set(42, 0, "sess-abc-12345678")
+	sessions.SetCwd(42, 0, "/repo/aurelia")
+	tracker := session.NewTracker()
+	tracker.Add(42, 1200, 300, 3, 0.0123)
 
 	bc := &BotController{
 		config: &config.AppConfig{
@@ -312,10 +333,10 @@ func TestCmdStatus(t *testing.T) {
 		},
 		cronHandler: NewCronCommandHandler(service),
 		sessions:    sessions,
-		tracker:     session.NewTracker(),
+		tracker:     tracker,
 	}
 
-	reply, err := bc.cmdStatus(42)
+	reply, err := bc.cmdStatus(42, 0)
 	if err != nil {
 		t.Fatalf("cmdStatus() error = %v", err)
 	}
@@ -325,8 +346,97 @@ func TestCmdStatus(t *testing.T) {
 	if !strings.Contains(reply, "1") { // 1 active job
 		t.Fatalf("expected active job count in status, got %q", reply)
 	}
-	if !strings.Contains(reply, "sess-abc") {
-		t.Fatalf("expected session ID in status, got %q", reply)
+	if strings.Contains(reply, "sid=") || strings.Contains(reply, "sess-abc") || strings.Contains(reply, "warm") || strings.Contains(reply, "cold") {
+		t.Fatalf("status should not expose session internals, got %q", reply)
+	}
+	if !strings.Contains(reply, "/repo/aurelia") {
+		t.Fatalf("expected cwd in status, got %q", reply)
+	}
+	if !strings.Contains(reply, "3 mensagens") || !strings.Contains(reply, "1500 tokens") {
+		t.Fatalf("expected human session summary in status, got %q", reply)
+	}
+}
+
+func TestStatusWorkLinesIncludeActiveDescriptionAndQueue(t *testing.T) {
+	t.Parallel()
+
+	lines := statusWorkLines("\"teste\" rodando há 12s", 1)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "teste") || !strings.Contains(joined, "Fila") || !strings.Contains(joined, "1 mensagem") {
+		t.Fatalf("expected active work and queue info, got %q", joined)
+	}
+	if got := statusWorkLines("", 1); got != nil {
+		t.Fatalf("empty work should produce no lines, got %v", got)
+	}
+}
+
+func TestCmdStatus_NoActiveSessionUsesClearText(t *testing.T) {
+	t.Parallel()
+
+	bc := &BotController{
+		config:   &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
+		sessions: session.NewStore(),
+		tracker:  session.NewTracker(),
+	}
+
+	reply, err := bc.cmdStatus(42, 0)
+	if err != nil {
+		t.Fatalf("cmdStatus() error = %v", err)
+	}
+	if !strings.Contains(reply, "Nenhuma conversa ativa no momento") {
+		t.Fatalf("expected clear no-session status, got %q", reply)
+	}
+}
+
+func TestCmdStatus_UsesTopicCwd(t *testing.T) {
+	t.Parallel()
+
+	sessions := session.NewStore()
+	sessions.SetCwd(42, 0, "/group/repo")
+	sessions.SetCwd(42, 99, "/topic/repo")
+
+	bc := &BotController{
+		config: &config.AppConfig{
+			DefaultModel: "kimi-k2-thinking",
+			Providers:    map[string]config.ProviderConfig{},
+		},
+		sessions: sessions,
+		tracker:  session.NewTracker(),
+	}
+
+	reply, err := bc.cmdStatus(42, 99)
+	if err != nil {
+		t.Fatalf("cmdStatus() error = %v", err)
+	}
+	if !strings.Contains(reply, "/topic/repo") {
+		t.Fatalf("expected topic cwd in status, got %q", reply)
+	}
+	if strings.Contains(reply, "/group/repo") {
+		t.Fatalf("expected topic cwd to override group cwd, got %q", reply)
+	}
+}
+
+func TestCmdStatus_FallsBackToGroupCwd(t *testing.T) {
+	t.Parallel()
+
+	sessions := session.NewStore()
+	sessions.SetCwd(42, 0, "/group/repo")
+
+	bc := &BotController{
+		config: &config.AppConfig{
+			DefaultModel: "kimi-k2-thinking",
+			Providers:    map[string]config.ProviderConfig{},
+		},
+		sessions: sessions,
+		tracker:  session.NewTracker(),
+	}
+
+	reply, err := bc.cmdStatus(42, 99)
+	if err != nil {
+		t.Fatalf("cmdStatus() error = %v", err)
+	}
+	if !strings.Contains(reply, "/group/repo") {
+		t.Fatalf("expected group cwd fallback in status, got %q", reply)
 	}
 }
 
@@ -438,6 +548,64 @@ func TestExtractModelName(t *testing.T) {
 				t.Errorf("extractModelName(%q) = %q, want %q", tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
+	t.Parallel()
+
+	sessions := session.NewStore()
+	tracker := session.NewTracker()
+	sessions.Set(42, 0, "general-session")
+	sessions.Set(42, 99, "topic-session")
+	sessions.SetCwd(42, 99, "/topic/repo")
+	tracker.Add(42, 100, 50, 1, 0.01)
+
+	bc := &BotController{sessions: sessions, tracker: tracker}
+	msg := bc.resetCurrentModelSession(42, 99)
+
+	if sid := sessions.Get(42, 99); sid != "" {
+		t.Fatalf("current topic session should be cleared, got %q", sid)
+	}
+	if sid := sessions.Get(42, 0); sid != "general-session" {
+		t.Fatalf("general session should be preserved, got %q", sid)
+	}
+	if cwd := sessions.GetCwd(42, 99); cwd != "/topic/repo" {
+		t.Fatalf("topic cwd should be preserved, got %q", cwd)
+	}
+	if usage := tracker.Get(42); usage.NumTurns != 0 {
+		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
+	}
+	if !strings.Contains(msg, "tópico") || !strings.Contains(msg, "1 mensagens") || !strings.Contains(msg, "~150 tokens") {
+		t.Fatalf("expected topic reset summary, got %q", msg)
+	}
+}
+
+func TestResetCurrentModelSession_ClearsPrivateChatSession(t *testing.T) {
+	t.Parallel()
+
+	sessions := session.NewStore()
+	sessions.Set(42, 0, "private-session")
+
+	bc := &BotController{sessions: sessions}
+	msg := bc.resetCurrentModelSession(42, 0)
+
+	if sid := sessions.Get(42, 0); sid != "" {
+		t.Fatalf("private chat session should be cleared, got %q", sid)
+	}
+	if !strings.Contains(msg, "Sessão privada resetada") {
+		t.Fatalf("expected private-session reset message, got %q", msg)
+	}
+}
+
+func TestHelpMessageIncludesNaturalExamples(t *testing.T) {
+	t.Parallel()
+
+	help := helpMessage()
+	for _, want := range []string{"💡", "agenda todo dia às 9h", "muda modelo", "limpa o contexto"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q: %q", want, help)
+		}
 	}
 }
 

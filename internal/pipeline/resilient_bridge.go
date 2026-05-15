@@ -1,0 +1,242 @@
+package pipeline
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/igormaneschy/aurelia/internal/bridge"
+)
+
+// BridgeExecutor is the minimal interface the pipeline needs from a bridge.
+type BridgeExecutor interface {
+	Execute(ctx context.Context, req bridge.Request) (<-chan bridge.Event, error)
+}
+
+// ResilientBridge wraps a real bridge with retry, circuit breaker, and fallback.
+type ResilientBridge struct {
+	bridge    BridgeExecutor
+	breakers  *circuitBreakerRegistry
+	config    ResilientConfig
+}
+
+// ResilientConfig configures retry and fallback behavior.
+type ResilientConfig struct {
+	MaxRetries          int
+	RetryBackoffBase    time.Duration
+	FallbackProvider    string
+	FallbackModel       string
+	OpenRouterAPIKey    string // empty = fallback disabled
+}
+
+// DefaultResilientConfig returns sensible defaults.
+func DefaultResilientConfig() ResilientConfig {
+	return ResilientConfig{
+		MaxRetries:       3,
+		RetryBackoffBase: 2 * time.Second,
+		FallbackProvider: "openrouter",
+		FallbackModel:    "openrouter/free",
+	}
+}
+
+// NewResilientBridge wraps the given bridge with resilience features.
+func NewResilientBridge(b BridgeExecutor, cfg ResilientConfig) *ResilientBridge {
+	return &ResilientBridge{
+		bridge:   b,
+		breakers: newCircuitBreakerRegistry(),
+		config:   cfg,
+	}
+}
+
+// ExecuteResult holds the outcome of a resilient execution.
+type ExecuteResult struct {
+	Events       <-chan bridge.Event
+	UsedFallback bool
+	Err          error
+}
+
+// errProcessDeath is a sentinel returned by validateChannel when the bridge
+// process exits without producing a terminal event. The pipeline's existing
+// process-death recovery must handle it, not the resilient retry/fallback path.
+var errProcessDeath = errors.New("bridge process exited without producing a terminal event")
+
+// Execute runs a request with retry, circuit breaker, and fallback.
+// onNotify is called with user-facing messages (e.g. fallback activated).
+func (rb *ResilientBridge) Execute(
+	ctx context.Context,
+	req bridge.Request,
+	onNotify func(msg string),
+) ExecuteResult {
+	provider := req.Options.Provider
+	model := req.Options.Model
+
+	// 1. Circuit breaker open → skip directly to fallback.
+	if rb.breakers.ShouldSkip(provider) {
+		if msg := rb.breakers.NotifyMessage(provider); msg != "" && onNotify != nil {
+			onNotify(msg)
+		}
+		return rb.tryFallback(ctx, req, onNotify)
+	}
+
+	// 2. Try primary provider with retries.
+	result := rb.executeWithRetry(ctx, req)
+	if result.Err == nil {
+		rb.breakers.RecordResult(provider, true)
+		return result
+	}
+
+	// Don't record failure or attempt fallback if the user cancelled.
+	if errors.Is(result.Err, context.Canceled) || errors.Is(result.Err, context.DeadlineExceeded) {
+		return result
+	}
+
+	// Process death is not a provider failure — let the pipeline handle it.
+	if errors.Is(result.Err, errProcessDeath) {
+		return result
+	}
+
+	// 3. Primary failed → record failure and attempt fallback.
+	rb.breakers.RecordResult(provider, false)
+
+	cat := ClassifyError(result.Err.Error())
+	if cat.IsRetryable() {
+		// User already saw retry messages if onNotify was used inside executeWithRetry.
+		log.Printf("resilience: primary %s failed after retries (%v), attempting fallback", provider, result.Err)
+	} else {
+		te := TranslateError(provider, model, result.Err.Error())
+		if onNotify != nil {
+			onNotify(te.Message)
+		}
+		// Non-retryable errors still get fallback for better UX (except auth).
+		if cat == ErrAuth {
+			return result
+		}
+	}
+
+	return rb.tryFallback(ctx, req, onNotify)
+}
+
+// executeWithRetry attempts the request up to MaxRetries with exponential backoff.
+// Only transient errors trigger retry; others fail fast.
+func (rb *ResilientBridge) executeWithRetry(ctx context.Context, req bridge.Request) ExecuteResult {
+	var lastErr error
+
+	for attempt := 0; attempt <= rb.config.MaxRetries; attempt++ {
+		if attempt > 0 {
+			delay := rb.config.RetryBackoffBase * (1 << (attempt - 1))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ExecuteResult{Err: ctx.Err()}
+			}
+		}
+
+		evCh, err := rb.bridge.Execute(ctx, req)
+		if err == nil {
+			// Validate the first terminal event — if it's an error, classify it.
+			validated, valErr := rb.validateChannel(ctx, evCh)
+			if valErr == nil {
+				return ExecuteResult{Events: validated}
+			}
+			lastErr = valErr
+			cat := ClassifyError(valErr.Error())
+			if !cat.IsRetryable() {
+				return ExecuteResult{Err: valErr}
+			}
+			// Transient → continue to next retry attempt.
+			continue
+		}
+
+		lastErr = err
+		cat := ClassifyError(err.Error())
+		if !cat.IsRetryable() {
+			return ExecuteResult{Err: err}
+		}
+	}
+
+	return ExecuteResult{Err: fmt.Errorf("max retries exceeded: %w", lastErr)}
+}
+
+// validateChannel reads events until a terminal one and checks if it's an error.
+// It returns a new channel that replays all events (including the terminal one).
+func (rb *ResilientBridge) validateChannel(ctx context.Context, src <-chan bridge.Event) (<-chan bridge.Event, error) {
+	var buf []bridge.Event
+	var foundTerminal bool
+	for ev := range src {
+		buf = append(buf, ev)
+		if ev.IsTerminal() {
+			foundTerminal = true
+			if ev.Type == "error" {
+				msg := ev.Message
+				if msg == "" {
+					msg = ev.Content
+				}
+				if msg == "" {
+					msg = "unknown bridge error"
+				}
+				return nil, fmt.Errorf("%s", msg)
+			}
+			break
+		}
+	}
+
+	if !foundTerminal {
+		return nil, errProcessDeath
+	}
+
+	out := make(chan bridge.Event, len(buf))
+	for _, ev := range buf {
+		out <- ev
+	}
+	close(out)
+	return out, nil
+}
+
+// tryFallback attempts the request with the fallback provider.
+func (rb *ResilientBridge) tryFallback(ctx context.Context, req bridge.Request, onNotify func(string)) ExecuteResult {
+	if rb.config.OpenRouterAPIKey == "" {
+		if onNotify != nil {
+			onNotify(OpenRouterNotConfiguredMessage())
+		}
+		return ExecuteResult{Err: fmt.Errorf("fallback unavailable: OpenRouter not configured")}
+	}
+
+	fallbackReq := req
+	fallbackReq.Options.Provider = rb.config.FallbackProvider
+	fallbackReq.Options.Model = rb.config.FallbackModel
+	// Do NOT carry over resume/continue across providers (PI SDK limitation).
+	fallbackReq.Options.Resume = ""
+	fallbackReq.Options.Continue = false
+
+	if onNotify != nil {
+		onNotify(FallbackMessage(req.Options.Provider))
+	}
+
+	log.Printf("resilience: falling back to %s/%s", rb.config.FallbackProvider, rb.config.FallbackModel)
+
+	evCh, err := rb.bridge.Execute(ctx, fallbackReq)
+	if err != nil {
+		if onNotify != nil {
+			onNotify(FinalErrorMessage())
+		}
+		return ExecuteResult{Err: fmt.Errorf("fallback failed: %w", err)}
+	}
+
+	// Validate the fallback channel.
+	validated, valErr := rb.validateChannel(ctx, evCh)
+	if valErr != nil {
+		if onNotify != nil {
+			onNotify(FinalErrorMessage())
+		}
+		return ExecuteResult{Err: fmt.Errorf("fallback failed: %w", valErr)}
+	}
+
+	return ExecuteResult{Events: validated, UsedFallback: true}
+}
+
+// BreakerState returns the circuit breaker state for a provider (for status/debug).
+func (rb *ResilientBridge) BreakerState(provider string) CircuitState {
+	return rb.breakers.get(provider).State()
+}

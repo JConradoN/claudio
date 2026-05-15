@@ -45,6 +45,7 @@ func (bc *BotController) handlePhotoAlbum(c telebot.Context, photo *telebot.Phot
 		c.Chat().ID, c.Message().ThreadID, c.Sender().ID,
 	)
 	if !isOwner {
+		bc.confirmMessage(c.Message())
 		return nil
 	}
 
@@ -99,6 +100,7 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 	}
 
 	if len(images) == 0 && tooLargeMsg != "" {
+		bc.confirmMessage(c.Message())
 		return SendContextText(c, tooLargeMsg)
 	}
 	return bc.processInputWithImages(c, text, images)
@@ -117,7 +119,22 @@ func (e imageTooLargeError) Error() string {
 }
 
 func (e imageTooLargeError) UserMessage() string {
-	return fmt.Sprintf("Imagem muito grande (%d bytes). O limite configurado é %d bytes.", e.size, e.limit)
+	return fmt.Sprintf("Imagem muito grande (%s). O limite configurado é %s.", humanBytes(e.size), humanBytes(e.limit))
+}
+
+func humanBytes(n int) string {
+	const (
+		kib = 1024
+		mib = kib * 1024
+	)
+
+	if n < kib {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < mib {
+		return fmt.Sprintf("%.1f KB", float64(n)/kib)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/mib)
 }
 
 func (bc *BotController) maxImageBytes() int {
@@ -161,6 +178,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 
 	if !isSupportedDocument(doc.FileName, doc.MIME) {
 		log.Println("Unsupported document type:", doc.MIME)
+		bc.confirmMessage(c.Message())
 		return SendContextText(c, unsupportedDocumentMessage)
 	}
 
@@ -170,6 +188,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 	filePath, err := bc.downloadTelegramFile(&doc.File, doc.FileID+"_"+doc.FileName)
 	if err != nil {
 		log.Println("Failed to download file:", err)
+		bc.confirmMessage(c.Message())
 		return SendContextText(c, downloadFailureMessage)
 	}
 	defer func() { _ = os.Remove(filePath) }()
@@ -217,6 +236,7 @@ func (bc *BotController) handleImageDocument(c telebot.Context, doc *telebot.Doc
 		log.Printf("Failed to encode image document: %v", err)
 		var tooLarge imageTooLargeError
 		if errors.As(err, &tooLarge) {
+			bc.confirmMessage(c.Message())
 			return SendContextText(c, tooLarge.UserMessage())
 		}
 		return bc.processInput(c, text)
@@ -237,12 +257,14 @@ func (bc *BotController) handleVoice(c telebot.Context) error {
 	filePath, err := bc.downloadTelegramFile(&telebot.File{FileID: fileID}, fileID+"_"+filename)
 	if err != nil {
 		log.Println("Failed to download audio:", err)
+		bc.confirmMessage(c.Message())
 		return SendContextText(c, downloadFailureMessage)
 	}
 	defer func() { _ = os.Remove(filePath) }()
 
 	transcribedText, err := bc.transcribeAudioFile(filePath)
 	if err != nil {
+		bc.confirmMessage(c.Message())
 		var msgErr sendContextTextError
 		if ok := errorAs(err, &msgErr); ok {
 			return SendContextText(c, msgErr.Error())
@@ -257,11 +279,20 @@ func isSupportedDocument(filename, mimeType string) bool {
 }
 
 func isSupportedImageDocument(filename, mimeType string) bool {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/") {
+	if isSupportedImageMIME(mimeType) {
 		return true
 	}
 	guessed := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
-	return strings.HasPrefix(guessed, "image/")
+	return isSupportedImageMIME(guessed)
+}
+
+func isSupportedImageMIME(mimeType string) bool {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func (bc *BotController) downloadTelegramFile(file *telebot.File, filename string) (string, error) {
@@ -333,6 +364,7 @@ func (bc *BotController) flushAlbumAndProcess(albumID string) {
 
 	if len(images) == 0 && tooLargeMsg != "" {
 		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, tooLargeMsg, fa.threadID)
+		ReactToMessage(bc.bot, &telebot.Chat{ID: fa.chatID}, fa.messageID, "✅")
 		return
 	}
 	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images); err != nil {

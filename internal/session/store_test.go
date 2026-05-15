@@ -109,6 +109,21 @@ func TestStore_Cwd(t *testing.T) {
 	}
 }
 
+func TestStore_ClearSession_PreservesCwd(t *testing.T) {
+	s := NewStore()
+	s.Set(1, 42, "sess-topic")
+	s.SetCwd(1, 42, "/repo")
+
+	s.ClearSession(1, 42)
+
+	if id := s.Get(1, 42); id != "" {
+		t.Fatalf("expected session to be cleared, got %q", id)
+	}
+	if cwd := s.GetCwd(1, 42); cwd != "/repo" {
+		t.Fatalf("expected cwd to be preserved, got %q", cwd)
+	}
+}
+
 func TestStore_GC_RemovesOldEntries(t *testing.T) {
 	s := NewStore()
 	s.Set(1, 0, "sess-old")
