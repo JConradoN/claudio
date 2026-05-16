@@ -92,6 +92,28 @@ func TestSplitTelegramMarkdown_PrefersParagraphBoundaries(t *testing.T) {
 	}
 }
 
+func TestSplitTelegramMarkdown_ShortTextReturnsSingleChunk(t *testing.T) {
+	chunks := splitTelegramMarkdown("ok", 3900)
+	if len(chunks) != 1 || chunks[0] != "ok" {
+		t.Fatalf("expected single chunk %q, got %#v", "ok", chunks)
+	}
+}
+
+func TestSplitTelegramMarkdown_PreservesAccents(t *testing.T) {
+	text := "áéíóú ção açúcar ñoño — frase com acentos para verificar split sem corromper runes"
+	chunks := splitTelegramMarkdown(text, 30)
+	joined := ""
+	for _, c := range chunks {
+		joined += c
+	}
+	// Trim spaces collapses, but every rune that wasn't whitespace should survive.
+	for _, want := range []string{"áéíóú", "ção", "açúcar", "ñoño", "acentos"} {
+		if !containsSubstring(joined, want) {
+			t.Fatalf("chunked output dropped %q: %v", want, chunks)
+		}
+	}
+}
+
 func TestSendError_SendsFormattedHTML(t *testing.T) {
 	sender := &stubSender{}
 	chat := &telebot.Chat{ID: 123}

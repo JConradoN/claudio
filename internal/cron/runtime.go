@@ -3,6 +3,9 @@ package cron
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
@@ -16,6 +19,7 @@ type BridgeCronRuntime struct {
 	persona         PersonaBuilder
 	memoryDir       string
 	defaultProvider string
+	exePath         string // path to the aurelia binary for CLI instructions
 }
 
 // AgentRegistry resolves agent definitions by name.
@@ -46,36 +50,54 @@ func NewBridgeCronRuntime(
 	}
 }
 
-// ExecuteJob builds the system prompt with persona and memory context,
-// optionally resolves an agent, executes via Bridge, and saves the result.
+// SetExePath configures the path to the aurelia binary used in the cron
+// scheduling instructions injected into the system prompt. Optional — if
+// unset, the prompt uses the bare "aurelia" command name.
+func (r *BridgeCronRuntime) SetExePath(path string) {
+	r.exePath = path
+}
+
+// ExecuteJob builds the system prompt with persona, agent, scheduling
+// instructions and global memory, then executes via Bridge.
 func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*ExecutionResult, error) {
-	// 1. Build system prompt from persona
 	basePrompt, err := r.persona.BuildPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("build persona prompt: %w", err)
 	}
-	systemPrompt := basePrompt
 
-	// 2. Build request options. The legacy Claude SDK supported per-tool
-	// disabling (used to block Telegram MCP plugins) and MCP server lists;
-	// neither is exposed by the PI SDK, so we no longer carry them through.
-	opts := bridge.RequestOptions{
-		Provider:     r.defaultProvider,
-		SystemPrompt: systemPrompt,
+	sections := []string{basePrompt}
+
+	agent := r.agents.Get(job.AgentName)
+	if agent != nil && agent.Prompt != "" {
+		sections = append(sections, agent.Prompt)
 	}
 
-	// 3. Apply agent config if available
-	agent := r.agents.Get(job.AgentName)
+	// Cron-spawned agents need the scheduling instructions to be able to
+	// create follow-up jobs (e.g. "remind me again in 1 hour"). Without
+	// this section the LLM would invent non-existent internal tools.
+	if cron := r.buildCronInstructions(job.TargetChatID); cron != "" {
+		sections = append(sections, cron)
+	}
+
+	// Inject global memory so the agent has continuity across runs. Per-project
+	// memory layers are intentionally skipped — cron jobs are not tied to a
+	// working directory.
+	if mem := r.loadGlobalMemory(); mem != "" {
+		sections = append(sections, mem)
+	}
+
+	opts := bridge.RequestOptions{
+		Provider:     r.defaultProvider,
+		SystemPrompt: strings.Join(sections, "\n\n"),
+	}
+
 	if agent != nil {
-		systemPrompt += "\n\n" + agent.Prompt
-		opts.SystemPrompt = systemPrompt
 		opts.Model = agent.Model
 		opts.Cwd = agent.Cwd
 		opts.AllowedTools = agent.AllowedTools
 		opts.DisallowedTools = agent.DisallowedTools
 	}
 
-	// 4. Execute via Bridge
 	ev, err := r.bridge.Execute(ctx, bridge.Request{
 		Command: "query",
 		Prompt:  job.Prompt,
@@ -94,6 +116,84 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 		CostUSD:   ev.CostUSD,
 		NumTurns:  ev.NumTurns,
 	}, nil
+}
+
+// buildCronInstructions mirrors the text injected by the telegram pipeline so
+// agents triggered by cron can schedule follow-up jobs. Returns empty when no
+// target chat is set (the --chat-id flag is required).
+func (r *BridgeCronRuntime) buildCronInstructions(targetChatID int64) string {
+	if targetChatID == 0 {
+		return ""
+	}
+	bin := "aurelia"
+	if r.exePath != "" {
+		bin = r.exePath
+	}
+	chatFlag := fmt.Sprintf("--chat-id %d", targetChatID)
+	return fmt.Sprintf(`## Scheduling Tasks
+
+Use the Aurelia cron CLI for ALL scheduling. Internal scheduling tools die with the session — only the CLI persists.
+
+- Recurring: `+"`%s cron add \"<cron-expr>\" \"<prompt>\" %s`"+`
+- One-time: `+"`%s cron once \"<ISO-timestamp>\" \"<prompt>\" %s`"+`
+- List: `+"`%s cron list %s`"+` | Delete: `+"`%s cron del <id>`"+`
+
+Cron prompts are ACTION instructions (not content). They run in isolated sessions with no history. The --chat-id flag is required.`,
+		bin, chatFlag,
+		bin, chatFlag,
+		bin, chatFlag,
+		bin,
+	)
+}
+
+// loadGlobalMemory reads MEMORY.md (if present) plus the first ~16KB of every
+// .md file in the global memory directory. Heavier per-project layers are
+// intentionally omitted — keeps the prompt bounded for cron jobs.
+func (r *BridgeCronRuntime) loadGlobalMemory() string {
+	if r.memoryDir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(r.memoryDir)
+	if err != nil {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Persistent Memory\n\nYou have memory across cron runs. Below is what you remember:\n")
+
+	const perFileCap = 8000
+	wrote := 0
+
+	if data, err := os.ReadFile(filepath.Join(r.memoryDir, "MEMORY.md")); err == nil && len(data) > 0 {
+		sb.WriteString("\n**MEMORY.md (index):**\n")
+		sb.WriteString(cap8k(string(data), perFileCap))
+		wrote++
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(r.memoryDir, name))
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		fmt.Fprintf(&sb, "\n**%s:**\n%s", name, cap8k(strings.TrimSpace(string(data)), perFileCap))
+		wrote++
+	}
+
+	if wrote == 0 {
+		return ""
+	}
+	return sb.String()
+}
+
+func cap8k(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n\n[...truncado]"
 }
 
 // BridgeAdapter wraps *bridge.Bridge to satisfy BridgeExecutor.

@@ -74,16 +74,37 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 		}
 	}
 
+	images, downloaded, partialMsg := bc.collectPhotoAttachments(photos)
+	defer func() { removeAll(downloaded) }()
+
+	if len(images) == 0 && partialMsg != "" {
+		bc.confirmMessage(c.Message())
+		return SendContextText(c, partialMsg)
+	}
+	if partialMsg != "" {
+		// Partial success — let the user know before kicking off the LLM call so
+		// they don't wonder why their 4-photo album was analyzed as 3.
+		_ = SendContextText(c, partialMsg)
+	}
+	return bc.processInputWithImages(c, text, images)
+}
+
+// collectPhotoAttachments downloads and encodes each photo, returning the
+// successful attachments, the local temp paths to clean up, and (when any
+// failed) a user-visible message describing what was dropped.
+func (bc *BotController) collectPhotoAttachments(photos []albumPhoto) ([]bridge.ImageAttachment, []string, string) {
 	var (
 		images      []bridge.ImageAttachment
 		downloaded  []string
+		downloadErr int
 		tooLargeMsg string
 	)
-	defer func() { removeAll(downloaded) }()
+
 	for _, p := range photos {
 		filePath, err := bc.downloadTelegramFile(&p.photo.File, fmt.Sprintf("photo_%d.jpg", p.messageID))
 		if err != nil {
 			log.Printf("Failed to download photo: %v", err)
+			downloadErr++
 			continue
 		}
 		downloaded = append(downloaded, filePath)
@@ -91,19 +112,39 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 		if err != nil {
 			log.Printf("Failed to encode photo: %v", err)
 			var tooLarge imageTooLargeError
-			if errors.As(err, &tooLarge) && tooLargeMsg == "" {
-				tooLargeMsg = tooLarge.UserMessage()
+			if errors.As(err, &tooLarge) {
+				if tooLargeMsg == "" {
+					tooLargeMsg = tooLarge.UserMessage()
+				}
+			} else {
+				downloadErr++
 			}
 			continue
 		}
 		images = append(images, img)
 	}
 
-	if len(images) == 0 && tooLargeMsg != "" {
-		bc.confirmMessage(c.Message())
-		return SendContextText(c, tooLargeMsg)
+	return images, downloaded, buildPartialMsg(len(images), len(photos), downloadErr, tooLargeMsg)
+}
+
+func buildPartialMsg(ok, total, downloadErr int, tooLargeMsg string) string {
+	if ok == total {
+		return ""
 	}
-	return bc.processInputWithImages(c, text, images)
+	if ok == 0 {
+		if tooLargeMsg != "" {
+			return tooLargeMsg
+		}
+		return fmt.Sprintf("Não consegui processar nenhuma das %d imagens enviadas.", total)
+	}
+	base := fmt.Sprintf("⚠️ Consegui processar apenas %d de %d imagens.", ok, total)
+	if tooLargeMsg != "" {
+		return base + "\n" + tooLargeMsg
+	}
+	if downloadErr > 0 {
+		return base + "\nFalha ao baixar/decodificar as outras — tente reenviar."
+	}
+	return base
 }
 
 const fallbackMaxImageBytes = 10 * 1024 * 1024
@@ -337,35 +378,16 @@ func (bc *BotController) flushAlbumAndProcess(albumID string) {
 		}
 	}
 
-	var (
-		images      []bridge.ImageAttachment
-		downloaded  []string
-		tooLargeMsg string
-	)
+	images, downloaded, partialMsg := bc.collectPhotoAttachments(fa.photos)
 	defer func() { removeAll(downloaded) }()
-	for _, p := range fa.photos {
-		filePath, err := bc.downloadTelegramFile(&p.photo.File, fmt.Sprintf("photo_%d.jpg", p.messageID))
-		if err != nil {
-			log.Printf("Failed to download photo: %v", err)
-			continue
-		}
-		downloaded = append(downloaded, filePath)
-		img, err := encodeImageAttachment(filePath, "image/jpeg", bc.maxImageBytes())
-		if err != nil {
-			log.Printf("Failed to encode photo: %v", err)
-			var tooLarge imageTooLargeError
-			if errors.As(err, &tooLarge) && tooLargeMsg == "" {
-				tooLargeMsg = tooLarge.UserMessage()
-			}
-			continue
-		}
-		images = append(images, img)
-	}
 
-	if len(images) == 0 && tooLargeMsg != "" {
-		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, tooLargeMsg, fa.threadID)
+	if len(images) == 0 && partialMsg != "" {
+		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, partialMsg, fa.threadID)
 		ReactToMessage(bc.bot, &telebot.Chat{ID: fa.chatID}, fa.messageID, "✅")
 		return
+	}
+	if partialMsg != "" {
+		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, partialMsg, fa.threadID)
 	}
 	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images); err != nil {
 		log.Printf("album: pipeline error for %s: %v", albumID, err)

@@ -100,6 +100,65 @@ func TestBridgeCronRuntime_ExecuteJob(t *testing.T) {
 	}
 }
 
+func TestBridgeCronRuntime_InjectsCronInstructionsForTargetChat(t *testing.T) {
+	t.Parallel()
+
+	executor := &fakeBridgeExecutor{
+		result: &bridge.Event{Type: "result", Content: "ok"},
+	}
+	registry := &fakeRegistry{agents: map[string]*agents.Agent{
+		"news": {Name: "news", Prompt: "news agent"},
+	}}
+	persona := &fakePersona{prompt: "I am Aurelia."}
+
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "", "")
+	runtime.SetExePath("/opt/aurelia/bin/aurelia")
+
+	job := CronJob{
+		ID:           "job-instr",
+		AgentName:    "news",
+		TargetChatID: 4242,
+		Prompt:       "Resumo",
+	}
+
+	if _, err := runtime.ExecuteJob(context.Background(), job); err != nil {
+		t.Fatalf("ExecuteJob() error = %v", err)
+	}
+
+	sp := executor.lastReq.Options.SystemPrompt
+	if !contains(sp, "Scheduling Tasks") {
+		t.Fatalf("expected cron instructions in system prompt:\n%s", sp)
+	}
+	if !contains(sp, "--chat-id 4242") {
+		t.Fatalf("expected target chat in scheduling instructions:\n%s", sp)
+	}
+	if !contains(sp, "/opt/aurelia/bin/aurelia cron add") {
+		t.Fatalf("expected exePath in scheduling instructions:\n%s", sp)
+	}
+}
+
+func TestBridgeCronRuntime_NoChatIDSkipsCronInstructions(t *testing.T) {
+	t.Parallel()
+
+	executor := &fakeBridgeExecutor{
+		result: &bridge.Event{Type: "result", Content: "ok"},
+	}
+	registry := &fakeRegistry{agents: map[string]*agents.Agent{}}
+	persona := &fakePersona{prompt: "base"}
+
+	runtime := NewBridgeCronRuntime(executor, registry, persona, "", "")
+	runtime.SetExePath("/opt/aurelia/bin/aurelia")
+
+	// TargetChatID 0 → no scheduling section (can't supply --chat-id).
+	if _, err := runtime.ExecuteJob(context.Background(), CronJob{ID: "x", Prompt: "p"}); err != nil {
+		t.Fatalf("ExecuteJob() error = %v", err)
+	}
+
+	if contains(executor.lastReq.Options.SystemPrompt, "Scheduling Tasks") {
+		t.Fatalf("did not expect cron instructions when TargetChatID is 0:\n%s", executor.lastReq.Options.SystemPrompt)
+	}
+}
+
 func TestBridgeCronRuntime_NoAgent(t *testing.T) {
 	t.Parallel()
 

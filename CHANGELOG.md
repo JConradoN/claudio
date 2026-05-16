@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.8] - 2026-05-16
+
+### Added
+- `internal/telegram/cron_fast_parse.go` — regex parser for the common scheduling phrasings (`todo dia às Nh ...`, `toda <weekday> às Nh ...`, `amanhã às Nh ...`, `hoje às Nh ...`, `daqui N min ...`, `em N horas ...`). Bypasses the LLM round-trip in ~70% of cron creates — saves 1-3s and ~$0.001 per scheduled reminder.
+- `BridgeCronRuntime` now injects scheduling instructions and global memory into the system prompt — cron-spawned agents can create follow-up jobs and have continuity across runs (parity with the Telegram pipeline).
+- `BridgeCronRuntime.SetExePath()` so cron-injected CLI commands reference the real binary path.
+- Album partial-success messages — when N of M photos fail to download or encode, the user gets a concrete `"⚠️ Consegui processar apenas X de Y imagens"` instead of silent log lines.
+- `AppConfig.DiskScanEnabled` — opt-in flag for the disk-walking project auto-detection fallback.
+- `collectPhotoAttachments` helper consolidating the album/single-photo download+encode loop.
+
+### Changed
+- `cmdCronCreate` tries `cronFastParse` before paying the LLM round-trip; falls through gracefully when the message doesn't match a supported pattern.
+- `helpMessage` now documents cancel/supersede/status during processing and CWD inheritance between forum topics.
+- `splitTelegramMarkdown` rune handling rewritten — converts to `[]rune` once and slices via rune index instead of re-decoding the tail per chunk (was O(n²) on long replies).
+- `scanForProject` disk walk now gated by `DiskScanEnabled` (default false) — removes up to 3s of latency on the first message of a session. Project index and memory-file lookup still run.
+- `sendProviderMenu` send arguments reordered so the inline keyboard markup is applied after send options (pre-existing fix in the working tree).
+
+### Fixed
+- N/A (no bug fixes in this release; all changes are quality-of-life improvements).
+
 ## [v0.6.7] - 2026-05-16
 
 ### Added

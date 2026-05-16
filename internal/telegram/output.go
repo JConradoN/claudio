@@ -69,33 +69,68 @@ func splitTelegramMarkdown(text string, limit int) []string {
 		return []string{""}
 	}
 
-	var chunks []string
-	remaining := trimmed
-	for len([]rune(remaining)) > limit {
-		splitAt := bestSplitIndex(remaining, limit)
-		chunks = append(chunks, strings.TrimSpace(remaining[:splitAt]))
-		remaining = strings.TrimSpace(remaining[splitAt:])
+	// Convert to runes once; slicing by rune index is O(1) afterwards. The
+	// previous implementation re-decoded the (shrinking) tail on every chunk
+	// and bestSplitIndex re-decoded the head too — O(n²) on long replies.
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
+		return []string{trimmed}
 	}
-	if remaining != "" {
-		chunks = append(chunks, remaining)
+
+	var chunks []string
+	for len(runes) > limit {
+		splitAt := bestSplitIndexRunes(runes, limit)
+		chunk := strings.TrimSpace(string(runes[:splitAt]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = runes[splitAt:]
+		// Drop leading whitespace runes without re-converting the slice.
+		for len(runes) > 0 && (runes[0] == ' ' || runes[0] == '\t' || runes[0] == '\n' || runes[0] == '\r') {
+			runes = runes[1:]
+		}
+	}
+	if len(runes) > 0 {
+		if tail := strings.TrimSpace(string(runes)); tail != "" {
+			chunks = append(chunks, tail)
+		}
 	}
 	return chunks
 }
 
-func bestSplitIndex(text string, limit int) int {
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return len(text)
-	}
+// splitCandidates lists the preferred boundary substrings, ordered by
+// readability — try paragraph break first, then sentence, then any space.
+var splitCandidates = []string{"\n\n", "\n", ". ", " "}
 
-	candidates := []string{"\n\n", "\n", ". ", " "}
-	window := string(runes[:limit])
-	for _, candidate := range candidates {
-		if idx := strings.LastIndex(window, candidate); idx > 0 {
-			return idx
+// bestSplitIndexRunes returns a rune index in [0, limit] to split at. The
+// returned index is suitable for `runes[:idx]`. Falls back to limit when no
+// candidate boundary fits in the window.
+func bestSplitIndexRunes(runes []rune, limit int) int {
+	if len(runes) <= limit {
+		return len(runes)
+	}
+	for _, candidate := range splitCandidates {
+		cr := []rune(candidate)
+		// Walk backwards from limit looking for the candidate substring.
+		for i := limit - len(cr); i > 0; i-- {
+			if runesEqualAt(runes, i, cr) {
+				return i
+			}
 		}
 	}
-	return len(string(runes[:limit]))
+	return limit
+}
+
+func runesEqualAt(runes []rune, idx int, needle []rune) bool {
+	if idx+len(needle) > len(runes) {
+		return false
+	}
+	for i, r := range needle {
+		if runes[idx+i] != r {
+			return false
+		}
+	}
+	return true
 }
 
 // SendTextReply sends text without reply-to quoting. Kept as a thin alias so

@@ -86,6 +86,13 @@ type AppConfig struct {
 	VisionProvider string `json:"vision_provider,omitempty"`
 	LogLevel       string `json:"log_level,omitempty"`
 	LogFormat      string `json:"log_format,omitempty"`
+
+	// DiskScanEnabled toggles the fallback that walks $HOME (and /media, /mnt)
+	// looking for a directory whose name matches a word in the user's first
+	// message. Disabled by default — adds up to 3s of latency on session start
+	// and the projectIndex already covers the common cases. Opt-in for users
+	// who really want fuzzy disk discovery.
+	DiskScanEnabled bool `json:"disk_scan_enabled,omitempty"`
 }
 
 // VisionFallback returns the configured vision model and provider for image inputs.
@@ -145,10 +152,11 @@ type fileConfig struct {
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
 
-	VisionModel    string `json:"vision_model,omitempty"`
-	VisionProvider string `json:"vision_provider,omitempty"`
-	LogLevel       string `json:"log_level,omitempty"`
-	LogFormat      string `json:"log_format,omitempty"`
+	VisionModel     string `json:"vision_model,omitempty"`
+	VisionProvider  string `json:"vision_provider,omitempty"`
+	LogLevel        string `json:"log_level,omitempty"`
+	LogFormat       string `json:"log_format,omitempty"`
+	DiskScanEnabled bool   `json:"disk_scan_enabled,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -297,5 +305,6 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		VisionProvider:          cfg.VisionProvider,
 		LogLevel:                cfg.LogLevel,
 		LogFormat:               cfg.LogFormat,
+		DiskScanEnabled:         cfg.DiskScanEnabled,
 	}
 }

@@ -407,15 +407,11 @@ func parseCronCreateResponse(raw string) (*cronCreateParsed, error) {
 	return &parsed, nil
 }
 
-func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, error) {
-	if bc.cronHandler == nil {
-		return "Sistema de agendamentos não disponível.", nil
-	}
-	if bc.bridge == nil {
-		return "Processador não disponível para interpretar o agendamento.", nil
-	}
-
-	// Use a focused LLM call to extract scheduling parameters from natural language
+// parseCronWithLLM is the slow-path cron parser used when the regex fast-path
+// in cronFastParse doesn't recognize the message. Returns nil parsed and no
+// error when the LLM response can't be decoded — caller surfaces that as
+// "didn't understand" to the user.
+func (bc *BotController) parseCronWithLLM(text string) (*cronCreateParsed, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cronParseTimeout)
 	defer cancel()
 
@@ -429,19 +425,49 @@ func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, 
 		},
 	})
 	if err != nil {
-		return "Não consegui interpretar o agendamento. Tente algo como: \"agenda todo dia às 9h revisar emails\"", nil
+		return nil, err
 	}
 
 	parsed, parseErr := parseCronCreateResponse(result.Content)
 	if parseErr != nil {
-		log.Printf("command: cron_create parse error: %v (raw: %q)", parseErr, result.Content)
-		return "Não entendi o agendamento. Tente algo como: \"agenda todo dia às 9h revisar emails\"", nil
+		log.Printf("command: cron_create LLM parse error: %v (raw: %q)", parseErr, result.Content)
+		return nil, nil
+	}
+	return parsed, nil
+}
+
+func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, error) {
+	if bc.cronHandler == nil {
+		return "Sistema de agendamentos não disponível.", nil
 	}
 
+	// Fast path: try local regex parser before paying the LLM round-trip.
+	// Handles the common ~70% (daily, weekly, today/tomorrow, "daqui N min").
+	parsed := cronFastParse(text, time.Now())
+	if parsed == nil {
+		if bc.bridge == nil {
+			return "Processador não disponível para interpretar o agendamento.", nil
+		}
+		llmParsed, err := bc.parseCronWithLLM(text)
+		if err != nil {
+			return "Não consegui interpretar o agendamento. Tente algo como: \"agenda todo dia às 9h revisar emails\"", nil
+		}
+		if llmParsed == nil {
+			return "Não entendi o agendamento. Tente algo como: \"agenda todo dia às 9h revisar emails\"", nil
+		}
+		parsed = llmParsed
+	} else {
+		log.Printf("command: cron_create fast-path matched (type=%s)", parsed.Type)
+	}
+
+	ctx := context.Background()
 	chatID := c.Chat().ID
 	userID := fmt.Sprintf("%d", c.Sender().ID)
 
-	var jobID string
+	var (
+		jobID string
+		err   error
+	)
 	switch parsed.Type {
 	case "cron":
 		jobID, err = bc.cronHandler.service.AddRecurringJob(ctx, userID, chatID, parsed.CronExpr, parsed.Prompt)

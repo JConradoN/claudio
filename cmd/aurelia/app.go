@@ -196,7 +196,7 @@ func bootstrapApp() (*app, error) {
 		}
 	}()
 
-	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider)
+	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider, exePath)
 	if err != nil {
 		if closeErr := cronStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close cron store: %v", closeErr)
@@ -287,6 +287,7 @@ func setupCronScheduler(
 	bot *telegram.BotController,
 	memoryDir string,
 	defaultProvider string,
+	exePath string,
 ) (*cron.Scheduler, error) {
 	if agentReg == nil {
 		return nil, nil
@@ -299,6 +300,7 @@ func setupCronScheduler(
 		memoryDir,
 		defaultProvider,
 	)
+	cronRuntime.SetExePath(exePath)
 
 	delivery := cron.NewTelegramDelivery(bot.ChatSender())
 	deliverFn := func(ctx context.Context, job cron.CronJob, result *cron.ExecutionResult, execErr error) error {

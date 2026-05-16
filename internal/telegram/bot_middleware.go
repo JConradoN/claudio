@@ -91,12 +91,12 @@ func (bc *BotController) handleHelpCommand(c telebot.Context) error {
 
 func helpMessage() string {
 	return "Comandos disponíveis:\n\n" +
-		"/new — Nova sessão (limpa contexto)\n" +
+		"/new — Nova sessão (limpa contexto, cancela o que estiver em andamento)\n" +
 		"/usage — Ver uso de tokens da sessão\n" +
-		"/status — Ver estado atual da Aurelia\n" +
-		"/cwd <path> — Definir diretório de trabalho\n" +
+		"/status — Ver estado atual + trabalho ativo + fila\n" +
+		"/cwd <path> — Definir diretório de trabalho (tópicos herdam do grupo)\n" +
 		"/cron — Gerenciar agendamentos\n" +
-		"/agents — Listar agentes disponíveis\n" +
+		"/agents — Listar agentes disponíveis (também roteáveis com @nome)\n" +
 		"/model — Ver/trocar modelo ativo\n" +
 		"/help — Mostrar esta mensagem\n\n" +
 		"---\n\n" +
@@ -105,6 +105,11 @@ func helpMessage() string {
 		"• \"muda modelo para claude-sonnet\"\n" +
 		"• \"limpa o contexto\"\n" +
 		"• \"quais modelos\"\n\n" +
+		"🛑 Enquanto eu processo, você pode:\n" +
+		"• \"para\" / \"cancela\" — interrompe o pedido atual\n" +
+		"• \"na verdade...\" / \"corrigindo\" — substitui pelo novo pedido\n" +
+		"• \"conseguiu?\" / \"status\" — pergunta sem entrar na fila\n" +
+		"• outras mensagens entram na fila e rodam depois\n\n" +
 		"Ou simplesmente envie uma mensagem e eu respondo."
 }
 
@@ -323,7 +328,7 @@ func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
 	if edit {
 		return c.Edit(msg, menu)
 	}
-	_, err := bc.bot.Send(c.Chat(), msg, menu, &telebot.SendOptions{ThreadID: c.Message().ThreadID})
+	_, err := bc.bot.Send(c.Chat(), msg, &telebot.SendOptions{ThreadID: c.Message().ThreadID}, menu)
 	return err
 }
 

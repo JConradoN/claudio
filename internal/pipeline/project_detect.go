@@ -206,8 +206,11 @@ func (bc *Service) detectProjectPath(ctx context.Context, text string) string {
 		}
 	}
 
-	// 4. Scan disk for directory name match (fallback)
-	if ctx.Err() == nil {
+	// 4. Disk-walking fallback. Off by default — adds up to 3s of latency on
+	// session start and the projectIndex (step 3) already covers the common
+	// cases. Opt in via config.disk_scan_enabled when fuzzy disk discovery
+	// is really wanted.
+	if bc.config != nil && bc.config.DiskScanEnabled && ctx.Err() == nil {
 		if found := scanForProject(ctx, text); found != "" {
 			return found
 		}
