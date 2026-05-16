@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.7] - 2026-05-16
+
+### Added
+- `Makefile` com alvos `build`, `deploy` (atômico), `install-service`, `restart`, `stop`, `status`, `logs`
+- `scripts/com.aurelia.agent.plist.tmpl` — template launchd com `KeepAlive` (auto-restart em crash) e `RunAtLoad` (start no login)
+- `scripts/install-service.sh` — renderiza o plist e carrega o serviço (idempotente)
+- `docs/OPERATIONS.md` — guia de deploy, recovery e troubleshooting do daemon
+- `memoryCache.ttl` configurável (default 5s) para pular validação de mtime em chamadas rápidas
+- `formatTokenCount()` — prefixa `~` somente quando o total é estimativa por turns
+
+### Changed
+- `ResilientBridge.validateChannel` agora valida só o primeiro evento e faz proxy live do restante — eventos `tool_use` voltam a chegar em tempo real ao `ProgressReporter` (antes ficavam buffered até o final da resposta)
+- `progressReporter` aplica throttle de 1.5s entre edits para evitar `FloodError`
+- `sendTextWithSender` / `sendTextReplyWithSender` pulam `sleep` de 200ms após o último chunk
+- `routeAgent` pula classificação LLM quando há <2 agents ou texto curto (<10 chars); timeout reduzido de 15s → 5s
+- TLC do orchestrator só é incluído no system prompt quando há `cwd` setado (economiza ~3-5k tokens em chats casuais)
+- `MatchCommand` agora normaliza acentos — comandos funcionam com ou sem diacríticos
+- `formatResetSummary` e `formatModelResetSummary` omitem `~` quando contagem de tokens é real
+- `cmdCronCancel` distingue "ID não informado" de "ID não encontrado"
+
+### Fixed
+- `BotController` não cria `nudgeBuffer` redundante — ownership único no `pipeline.Service`
+
 ## [v0.6.6] - 2026-05-15
 
 ### Added

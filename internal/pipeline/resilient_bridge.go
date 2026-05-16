@@ -159,39 +159,74 @@ func (rb *ResilientBridge) executeWithRetry(ctx context.Context, req bridge.Requ
 	return ExecuteResult{Err: fmt.Errorf("max retries exceeded: %w", lastErr)}
 }
 
-// validateChannel reads events until a terminal one and checks if it's an error.
-// It returns a new channel that replays all events (including the terminal one).
+// validateChannel reads at most until the first non-terminal event arrives
+// (proving the stream is live) OR a terminal event arrives. Terminal errors
+// surface as errors; otherwise a wrapper channel is returned that prepends
+// the events already consumed and proxies the rest live so downstream
+// consumers (e.g. ProgressReporter) see tool_use events as they happen
+// instead of after the full response completes.
 func (rb *ResilientBridge) validateChannel(ctx context.Context, src <-chan bridge.Event) (<-chan bridge.Event, error) {
-	var buf []bridge.Event
-	var foundTerminal bool
-	for ev := range src {
-		buf = append(buf, ev)
-		if ev.IsTerminal() {
-			foundTerminal = true
-			if ev.Type == "error" {
-				msg := ev.Message
-				if msg == "" {
-					msg = ev.Content
+	var prefix []bridge.Event
+	for {
+		select {
+		case ev, ok := <-src:
+			if !ok {
+				if len(prefix) == 0 {
+					return nil, errProcessDeath
 				}
-				if msg == "" {
-					msg = "unknown bridge error"
-				}
-				return nil, fmt.Errorf("%s", msg)
+				// Stream closed before terminal but we had partial events —
+				// replay them so the caller sees what arrived; downstream
+				// handles missing terminal as process death.
+				return replayBuffer(prefix), nil
 			}
-			break
+			if ev.IsTerminal() {
+				if ev.Type == "error" {
+					msg := ev.Message
+					if msg == "" {
+						msg = ev.Content
+					}
+					if msg == "" {
+						msg = "unknown bridge error"
+					}
+					return nil, fmt.Errorf("%s", msg)
+				}
+				prefix = append(prefix, ev)
+				return replayBuffer(prefix), nil
+			}
+			// First non-terminal event proves the stream is live — start
+			// proxying remaining events without buffering.
+			prefix = append(prefix, ev)
+			return proxyChannel(prefix, src), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
+}
 
-	if !foundTerminal {
-		return nil, errProcessDeath
-	}
-
+// replayBuffer returns a closed channel preloaded with the buffered events.
+func replayBuffer(buf []bridge.Event) <-chan bridge.Event {
 	out := make(chan bridge.Event, len(buf))
 	for _, ev := range buf {
 		out <- ev
 	}
 	close(out)
-	return out, nil
+	return out
+}
+
+// proxyChannel returns a channel that emits the prefix first, then forwards
+// every event from src as it arrives. Closes when src closes.
+func proxyChannel(prefix []bridge.Event, src <-chan bridge.Event) <-chan bridge.Event {
+	out := make(chan bridge.Event, len(prefix)+16)
+	for _, ev := range prefix {
+		out <- ev
+	}
+	go func() {
+		defer close(out)
+		for ev := range src {
+			out <- ev
+		}
+	}()
+	return out
 }
 
 // tryFallback attempts the request with the fallback provider.

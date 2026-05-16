@@ -53,9 +53,11 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 		sections = append(sections, agentSection)
 	}
 
-	// Orchestrator TLC methodology — only when user signals planning/implementation intent
+	// Orchestrator TLC methodology — only when user signals planning intent
+	// AND a working directory is set (planning without a project to act on
+	// just bloats the prompt with ~3-5k tokens of unused methodology).
 	var orchLen int
-	if bc.orchestrator != nil && looksLikePlanningIntent(userText) {
+	if bc.orchestrator != nil && looksLikePlanningIntent(userText) && bc.effectiveCwd(agent, chatID, threadID) != "" {
 		agentSummaries := bc.buildAgentSummaries()
 		orchSection := orchestrator.BuildOrchestratorPrompt("", agentSummaries)
 		orchLen = len(orchSection)

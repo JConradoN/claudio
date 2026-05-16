@@ -127,8 +127,12 @@ func TestCmdSessionReset(t *testing.T) {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
 
-	if !strings.Contains(reply, "1 mensagens") || !strings.Contains(reply, "~1500 tokens") {
+	// Real token counts from Tracker.Add — no "~" prefix expected.
+	if !strings.Contains(reply, "1 mensagens") || !strings.Contains(reply, "1500 tokens") {
 		t.Fatalf("expected reset summary in reply, got %q", reply)
+	}
+	if strings.Contains(reply, "~1500") {
+		t.Fatalf("real token count should not be tildified: %q", reply)
 	}
 }
 
@@ -576,8 +580,11 @@ func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
 	if usage := tracker.Get(42); usage.NumTurns != 0 {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
-	if !strings.Contains(msg, "tópico") || !strings.Contains(msg, "1 mensagens") || !strings.Contains(msg, "~150 tokens") {
+	if !strings.Contains(msg, "tópico") || !strings.Contains(msg, "1 mensagens") || !strings.Contains(msg, "150 tokens") {
 		t.Fatalf("expected topic reset summary, got %q", msg)
+	}
+	if strings.Contains(msg, "~150") {
+		t.Fatalf("real token count should not be tildified: %q", msg)
 	}
 }
 

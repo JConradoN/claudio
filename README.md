@@ -346,9 +346,19 @@ air                   # Hot reload
 To rebuild the Bridge bundle after modifying `bridge/index.ts`:
 
 ```bash
-cd bridge && npm run build
-cp bundle.js ../internal/bridge/bundle.js
+make bridge           # bundles + copies into internal/bridge/
 ```
+
+## Running as a service (macOS)
+
+```bash
+make install-service  # one-time: install launchd plist (auto-restart, RunAtLoad)
+make deploy           # build atomically + kick the daemon
+make logs             # tail daemon stderr
+make status           # show launchd state
+```
+
+Full guide: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Current State
 

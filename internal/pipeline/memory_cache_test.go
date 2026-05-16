@@ -38,6 +38,7 @@ func TestMemoryCache_MissAfterMtimeChange(t *testing.T) {
 	t.Parallel()
 
 	cache := newMemoryCache()
+	cache.ttl = 0 // disable TTL so mtime validation runs every get()
 	dir := t.TempDir()
 
 	filePath := filepath.Join(dir, "data.md")
@@ -123,6 +124,7 @@ func TestMemoryCache_MissAfterNewFileAdded(t *testing.T) {
 	t.Parallel()
 
 	cache := newMemoryCache()
+	cache.ttl = 0
 	dir := t.TempDir()
 
 	writeFile(t, filepath.Join(dir, "a.md"), "file a")
@@ -142,6 +144,7 @@ func TestMemoryCache_MissAfterFileDeleted(t *testing.T) {
 	t.Parallel()
 
 	cache := newMemoryCache()
+	cache.ttl = 0
 	dir := t.TempDir()
 
 	writeFile(t, filepath.Join(dir, "a.md"), "file a")
@@ -157,6 +160,31 @@ func TestMemoryCache_MissAfterFileDeleted(t *testing.T) {
 	_, ok := cache.get(dir)
 	if ok {
 		t.Fatal("expected cache miss after file deleted")
+	}
+}
+
+func TestMemoryCache_TTLFreshness(t *testing.T) {
+	t.Parallel()
+
+	cache := newMemoryCache()
+	cache.ttl = 50 * time.Millisecond
+	dir := t.TempDir()
+
+	filePath := filepath.Join(dir, "data.md")
+	writeFile(t, filePath, "v1")
+	cache.put(dir, "v1", nil)
+
+	// Within TTL: change should NOT be detected (cache trusts itself).
+	time.Sleep(5 * time.Millisecond)
+	writeFile(t, filePath, "v2")
+	if _, ok := cache.get(dir); !ok {
+		t.Fatal("expected cache hit within TTL even after mtime change")
+	}
+
+	// After TTL: validation runs and detects the change.
+	time.Sleep(60 * time.Millisecond)
+	if _, ok := cache.get(dir); ok {
+		t.Fatal("expected cache miss after TTL with mtime change")
 	}
 }
 

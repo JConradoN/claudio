@@ -45,12 +45,13 @@ type commandRule struct {
 	exact   bool     // if true, the entire message must equal one of the phrases
 }
 
-// rules are checked in order; first match wins.
+// commandPhrases are normalized (lowercase, accent-stripped) at init time so
+// MatchCommand can do a single accent-strip on the input and compare.
 var commandRules = []commandRule{
 	// cron_list (check before cron_create to avoid "lista agendamentos" matching create)
 	{CmdCronList, []string{
 		"meus agendamentos",
-		"o que tá agendado", "o que ta agendado",
+		"o que ta agendado",
 		"lista agendamentos", "listar agendamentos",
 	}, false},
 	// cron_cancel (check before cron_create to avoid "cancela" partial matching)
@@ -75,7 +76,7 @@ var commandRules = []commandRule{
 	{CmdSessionReset, []string{
 		"nova conversa",
 		"limpa o contexto", "limpar contexto", "limpa contexto",
-		"começa de novo", "comeca de novo",
+		"comeca de novo",
 	}, false},
 	{CmdSessionReset, []string{
 		"reset",
@@ -83,7 +84,7 @@ var commandRules = []commandRule{
 	// status (exact match only — "status" is too common as a word)
 	{CmdStatus, []string{
 		"status",
-		"tá funcionando", "ta funcionando",
+		"ta funcionando",
 	}, true},
 	// list_agents
 	{CmdListAgents, []string{
@@ -103,10 +104,27 @@ var commandRules = []commandRule{
 	}, false},
 }
 
+// accentReplacer maps common Portuguese diacritics to ASCII. Shared with the
+// concurrent-message classifier so command matching and intent detection use
+// the same normalization.
+var accentReplacer = strings.NewReplacer(
+	"á", "a", "à", "a", "ã", "a", "â", "a",
+	"é", "e", "ê", "e",
+	"í", "i",
+	"ó", "o", "ô", "o", "õ", "o",
+	"ú", "u",
+	"ç", "c",
+)
+
+func stripAccents(s string) string {
+	return accentReplacer.Replace(s)
+}
+
 // MatchCommand checks if a message is a system command. Returns nil if no match.
 // Uses keyword matching with a narrative-context heuristic to avoid false positives.
+// Diacritics are stripped so "começa de novo" and "comeca de novo" match equally.
 func MatchCommand(text string) *MatchedCommand {
-	lower := strings.ToLower(strings.TrimSpace(text))
+	lower := stripAccents(strings.ToLower(strings.TrimSpace(text)))
 	if lower == "" {
 		return nil
 	}
@@ -247,7 +265,17 @@ func formatResetSummary(usage session.Usage, canceledActive bool) string {
 	if usage.NumTurns <= 0 {
 		return prefix + "Sessão resetada. Próxima mensagem inicia conversa nova."
 	}
-	return prefix + fmt.Sprintf("🗑️ Sessão resetada (%d mensagens, ~%d tokens).\nPróxima mensagem inicia conversa nova.", usage.NumTurns, usage.TotalTokens())
+	return prefix + fmt.Sprintf("🗑️ Sessão resetada (%d mensagens, %s tokens).\nPróxima mensagem inicia conversa nova.", usage.NumTurns, formatTokenCount(usage))
+}
+
+// formatTokenCount prefixes "~" only when the displayed total is a turn-based
+// estimate rather than a real count from the bridge.
+func formatTokenCount(u session.Usage) string {
+	total := u.TotalTokens()
+	if u.EstimatedTokens > u.InputTokens+u.OutputTokens {
+		return fmt.Sprintf("~%d", total)
+	}
+	return fmt.Sprintf("%d", total)
 }
 
 func (bc *BotController) cmdCronList(chatID int64) (string, error) {
@@ -270,14 +298,18 @@ func (bc *BotController) cmdCronCancel(chatID int64, text string) (string, error
 		return "Sistema de agendamentos não disponível.", nil
 	}
 
-	// Extract job ID: last word of the message (should be a UUID prefix)
 	jobID := extractLastWord(text)
 	if jobID == "" || !looksLikeJobID(jobID) {
-		return "Não encontrei o ID do agendamento. Use 'meus agendamentos' pra ver a lista com os IDs.", nil
+		return "Não encontrei o ID do agendamento na sua mensagem. Use 'meus agendamentos' pra ver a lista com os IDs.", nil
 	}
 
 	ctx := context.Background()
 	if err := bc.cronHandler.service.DeleteJob(ctx, jobID); err != nil {
+		// Distinguish "not found" (user typo / cancelled already) from infra error so the
+		// user gets actionable feedback instead of a generic stack trace.
+		if errMsg := err.Error(); strings.Contains(strings.ToLower(errMsg), "not found") {
+			return fmt.Sprintf("Nenhum agendamento com ID `%s` foi encontrado. Use 'meus agendamentos' para ver os IDs ativos.", jobID), nil
+		}
 		return "", fmt.Errorf("falha ao cancelar agendamento: %w", err)
 	}
 
@@ -672,7 +704,7 @@ func formatModelResetSummary(threadID int, usage session.Usage) string {
 	if usage.NumTurns <= 0 {
 		return scope
 	}
-	return fmt.Sprintf("%s (%d mensagens, ~%d tokens).", strings.TrimSuffix(scope, "."), usage.NumTurns, usage.TotalTokens())
+	return fmt.Sprintf("%s (%d mensagens, %s tokens).", strings.TrimSuffix(scope, "."), usage.NumTurns, formatTokenCount(usage))
 }
 
 // extractModelName pulls the model name from a set-model command. Returns

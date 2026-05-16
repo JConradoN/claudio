@@ -8,33 +8,50 @@ import (
 	"time"
 )
 
+// defaultMemoryCacheTTL is the period during which a cached entry is trusted
+// without re-validating mtimes. Validation walks every .md file via os.Stat;
+// in fast chat turns these scans dominate. The TTL is short enough that
+// explicit invalidate() calls (after writes) still keep the cache fresh.
+const defaultMemoryCacheTTL = 5 * time.Second
+
 // memoryCache caches pre-rendered memory directory content by mtime.
 // A directory's content is re-read when any .md file's mtime changes, a new
 // .md file appears, or an existing one is deleted.
 type memoryCache struct {
 	mu      sync.RWMutex
 	entries map[string]memoryCacheEntry
+	ttl     time.Duration
 }
 
 type memoryCacheEntry struct {
-	content   string
-	mtimes    map[string]time.Time // filename → mtime (set of files at put time)
-	filenames map[string]struct{}  // set of .md filenames for new/deleted detection
+	content       string
+	mtimes        map[string]time.Time // filename → mtime (set of files at put time)
+	filenames     map[string]struct{}  // set of .md filenames for new/deleted detection
+	lastValidated time.Time            // skip mtime check while within TTL
 }
 
 func newMemoryCache() *memoryCache {
-	return &memoryCache{entries: make(map[string]memoryCacheEntry, 16)}
+	return &memoryCache{
+		entries: make(map[string]memoryCacheEntry, 16),
+		ttl:     defaultMemoryCacheTTL,
+	}
 }
 
 // get returns cached content for dir if the directory's .md files haven't
 // changed (mtime, additions, or deletions). Returns false on first access
-// or when any change is detected.
+// or when any change is detected. Validation is skipped entirely while the
+// entry is within memoryCacheTTL — explicit invalidate() calls after writes
+// keep things consistent across that window.
 func (c *memoryCache) get(dir string) (string, bool) {
 	c.mu.RLock()
 	entry, ok := c.entries[dir]
 	c.mu.RUnlock()
 	if !ok {
 		return "", false
+	}
+
+	if c.ttl > 0 && time.Since(entry.lastValidated) < c.ttl {
+		return entry.content, true
 	}
 
 	// Read current dir to detect new or deleted .md files.
@@ -63,6 +80,14 @@ func (c *memoryCache) get(dir string) (string, bool) {
 			return "", false
 		}
 	}
+
+	// Refresh validation timestamp so the next few calls hit the fast path.
+	c.mu.Lock()
+	if e, ok := c.entries[dir]; ok {
+		e.lastValidated = time.Now()
+		c.entries[dir] = e
+	}
+	c.mu.Unlock()
 
 	return entry.content, true
 }
@@ -96,9 +121,10 @@ func (c *memoryCache) put(dir string, content string, mtimes map[string]time.Tim
 
 	c.mu.Lock()
 	c.entries[dir] = memoryCacheEntry{
-		content:   content,
-		mtimes:    mtimes,
-		filenames: filenames,
+		content:       content,
+		mtimes:        mtimes,
+		filenames:     filenames,
+		lastValidated: time.Now(),
 	}
 	c.mu.Unlock()
 }

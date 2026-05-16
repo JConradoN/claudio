@@ -10,6 +10,10 @@ import (
 	"gopkg.in/telebot.v3"
 )
 
+// progressEditInterval throttles edits to avoid Telegram rate limits.
+// Telegram allows ~1 edit/sec per message; we leave a margin.
+const progressEditInterval = 1500 * time.Millisecond
+
 type progressReporter struct {
 	bot       *telebot.Bot
 	chat      *telebot.Chat
@@ -18,6 +22,7 @@ type progressReporter struct {
 	threadID  int
 	startTime time.Time
 	lastText  string
+	lastEdit  time.Time
 	mu        sync.Mutex
 }
 
@@ -49,14 +54,22 @@ func (p *progressReporter) ReportTool(toolName string) {
 		}
 		p.msg = sent
 		p.lastText = text
-	} else {
-		_, err := p.bot.Edit(p.msg, text)
-		if err != nil {
-			log.Printf("Progress edit error: %v", err)
-			return
-		}
-		p.lastText = text
+		p.lastEdit = time.Now()
+		return
 	}
+
+	// Throttle edits: Telegram rate-limits per-message edits and progress is
+	// purely visual feedback — the user only sees the final assistant reply.
+	if time.Since(p.lastEdit) < progressEditInterval {
+		return
+	}
+	_, err := p.bot.Edit(p.msg, text)
+	if err != nil {
+		log.Printf("Progress edit error: %v", err)
+		return
+	}
+	p.lastText = text
+	p.lastEdit = time.Now()
 }
 
 func progressText(tools []string, elapsed time.Duration) string {

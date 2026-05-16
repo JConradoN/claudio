@@ -14,9 +14,22 @@ go vet ./...             # static analysis
 Bridge rebuild (after modifying `bridge/index.ts`):
 
 ```bash
-cd bridge && npx esbuild index.ts --bundle --platform=node --target=node18 --outfile=bundle.js --format=esm
-cp bundle.js ../internal/bridge/bundle.js
+make bridge              # rebuilds + copies bundle into internal/bridge/
 ```
+
+## Deploying changes
+
+Use the Makefile — never edit `~/.aurelia/bin/aurelia` by hand:
+
+```bash
+make install-service     # one-time: install launchd plist
+make deploy              # build atomically + restart the daemon
+make logs                # tail daemon stderr
+make status              # check launchd state
+```
+
+Full operations guide: [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — covers
+auto-restart, recovery from orphan daemons, troubleshooting, etc.
 
 ## Workflow
 
@@ -44,15 +57,21 @@ For trivial tasks, implement directly and validate.
 
 | Package | Responsibility |
 |---------|---------------|
-| `cmd/aurelia/` | Entrypoint, wiring, onboarding |
-| `internal/bridge/` | Go client for the TS Bridge process |
+| `cmd/aurelia/` | Entrypoint, wiring, lifecycle |
+| `internal/bridge/` | Go client for the TS Bridge process (PI SDK) |
+| `internal/pipeline/` | Reusable turn driver: prompt + bridge + plan dispatch + resilience + run supervisor |
+| `internal/orchestrator/` | Plan→workers→validate cycle, worktrees, quality gate, git/PR |
 | `internal/agents/` | Agent registry (load markdown definitions) |
 | `internal/session/` | Session store and token tracking |
 | `internal/persona/` | Identity files, prompt assembly |
 | `internal/cron/` | Schedule store, scheduler, bridge-backed runtime |
-| `internal/telegram/` | Telegram bot handlers |
+| `internal/dream/` | Background memory consolidation and nudges |
+| `internal/telegram/` | Telegram bot handlers + command layer |
 | `internal/config/` | Config loading and validation |
 | `internal/runtime/` | Instance and project path resolution |
+| `internal/onboarding/` | Interactive setup wizard |
+| `internal/deps/` | Runtime dependency checks (Node, npm, git, gh) |
+| `internal/version/` | Build version constant |
 | `bridge/` | TypeScript Bridge (PI SDK wrapper) |
 | `pkg/stt/` | Speech-to-text |
 

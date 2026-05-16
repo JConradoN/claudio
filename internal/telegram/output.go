@@ -25,7 +25,8 @@ func SendTextWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, threa
 
 func sendTextWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, threadID int) error {
 	chunks := splitTelegramMarkdown(text, limit)
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
+		isLast := i == len(chunks)-1
 		htmlChunk := MarkdownToHTML(chunk)
 		opts := &telebot.SendOptions{
 			ParseMode: telebot.ModeHTML,
@@ -33,7 +34,9 @@ func sendTextWithSender(sender messageSender, chat *telebot.Chat, text string, l
 		}
 		_, err := sender.Send(chat, htmlChunk, opts)
 		if err == nil {
-			time.Sleep(interChunkDelay)
+			if !isLast {
+				time.Sleep(interChunkDelay)
+			}
 			continue
 		}
 
@@ -45,13 +48,17 @@ func sendTextWithSender(sender messageSender, chat *telebot.Chat, text string, l
 				log.Printf("Hit rate limit in chunk sending. Retrying in %v...", floodErr.RetryAfter)
 				time.Sleep(time.Duration(floodErr.RetryAfter) * time.Second)
 				if _, retryErr := sender.Send(chat, chunk, opts); retryErr == nil {
-					time.Sleep(interChunkDelay)
+					if !isLast {
+						time.Sleep(interChunkDelay)
+					}
 					continue
 				}
 			}
 			return err
 		}
-		time.Sleep(interChunkDelay)
+		if !isLast {
+			time.Sleep(interChunkDelay)
+		}
 	}
 	return nil
 }
@@ -105,7 +112,8 @@ func SendTextReplyWithThread(bot *telebot.Bot, chat *telebot.Chat, text string, 
 func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text string, limit int, threadID int) error {
 	chunks := splitTelegramMarkdown(text, limit)
 
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
+		isLast := i == len(chunks)-1
 		htmlChunk := MarkdownToHTML(chunk)
 		opts := &telebot.SendOptions{
 			ParseMode: telebot.ModeHTML,
@@ -114,7 +122,9 @@ func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text stri
 
 		_, err := sender.Send(chat, htmlChunk, opts)
 		if err == nil {
-			time.Sleep(interChunkDelay)
+			if !isLast {
+				time.Sleep(interChunkDelay)
+			}
 			continue
 		}
 
@@ -124,7 +134,9 @@ func sendTextReplyWithSender(sender messageSender, chat *telebot.Chat, text stri
 		if err != nil {
 			return err
 		}
-		time.Sleep(interChunkDelay)
+		if !isLast {
+			time.Sleep(interChunkDelay)
+		}
 	}
 	return nil
 }

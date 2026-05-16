@@ -134,7 +134,6 @@ func NewBotController(
 		sessions:         sessions,
 		tracker:          tracker,
 		resolver:         resolver,
-		nudgeBuffer:      session.NewNudgeBuffer(),
 		personasDir:      personasDir,
 		memoryDir:        memoryDir,
 		exePath:          exePath,
@@ -157,6 +156,8 @@ func NewBotController(
 		BotCwd:    bc.botCwd,
 		Output:    telegramPipelineOutput{bc: bc},
 	})
+	// nudgeBuffer is owned by the pipeline service; bot accesses via this alias
+	// so command handlers can flush it on reset/cancel.
 	bc.nudgeBuffer = bc.pipeline.NudgeBuffer()
 
 	bc.setupRoutes()

@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	classifyTimeout        = 15 * time.Second
+	classifyTimeout        = 5 * time.Second
+	classifyMinTextLen     = 10
 	bridgeExecutionTimeout = 10 * time.Minute
 
 	bridgeConnectErrorMessage = "Falha ao conectar com o processador.\n\n" +
@@ -181,7 +182,10 @@ func (s *Service) applyVisionFallback(req *bridge.Request, images []bridge.Image
 }
 
 // routeAgent resolves which agent should handle the message, first by @name
-// prefix, then by LLM classification if agents are configured.
+// prefix, then by LLM classification if agents are configured. Classification
+// is skipped when there are fewer than 2 agents (no choice to make) or when
+// the message is too short to carry useful intent — that saves a 5s round-trip
+// to the bridge on trivial follow-ups like "ok" or "obrigado".
 func (s *Service) routeAgent(text string) *agents.Agent {
 	if s.agents == nil {
 		return nil
@@ -189,6 +193,12 @@ func (s *Service) routeAgent(text string) *agents.Agent {
 	agent := s.agents.Route(text)
 	if agent != nil {
 		return agent
+	}
+	if len(s.agents.Agents()) < 2 {
+		return nil
+	}
+	if len(strings.TrimSpace(text)) < classifyMinTextLen {
+		return nil
 	}
 	classifyCtx, classifyCancel := context.WithTimeout(context.Background(), classifyTimeout)
 	defer classifyCancel()
