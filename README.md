@@ -25,7 +25,8 @@ Before installing, ensure you have:
 
 - **Go** `1.25+` — [go.dev](https://go.dev/)
 - **Node.js** `18+` and **npm** `8+` — [nodejs.org](https://nodejs.org/)
-  - *The PI SDK is installed automatically via npm on first run — no manual installation needed*
+  - *The PI SDK (inference engine) installs automatically via npm on first run*
+  - *No need to install the PI CLI (`pi`) or run `pi /login`*
 - **git** `2+`
 - **gh** (GitHub CLI) — optional but recommended
 - A **Telegram bot token** from [@BotFather](https://t.me/botfather)
@@ -274,6 +275,8 @@ Requirements:
    git clone https://github.com/igormaneschy/aurelia.git
    cd aurelia
    ```
+
+   > **Note**: You do not need to install the PI CLI (`pi`) or run `pi /login`. The PI SDK is bundled and installed automatically by Aurelia.
 
 2. **Run the onboarding wizard** (required before first start):
    ```bash

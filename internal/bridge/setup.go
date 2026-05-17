@@ -61,6 +61,15 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		return "", fmt.Errorf("create bridge dir: %w", err)
 	}
 
+	// Ensure PI agent directory exists so the SDK can write auth.json and
+	// models.json even when the user has never run the PI CLI.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.Warn("cannot determine home directory for PI agent dir", "error", err)
+	} else if err := os.MkdirAll(filepath.Join(home, ".pi", "agent"), 0700); err != nil {
+		slog.Warn("failed to create PI agent directory", "error", err)
+	}
+
 	buildingFromSource := !bundleExists && len(bundleJS) == 0
 	if buildingFromSource {
 		if err := writeBridgeSource(targetDir); err != nil {

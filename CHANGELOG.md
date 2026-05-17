@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - **UX**: running daemon without onboarding produced cryptic Telegram API errors — now shows friendly step-by-step instructions.
 - **UX**: invalid Telegram tokens were only discovered at runtime — now caught during onboarding wizard.
+- **Reliability**: bridge setup now creates `~/.pi/agent/` directory to ensure PI SDK can write auth.json and models.json even when the user has never installed the PI CLI.
 
 ## [v0.6.9] - 2026-05-17
 

@@ -35,7 +35,8 @@ func (u *onboardingUI) View(resolver *runtime.PathResolver) string {
 			u.depsResult = &r
 		}
 		b.WriteString(renderDepsCheck(*u.depsResult))
-		b.WriteString("\nNote: The PI SDK will be installed automatically on first daemon start.\n")
+		b.WriteString("\nNote: The PI SDK (inference engine) will be installed automatically.\n")
+		b.WriteString("No need to install the PI CLI (pi) or run pi /login.\n")
 		if u.depsResult.AllOK {
 			b.WriteString("\nPress Enter to continue.\n")
 		} else {

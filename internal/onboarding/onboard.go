@@ -136,7 +136,10 @@ func RunOnboardPrompt(stdin io.Reader, stdout io.Writer, resolver *runtime.PathR
 		return fmt.Errorf("required dependencies are missing — install them and try again")
 	}
 
-	if err := writeln(stdout, "Note: The PI SDK will be installed automatically on first daemon start."); err != nil {
+	if err := writeln(stdout, "Note: The PI SDK (inference engine) will be installed automatically."); err != nil {
+		return err
+	}
+	if err := writeln(stdout, "No need to install the PI CLI (pi) or run pi /login."); err != nil {
 		return err
 	}
 	if err := writeln(stdout, ""); err != nil {
