@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - `README.md` restructured with Prerequisites section, improved Quick Start flow, Linux service instructions, and Troubleshooting table.
 - `internal/telegram/messages.go` migrated from hardcoded Portuguese constants to i18n-backed functions.
+- **Provider rename**: "kilo" renamed to "opencode-go" throughout the codebase — provider ID, API key field, config migration, and onboarding UI all updated.
 
 ### Fixed
 - **UX**: running daemon without onboarding produced cryptic Telegram API errors — now shows friendly step-by-step instructions.
