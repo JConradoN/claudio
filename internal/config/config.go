@@ -26,7 +26,7 @@ func defaultModelForProvider(provider string) string {
 		return "claude-sonnet-4-6"
 	case "google":
 		return "gemini-2.5-pro"
-	case "kilo":
+	case "opencode-go":
 		return "openai/gpt-5.4"
 	case "openrouter":
 		return "openrouter/auto"

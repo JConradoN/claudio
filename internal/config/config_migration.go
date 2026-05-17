@@ -9,7 +9,7 @@ type legacyFileConfig struct {
 	TelegramAllowedUserIDs []int64 `json:"telegram_allowed_user_ids"`
 	AnthropicAPIKey        string  `json:"anthropic_api_key"`
 	GoogleAPIKey           string  `json:"google_api_key"`
-	KiloAPIKey             string  `json:"kilo_api_key"`
+	OpencodeGoAPIKey       string  `json:"opencode_go_api_key"`
 	KimiAPIKey             string  `json:"kimi_api_key"`
 	OpenRouterAPIKey       string  `json:"openrouter_api_key"`
 	ZAIAPIKey              string  `json:"zai_api_key"`
@@ -34,7 +34,7 @@ func migrateLegacy(legacy legacyFileConfig) fileConfig {
 
 	maybeSet("anthropic", legacy.AnthropicAPIKey)
 	maybeSet("google", legacy.GoogleAPIKey)
-	maybeSet("kilo", legacy.KiloAPIKey)
+	maybeSet("opencode-go", legacy.OpencodeGoAPIKey)
 	maybeSet("kimi", legacy.KimiAPIKey)
 	maybeSet("openrouter", legacy.OpenRouterAPIKey)
 	maybeSet("zai", legacy.ZAIAPIKey)

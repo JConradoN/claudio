@@ -95,7 +95,7 @@ func TestRunOnboard_PreservesExistingValuesOnBlankInput(t *testing.T) {
 		TelegramAllowedUserIDs: []int64{42},
 		AnthropicAPIKey:        "old-anthropic",
 		GoogleAPIKey:           "old-google",
-		KiloAPIKey:             "old-kilo",
+		OpencodeGoAPIKey:       "old-opencode-go",
 		KimiAPIKey:             "old-kimi",
 		OpenRouterAPIKey:       "old-openrouter",
 		ZAIAPIKey:              "old-zai",
@@ -119,7 +119,7 @@ func TestRunOnboard_PreservesExistingValuesOnBlankInput(t *testing.T) {
 		cfg.ProviderAPIKey("kimi") != "old-kimi" ||
 		cfg.ProviderAPIKey("anthropic") != "old-anthropic" ||
 		cfg.ProviderAPIKey("google") != "old-google" ||
-		cfg.ProviderAPIKey("kilo") != "old-kilo" ||
+		cfg.ProviderAPIKey("opencode-go") != "old-opencode-go" ||
 		cfg.ProviderAPIKey("openrouter") != "old-openrouter" ||
 		cfg.ProviderAPIKey("zai") != "old-zai" ||
 		cfg.ProviderAPIKey("alibaba") != "old-alibaba" ||
@@ -260,20 +260,20 @@ func TestOnboardingUI_AnthropicKeyInputTargetsAnthropicSecret(t *testing.T) {
 	}
 }
 
-func TestOnboardingUI_KiloKeyInputTargetsKiloSecret(t *testing.T) {
+func TestOnboardingUI_OpencodeGoKeyInputTargetsOpencodeGoSecret(t *testing.T) {
 	ui := newOnboardingUI(config.EditableConfig{
-		LLMProvider: "kilo",
+		LLMProvider: "opencode-go",
 		LLMModel:    "gpt-5.4",
 	})
 	ui.step = stepLLMKey
-	ui.input = "kilo-key"
+	ui.input = "opencode-go-key"
 
 	_, _, err := ui.HandleKey(keyEvent{code: keyEnter})
 	if err != nil {
 		t.Fatalf("HandleKey() error = %v", err)
 	}
-	if ui.cfg.KiloAPIKey != "kilo-key" {
-		t.Fatalf("KiloAPIKey = %q", ui.cfg.KiloAPIKey)
+	if ui.cfg.OpencodeGoAPIKey != "opencode-go-key" {
+		t.Fatalf("OpencodeGoAPIKey = %q", ui.cfg.OpencodeGoAPIKey)
 	}
 	if ui.cfg.KimiAPIKey != "" {
 		t.Fatalf("KimiAPIKey = %q", ui.cfg.KimiAPIKey)
@@ -341,14 +341,14 @@ func TestOnboardingUI_OpenRouterModelSearchFiltersResults(t *testing.T) {
 	}
 }
 
-func TestFilterModelOptions_KiloMatchesProviderAndModel(t *testing.T) {
+func TestFilterModelOptions_OpencodeGoMatchesProviderAndModel(t *testing.T) {
 	options := []ModelOption{
 		{ID: "gpt-5.4", Name: "GPT-5.4 · openai"},
 		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6 · anthropic"},
 		{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro · google"},
 	}
 
-	cfg := config.EditableConfig{LLMProvider: "kilo"}
+	cfg := config.EditableConfig{LLMProvider: "opencode-go"}
 
 	filteredByProvider := filterModelOptions(cfg, options, "anthropic", modelCapabilityAll)
 	if len(filteredByProvider) != 1 || filteredByProvider[0].ID != "claude-sonnet-4-6" {
@@ -361,9 +361,9 @@ func TestFilterModelOptions_KiloMatchesProviderAndModel(t *testing.T) {
 	}
 }
 
-func TestOnboardingUI_KiloModelSearchFiltersResults(t *testing.T) {
+func TestOnboardingUI_OpencodeGoModelSearchFiltersResults(t *testing.T) {
 	ui := newOnboardingUI(config.EditableConfig{
-		LLMProvider: "kilo",
+		LLMProvider: "opencode-go",
 		LLMModel:    "gpt-5.4",
 	})
 	ui.step = stepLLMModel
@@ -404,7 +404,7 @@ func TestFilterModelOptions_VisionOnly(t *testing.T) {
 
 func TestOnboardingUI_ModelVisionToggleFiltersResults(t *testing.T) {
 	ui := newOnboardingUI(config.EditableConfig{
-		LLMProvider: "kilo",
+		LLMProvider: "opencode-go",
 		LLMModel:    "openai/gpt-5.4",
 	})
 	ui.step = stepLLMModel

@@ -28,7 +28,9 @@ Before installing, ensure you have:
 - **git** `2+`
 - **gh** (GitHub CLI) — optional but recommended
 - A **Telegram bot token** from [@BotFather](https://t.me/botfather)
-- An **LLM provider account** (Anthropic, Kimi, OpenRouter, Z.ai, or Alibaba)
+- An **LLM provider API key**:
+  - **OpenRouter** — recommended (multi-model proxy, one key for many models)
+  - **opencode-go** — alternative (OpenCode API key)
 
 ## Why Aurelia OS
 
@@ -43,8 +45,8 @@ It is built around a practical execution model:
 - Session management with token tracking and auto-reset
 - Persistent 3-layer memory system with automatic extraction
 - Configurable agents in markdown with cron scheduling
-- Multi-provider: Anthropic, Kimi, OpenRouter (live model catalog), Z.ai, Alibaba
-- PI-first auth with API-key and subscription support
+- Multi-provider: OpenRouter (recommended), opencode-go, Anthropic, Kimi, Z.ai, Alibaba
+- API key authentication (OpenRouter, opencode-go)
 - Bridge recovery with automatic retry on crash
 
 The goal is not to reimplement what PI already does.
@@ -58,7 +60,7 @@ The goal is to orchestrate it — adding persistence, memory, scheduling, multi-
 - **Persistent memory** — 3-layer memory system (global, project-private, project-team) that survives across sessions
 - **Learning nudge** — automatic memory extraction from conversations on session reset
 - **Dream consolidation** — periodic background review that organizes and deduplicates memories
-- **Multi-provider** — Anthropic, Kimi, OpenRouter (with live model catalog), Z.ai, Alibaba
+- **Multi-provider** — OpenRouter (recommended), opencode-go, Anthropic, Kimi, Z.ai, Alibaba
 - **Session continuity** — conversation context persists across messages via session resume with auto-reset on token threshold
 - **Smart routing** — LLM-based classification routes messages to the right agent
 - **Persistent scheduling** — create cron jobs via natural conversation, results delivered to Telegram
@@ -69,16 +71,13 @@ The goal is to orchestrate it — adding persistence, memory, scheduling, multi-
 - **Voice transcription** — Groq STT converts voice messages to text (Whisper)
 - **Vision fallback** — configure a separate vision model for image inputs
   while keeping a faster text-only model as default
-- **Inherits your setup** — models, auth, skills, extensions, and settings from `~/.pi/agent`
 
-## PI-backed Runtime Features
+## Runtime Features
 
-Aurelia now treats PI as the agent runtime rather than maintaining a Claude-specific bridge:
+Aurelia uses a TypeScript Bridge wrapping the PI SDK as its inference engine:
 
-- **PI SDK bridge** — `bridge/index.ts` wraps `@earendil-works/pi-coding-agent` and is embedded into the Go binary.
-- **PI auth reuse** — uses `~/.pi/agent/auth.json`, `models.json`, `settings.json`, skills, extensions, and provider configuration.
-- **Subscription-friendly Anthropic auth** — resolves PI login first and keeps compatible Claude CLI auth as fallback.
-- **Provider environment export** — Aurelia can export provider keys from `~/.aurelia/config/app.json` into the PI runtime environment.
+- **Bridge** — `bridge/index.ts` wraps `@earendil-works/pi-coding-agent` and is embedded into the Go binary.
+- **API key auth** — provider keys are configured during onboarding and exported to the bridge runtime environment.
 - **Streaming progress** — PI tool events are mapped back into Telegram progress messages.
 - **Long-lived sessions** — Bridge requests preserve session IDs for continuity and token tracking.
 
@@ -260,15 +259,11 @@ aurelia telegram reply <chat-id> <message-id> <text>
 Requirements:
 
 - Go `1.25+`
-- Node.js `18+`
+- Node.js `18+` and npm `8+`
 - Telegram bot token
-- One LLM provider:
-  - **PI auth/config** in `~/.pi/agent` (`pi /login`, `auth.json`, `models.json`)
-  - **Anthropic** — API key or Max subscription via PI
-  - **Kimi** — API key (`KIMI_API_KEY` / PI auth)
-  - **OpenRouter** — API key (multi-model proxy)
-  - **Z.ai** — API key (GLM Coding Plan)
-  - **Alibaba** — API key (Qwen Coding Plan)
+- One LLM provider API key:
+  - **OpenRouter** — recommended (multi-model proxy, one key for many models)
+  - **opencode-go** — alternative (OpenCode API key)
 - Groq API key for voice transcription (optional)
 
 ### Quick Start
@@ -279,30 +274,25 @@ Requirements:
    cd aurelia
    ```
 
-2. **Configure PI auth** (if you haven't already):
-   ```bash
-   pi /login
-   ```
-
-3. **Run the onboarding wizard** (required before first start):
+2. **Run the onboarding wizard** (required before first start):
    ```bash
    go run ./cmd/aurelia/ onboard
    ```
    This interactive wizard will guide you through:
    - Dependency verification
-   - LLM provider selection
+   - LLM provider selection (OpenRouter or opencode-go)
    - API key configuration
    - Telegram bot token validation
    - User access control
 
-4. **Start the daemon**:
+3. **Start the daemon**:
    ```bash
    go run ./cmd/aurelia/
    ```
 
-5. **Send `/start`** to your bot on Telegram.
+4. **Send `/start`** to your bot on Telegram.
 
-> **Note**: If you skip step 3 and run the daemon directly, it will exit with instructions to complete onboarding first.
+> **Note**: If you skip step 2 and run the daemon directly, it will exit with instructions to complete onboarding first.
 
 ### Hot Reload (Development)
 
@@ -333,7 +323,7 @@ Main config lives in `~/.aurelia/config/app.json`:
 }
 ```
 
-Provider auth is resolved by PI first. For Anthropic subscription mode, run `pi /login` or keep a compatible Claude auth as fallback.
+Provider auth uses API keys configured during onboarding. OpenRouter is recommended as it provides access to multiple models with a single key.
 
 ### Release Build
 

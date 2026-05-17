@@ -15,7 +15,7 @@ type EditableConfig struct {
 	TelegramAllowedGroupIDs []int64
 	AnthropicAPIKey         string
 	GoogleAPIKey            string
-	KiloAPIKey              string
+	OpencodeGoAPIKey        string
 	KimiAPIKey              string
 	OpenRouterAPIKey        string
 	ZAIAPIKey               string
@@ -39,8 +39,8 @@ func (c EditableConfig) LLMAPIKey(provider string) string {
 		return c.AnthropicAPIKey
 	case "google":
 		return c.GoogleAPIKey
-	case "kilo":
-		return c.KiloAPIKey
+	case "opencode-go":
+		return c.OpencodeGoAPIKey
 	case "openrouter":
 		return c.OpenRouterAPIKey
 	case "zai":
@@ -58,8 +58,8 @@ func (c *EditableConfig) SetLLMAPIKey(provider, value string) {
 		c.AnthropicAPIKey = value
 	case "google":
 		c.GoogleAPIKey = value
-	case "kilo":
-		c.KiloAPIKey = value
+	case "opencode-go":
+		c.OpencodeGoAPIKey = value
 	case "openrouter":
 		c.OpenRouterAPIKey = value
 	case "zai":
@@ -108,7 +108,7 @@ func appConfigToEditable(cfg *AppConfig) *EditableConfig {
 		AnthropicAuthMode:       anthropicAuthMode,
 		AnthropicAPIKey:         cfg.ProviderAPIKey("anthropic"),
 		GoogleAPIKey:            cfg.ProviderAPIKey("google"),
-		KiloAPIKey:              cfg.ProviderAPIKey("kilo"),
+		OpencodeGoAPIKey:        cfg.ProviderAPIKey("opencode-go"),
 		KimiAPIKey:              cfg.ProviderAPIKey("kimi"),
 		OpenRouterAPIKey:        cfg.ProviderAPIKey("openrouter"),
 		ZAIAPIKey:               cfg.ProviderAPIKey("zai"),
@@ -144,7 +144,7 @@ func editableToFileConfig(editable EditableConfig) fileConfig {
 		}
 	}
 	maybeSet("google", editable.GoogleAPIKey)
-	maybeSet("kilo", editable.KiloAPIKey)
+	maybeSet("opencode-go", editable.OpencodeGoAPIKey)
 	maybeSet("kimi", editable.KimiAPIKey)
 	maybeSet("openrouter", editable.OpenRouterAPIKey)
 	maybeSet("zai", editable.ZAIAPIKey)

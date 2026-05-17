@@ -316,7 +316,7 @@ func TestSaveEditable_PreservesManagedPaths(t *testing.T) {
 		TelegramAllowedUserIDs: []int64{7, 8},
 		AnthropicAPIKey:        "anthropic-key",
 		GoogleAPIKey:           "google-key",
-		KiloAPIKey:             "kilo-key",
+		OpencodeGoAPIKey:       "opencode-go-key",
 		KimiAPIKey:             "kimi-key",
 		OpenRouterAPIKey:       "openrouter-key",
 		ZAIAPIKey:              "zai-key",
@@ -338,8 +338,8 @@ func TestSaveEditable_PreservesManagedPaths(t *testing.T) {
 	if cfg.DefaultProvider != "kimi" || cfg.DefaultModel != "kimi-k2-thinking" || cfg.STTProvider != "groq" {
 		t.Fatalf("unexpected providers llm=%q model=%q stt=%q", cfg.DefaultProvider, cfg.DefaultModel, cfg.STTProvider)
 	}
-	if cfg.ProviderAPIKey("kilo") != "kilo-key" {
-		t.Fatalf("kilo key = %q, want %q", cfg.ProviderAPIKey("kilo"), "kilo-key")
+	if cfg.ProviderAPIKey("opencode-go") != "opencode-go-key" {
+		t.Fatalf("opencode-go key = %q, want %q", cfg.ProviderAPIKey("opencode-go"), "opencode-go-key")
 	}
 	if cfg.MCPConfigPath != filepath.Join(tmpDir, "config", "mcp_servers.json") {
 		t.Fatalf("MCPConfigPath = %q, want managed default", cfg.MCPConfigPath)

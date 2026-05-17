@@ -580,7 +580,7 @@ func renderDepsCheck(result deps.CheckResult) string {
 
 func usesProviderModelSearch(cfg config.EditableConfig) bool {
 	switch cfg.LLMProvider {
-	case "openrouter", "kilo":
+	case "openrouter", "opencode-go":
 		return true
 	default:
 		return false

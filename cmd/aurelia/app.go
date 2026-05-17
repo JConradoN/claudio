@@ -431,7 +431,7 @@ func piProviderEnvName(provider string) string {
 		return "ZAI_API_KEY"
 	case "google":
 		return "GEMINI_API_KEY"
-	case "kilo":
+	case "opencode-go":
 		return "OPENCODE_API_KEY"
 	default:
 		return ""

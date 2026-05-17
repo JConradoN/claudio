@@ -71,6 +71,13 @@ var providerSpecs = []ProviderSpec{
 		APIKeyHelp:   "Anthropic-compatible. Base URL: https://api.kimi.com/coding/",
 	},
 	{
+		ID:           "opencode-go",
+		Label:        "opencode-go",
+		DefaultModel: "openai/gpt-5.4",
+		APIKeyLabel:  "OpenCode API key",
+		APIKeyHelp:   "OpenCode API key for opencode-go provider",
+	},
+	{
 		ID:           "anthropic",
 		Label:        "Anthropic",
 		DefaultModel: "claude-sonnet-4-6",
@@ -273,6 +280,16 @@ func fallbackModels(p string) []ModelOption {
 			{ID: "moonshot-v1-8k", Name: "Moonshot v1 8K"},
 			{ID: "moonshot-v1-32k", Name: "Moonshot v1 32K"},
 			{ID: "moonshot-v1-128k", Name: "Moonshot v1 128K"},
+		}
+	case "opencode-go":
+		return []ModelOption{
+			{ID: "openai/gpt-5.4", Name: "GPT-5.4 · openai", SupportsImageInput: true},
+			{ID: "openai/gpt-4.7", Name: "GPT-4.7 · openai", SupportsImageInput: true},
+			{ID: "openai/o4-4", Name: "o4-4 · openai"},
+			{ID: "openai/o3", Name: "o3 · openai"},
+			{ID: "anthropic/claude-sonnet-4-6", Name: "Claude Sonnet 4.6 · anthropic", SupportsImageInput: true},
+			{ID: "anthropic/claude-opus-4-6", Name: "Claude Opus 4.6 · anthropic", SupportsImageInput: true},
+			{ID: "google/gemini-2.5-pro", Name: "Gemini 2.5 Pro · google", SupportsImageInput: true},
 		}
 	default:
 		return nil
