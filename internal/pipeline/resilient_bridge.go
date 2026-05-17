@@ -75,7 +75,14 @@ func (rb *ResilientBridge) Execute(
 	// 1. Circuit breaker open → skip directly to fallback.
 	if rb.breakers.ShouldSkip(provider) {
 		if msg := rb.breakers.NotifyMessage(provider); msg != "" && onNotify != nil {
-			onNotify(msg)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("resilient_bridge: panic in onNotify: %v", r)
+					}
+				}()
+				onNotify(msg)
+			}()
 		}
 		return rb.tryFallback(ctx, req, onNotify)
 	}
@@ -107,7 +114,14 @@ func (rb *ResilientBridge) Execute(
 	} else {
 		te := TranslateError(provider, model, result.Err.Error())
 		if onNotify != nil {
-			onNotify(te.Message)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("resilient_bridge: panic in onNotify: %v", r)
+					}
+				}()
+				onNotify(te.Message)
+			}()
 		}
 		// Non-retryable errors still get fallback for better UX (except auth).
 		if cat == ErrAuth {

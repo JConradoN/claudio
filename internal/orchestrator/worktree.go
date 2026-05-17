@@ -57,11 +57,13 @@ func (wm *WorktreeManager) Merge(wt *Worktree, baseBranch string) error {
 
 // Cleanup removes the worktree and its temporary branch.
 func (wm *WorktreeManager) Cleanup(wt *Worktree) error {
+	var errs []error
+
 	// Remove worktree
 	rmCmd := exec.Command("git", "worktree", "remove", "--force", wt.Path)
 	rmCmd.Dir = wm.repoRoot
 	if out, err := rmCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git worktree remove: %w\n%s", err, out)
+		errs = append(errs, fmt.Errorf("git worktree remove: %w\n%s", err, out))
 	}
 
 	// Delete temporary branch
@@ -72,6 +74,9 @@ func (wm *WorktreeManager) Cleanup(wt *Worktree) error {
 		_ = out
 	}
 
+	if len(errs) > 0 {
+		return errs[0]
+	}
 	return nil
 }
 

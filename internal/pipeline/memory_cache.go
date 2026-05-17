@@ -86,6 +86,9 @@ func (c *memoryCache) get(dir string) (string, bool) {
 	if e, ok := c.entries[dir]; ok {
 		e.lastValidated = time.Now()
 		c.entries[dir] = e
+	} else {
+		c.mu.Unlock()
+		return "", false
 	}
 	c.mu.Unlock()
 

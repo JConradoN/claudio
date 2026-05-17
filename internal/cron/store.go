@@ -37,8 +37,8 @@ func (s *SQLiteCronStore) WithTx(ctx context.Context, fn func(tx *sql.Tx) error)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

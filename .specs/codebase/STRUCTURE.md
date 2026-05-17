@@ -16,7 +16,6 @@
 ├── cmd/aurelia/               # CLI entry points
 │   ├── main.go                # Subcommand dispatcher
 │   ├── app.go                 # Dependency wiring & lifecycle
-│   ├── onboard*.go            # Interactive setup wizard (5 files)
 │   ├── cron_cli.go            # Cron job management CLI
 │   └── telegram_cli.go        # Telegram message CLI
 │
@@ -27,18 +26,24 @@
 │   └── tsconfig.json
 │
 ├── internal/                  # Core application packages
-│   ├── agents/                # Agent registry & routing (5 files)
-│   ├── bridge/                # Go↔TS IPC client (7 files)
-│   ├── config/                # App configuration (4 files)
-│   ├── cron/                  # Scheduled jobs (14 files)
-│   ├── persona/               # Identity & prompt assembly (10 files)
-│   ├── runtime/               # Path resolution (5 files)
-│   ├── session/               # Session & token tracking (4 files)
-│   └── telegram/              # Telegram bot I/O (25 files)
+│   ├── agents/                # Agent registry & routing
+│   ├── bridge/                # Go↔TS IPC client (PI SDK)
+│   ├── config/                # App configuration
+│   ├── cron/                  # Scheduled jobs (SQLite-backed)
+│   ├── deps/                  # Runtime dependency checks (Node/npm/git/gh)
+│   ├── dream/                 # Background memory consolidation + nudges
+│   ├── onboarding/            # Interactive setup wizard
+│   ├── orchestrator/          # Agent orchestration (plan/workers/validate/git)
+│   ├── persona/               # Identity & prompt assembly
+│   ├── pipeline/              # Turn processing service (resilience + supervisor)
+│   ├── runtime/               # Path resolution
+│   ├── session/               # Session & token tracking
+│   ├── telegram/              # Telegram bot I/O
+│   └── version/               # Build version constant
 │
-├── pkg/stt/                   # Public: speech-to-text client (2 files)
+├── pkg/stt/                   # Public: speech-to-text client
 │
-└── e2e/                       # End-to-end tests (2 files)
+└── e2e/                       # End-to-end tests
 ```
 
 ## Module Organization
@@ -49,15 +54,27 @@
 
 ### internal/telegram — Telegram Bot Interface
 **Purpose:** All Telegram I/O — input handling, output formatting, markdown rendering, commands
-**Key files:** `bot.go` (controller), `input_pipeline.go` (message flow), `output.go` (event processing), `send.go` (chunked delivery)
+**Key files:** `bot.go` (controller), `input_pipeline.go` (message flow), `output.go` (event processing), `send.go` (chunked delivery), `orchestration.go` (executeApprovedPlan), `worker_status.go` (per-worker status messages)
+
+### internal/pipeline — Turn Processing Service
+**Purpose:** Encapsulates a single conversational turn — prompt assembly, bridge call, event handling, recovery, plan detection. Extracted from the Telegram controller so the same logic powers cron jobs and other entrypoints.
+**Key files:** `service.go` (entrypoint), `pipeline.go` (event loop + plan dispatch), `prompt_builder.go`, `resilient_bridge.go` (retry + circuit breaker), `run_supervisor.go` (concurrent run dedup), `planning_intent.go` (heuristic plan-mode detection)
+
+### internal/orchestrator — Agent Orchestration
+**Purpose:** Plan→workers→validate cycle. Detects `aurelia-plan` blocks in bridge responses, spawns workers per wave in isolated git worktrees, validates results via a quality gate, generates `CLAUDE.md`/`AGENTS.md`, updates `tasks.md`, and handles commit/PR.
+**Key files:** `orchestrator.go` (struct + BridgeExecutor interface), `plan.go` (Plan/Task model + topological ExecutionOrder), `extract.go` (parse `aurelia-plan` blocks), `execute.go` (wave execution + ExecuteTask), `validate.go` (quality gate), `worktree.go` (git worktree CRUD), `defaults.go` (worker fallback + ResolveAgentConfig), `prompt.go` (TLC + worker + validation prompt builders), `agents_md.go` (`AGENTS.md`/`CLAUDE.md` generators), `tasks_status.go` (update `.specs/.../tasks.md` checkboxes), `git.go` (commit + `gh pr create`)
 
 ### internal/bridge — LLM Bridge Client
-**Purpose:** Manages TypeScript process, NDJSON protocol, request multiplexing
+**Purpose:** Manages TypeScript process, NDJSON protocol, request multiplexing. The bridge wraps the PI SDK (`@earendil-works/pi-coding-agent`) — Aurelia treats PI as its core inference engine.
 **Key files:** `bridge.go` (process + IPC), `protocol.go` (types), `events.go` (event model), `embed.go` (bundle embedding)
 
 ### internal/cron — Job Scheduler
 **Purpose:** Persistent scheduled job execution with SQLite storage
 **Key files:** `scheduler.go` (polling loop), `store.go` + `store_*.go` (SQLite CRUD), `runtime.go` (bridge execution), `delivery.go` (Telegram delivery)
+
+### internal/dream — Background Memory Consolidation
+**Purpose:** Lightweight Haiku-driven nudge that reviews recent turns and writes consolidated facts to memory. Runs out-of-band so it never blocks user-facing turns.
+**Key files:** `dream.go` (lifecycle), `nudge.go` (turn buffer), `prompt.go` (consolidation prompt), `prompts/` (markdown templates)
 
 ### internal/persona — Identity Management
 **Purpose:** Load persona files and assemble system prompts
@@ -65,20 +82,41 @@
 
 ### internal/agents — Agent Registry
 **Purpose:** Load agent definitions from markdown, route messages to agents
-**Key files:** `registry.go` (loading + routing), `types.go` (Agent struct)
+**Key files:** `registry.go` (loading + routing), `types.go` (Agent struct with `AllowedTools`/`DisallowedTools`/`MaxTurns`)
+
+### internal/onboarding — Setup Wizard
+**Purpose:** Interactive first-run flow — provider/model selection, API keys, persona, dependency checks
+**Key files:** `onboard.go` (entrypoint), `onboard_providers.go`, `onboard_catalog.go`, `onboard_ui.go`
+
+### internal/deps — Runtime Dependency Checks
+**Purpose:** Verify Node, npm, git and `gh` are installed and meet minimum versions; surface clear errors before the bridge fails opaquely
+**Key files:** `check.go`
+
+### internal/version — Build Version
+**Purpose:** Single source of truth for the release version string
 
 ## Where Things Live
 
 **Telegram message processing:**
 - Input handlers: `internal/telegram/input.go`, `input_pipeline.go`
+- Turn execution: `internal/pipeline/service.go`, `pipeline.go`
 - Output processing: `internal/telegram/output.go`
 - Message sending: `internal/telegram/send.go`
 - Markdown→HTML: `internal/telegram/markdown*.go`
+- Orchestrated plans: `internal/telegram/orchestration.go`, `worker_status.go`
+
+**Agent orchestration:**
+- Plan detection: `internal/orchestrator/extract.go` (called from `internal/pipeline/pipeline.go`)
+- Wave execution: `internal/orchestrator/execute.go`
+- Worktrees: `internal/orchestrator/worktree.go`
+- Quality gate: `internal/orchestrator/validate.go`
+- Git delivery: `internal/orchestrator/git.go`
 
 **LLM communication:**
 - Go client: `internal/bridge/bridge.go`
-- TS wrapper: `bridge/index.ts`
+- TS wrapper: `bridge/index.ts` (PI SDK)
 - Protocol: `internal/bridge/protocol.go`, `events.go`
+- Resilience: `internal/pipeline/resilient_bridge.go`, `circuit_breaker.go`
 
 **Persistence:**
 - Database: `internal/cron/store*.go` (SQLite)

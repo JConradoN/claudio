@@ -69,7 +69,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 
 	for {
 		if _, err := s.RunDueJobs(ctx); err != nil {
-			return err
+			slog.Error("cron.scheduler: RunDueJobs failed, continuing", "err", err)
 		}
 
 		select {
@@ -123,7 +123,7 @@ func (s *Scheduler) runSingleJob(ctx context.Context, now time.Time, job CronJob
 		job.Active = false
 		job.NextRunAt = nil
 	} else if strings.EqualFold(job.ScheduleType, "cron") {
-		nextRunAt, err := computeNextRun(job.CronExpr, now)
+		nextRunAt, err := computeNextRun(job.CronExpr, finishedAt)
 		if err != nil {
 			return err
 		}

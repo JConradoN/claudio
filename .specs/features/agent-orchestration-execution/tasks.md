@@ -1,676 +1,360 @@
-# Agent Orchestration — Tasks
+# Agent Orchestration — Execution Mode — Tasks
 
-**Design**: `.specs/features/agent-orchestration/design.md`
-**Status**: Draft
+**Design:** `.specs/features/agent-orchestration-execution/design.md`
+**Status:** Draft
+
+> Foundational components from the prior iteration are already implemented: plan parsing, wave ordering, basic worktrees, worker execution, validator, prompt builders, status reporter, `UpdateTasksStatus`, and git/PR helpers. This task list closes correctness and safety gaps before autonomous execution can commit.
 
 ---
 
 ## Execution Plan
 
-### Phase 1: Foundation (Sequential)
+### Phase 0: Safe Handoff + Preflight
 
-Structs, data models, e componentes base sem dependências externas.
-
-```
-T1 → T2 → T3 → T4 → T5
-```
-
-### Phase 2: Orchestrator Core (Sequential, depende de Phase 1)
-
-Lógica central: parsear plano, executar workers, validar resultados.
+Execution must use the chat/thread's effective `/cwd`, preserve Telegram `thread_id`, and refuse unsafe git state before workers start.
 
 ```
-T5 → T6 → T7 → T8 → T9 → T10
+T0 → T1
 ```
 
-### Phase 3: Prompt Builders (Parallel, depende de T6)
+### Phase 1: Core Orchestrator Model
 
-Todos os prompts podem ser construídos em paralelo.
-
-```
-      ┌→ T11 ─┐
-      ├→ T12 ─┤
-T6 ──→├→ T13 ─┼──→ T16
-      ├→ T14 ─┤
-      └→ T15 ─┘
-```
-
-### Phase 4: Telegram Integration (Sequential, depende de Phase 3)
-
-Conecta o orchestrator ao fluxo existente do Telegram.
+Plan schema, worktree branch naming, artifact collection, and fail-closed validation.
 
 ```
-T16 → T17 → T18 → T19
+T2 ─┐
+T3 ─┼→ T4 → T5
+T6 ─┘
 ```
 
-### Phase 5: Documentation & Git (Parallel, depende de T6)
+### Phase 2: Wave Engine + Telegram Wiring
 
-Geração de CLAUDE.md, AGENTS.md, tasks status update, git operations.
-
-```
-      ┌→ T20 ─┐
-T6 ──→├→ T21 ─┼──→ T23
-      └→ T22 ─┘
-```
-
-### Phase 6: Integration & Validation (Sequential, depende de tudo)
-
-Wiring final, testes de integração, E2E.
+Parallel execution remains, but validation is artifact-based, merges are serialized, dependents are skipped, and status stays in the original topic.
 
 ```
-T19 + T23 → T24 → T25 → T26
+T5 → T7 → T8
+```
+
+### Phase 3: Delivery
+
+Update tasks, commit only approved files, optionally open PR, then consolidate.
+
+```
+T8 → T9 → T10
+```
+
+### Phase 4: Release Validation
+
+```
+T10 → T11 → T12
 ```
 
 ---
 
 ## Task Breakdown
 
-### T1: Adicionar campos ao Agent struct
+### T0: Thread-safe `ExecutionContext` handoff
 
-**What**: Adicionar `DisallowedTools` e `MaxTurns` ao struct Agent em `types.go`
-**Where**: `internal/agents/types.go`
-**Depends on**: None
-**Reuses**: Struct existente, parsing YAML já funciona
+**What:** Change the pipeline/output handoff so orchestration receives `chatID`, `threadID`, `messageID`, effective cwd, and the parsed plan. Add `orchestrator.ExecutionContext`.
+**Where:** `internal/pipeline/service.go`, `internal/pipeline/pipeline.go`, `internal/telegram/pipeline.go`, `internal/telegram/orchestration.go`, `internal/orchestrator/orchestrator.go`
+**Depends on:** None
+**Reuses:** `Service.effectiveCwd`, existing `Output.ExecuteApprovedPlan`
 
-**Done when**:
-- [ ] `DisallowedTools []string` com tag `yaml:"disallowed_tools,omitempty"` adicionado
-- [ ] `MaxTurns int` com tag `yaml:"max_turns,omitempty"` adicionado
-- [ ] `go build ./...` compila sem erro
+**Done when:**
+- [ ] `pipeline.Output.ExecuteApprovedPlan` signature includes `threadID` and `cwd`
+- [ ] `tryExecutePlan` resolves effective cwd and refuses empty cwd before handoff
+- [ ] Telegram output passes the original thread id through to `executeApprovedPlan`
+- [ ] `ExecutionContext` includes `RunID`, `RepoRoot`, `BaseBranch`, `ChatID`, `ThreadID`, `MessageID`, `Feature`, `CreatePR`, `StartedAt`
+- [ ] All orchestration sends use `ThreadID`
+- [ ] Tests: `TestTryExecutePlan_PassesThreadAndCWD`, `TestTryExecutePlan_RequiresCWD`
 
-**Verify**:
+**Verify:**
 ```bash
-go build ./internal/agents/...
+go test ./internal/pipeline/... ./internal/telegram/... -run "TestTryExecutePlan|TestExecuteApprovedPlan.*Thread" -v
 ```
 
 ---
 
-### T2: Atualizar BuildSDKAgents com novos campos
+### T1: Git preflight before worker spawn
 
-**What**: Mapear `DisallowedTools` → `disallowedTools` e `MaxTurns` → `maxTurns` no output do SDK
-**Where**: `internal/agents/sdk.go`
-**Depends on**: T1
-**Reuses**: Lógica existente de `BuildSDKAgents()`
+**What:** Add `PreflightExecution` to prove repo safety before workers. It checks git repo, base branch, clean base tree, and optional `gh` availability for PR requests.
+**Where:** `internal/orchestrator/preflight.go`, `internal/orchestrator/worktree.go`, `internal/telegram/orchestration.go`
+**Depends on:** T0
+**Reuses:** `git rev-parse`, `IsGHAvailable`
 
-**Done when**:
-- [ ] `disallowedTools` incluído no mapa quando `len(a.DisallowedTools) > 0`
-- [ ] `maxTurns` incluído no mapa quando `a.MaxTurns > 0`
-- [ ] Testes existentes continuam passando
-- [ ] Novo teste: agent com `disallowed_tools` e `max_turns` gera mapa correto
+**Done when:**
+- [ ] `WorktreeManager.ResolveBaseBranch() (string, error)` implemented with typed `ErrDetachedHEAD`
+- [ ] `PreflightExecution(ctx, repoRoot, createPR)` rejects non-git, detached HEAD, and dirty base tree
+- [ ] Dirty preflight error includes first few dirty paths
+- [ ] `executeApprovedPlan` calls preflight before `EnsureClaudeMd`, `EnsureAgentsMd`, or any worktree create
+- [ ] `create_pr=true` records `GHAvailable`, but missing `gh` does not block the run
+- [ ] Tests: `TestPreflightExecution_RejectsDirtyBase`, `TestPreflightExecution_RejectsDetachedHEAD`, `TestPreflightExecution_GHMissingNonFatal`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/agents/... -v
+go test ./internal/orchestrator/... -run "TestPreflight|TestResolveBaseBranch" -v
 ```
 
 ---
 
-### T3: Criar pacote orchestrator com Plan data model
+### T2: Worktree run namespace + branch-safe merge + startup cleanup count
 
-**What**: Criar `internal/orchestrator/` com structs `Plan`, `Task`, `TaskResult`, `WorkerEvent`, `WorkerConfig` e método `ExecutionOrder()`
-**Where**: `internal/orchestrator/plan.go`
-**Depends on**: None
-**Reuses**: Nenhum — tipos novos
+**What:** Add run-id namespacing to worktree branches/paths, make merge checkout the captured base branch and refuse dirty base trees, and make orphan cleanup return a count.
+**Where:** `internal/orchestrator/worktree.go`, `internal/orchestrator/orchestrator.go`
+**Depends on:** T1
+**Reuses:** Existing worktree helpers
 
-**Done when**:
-- [ ] Structs `Plan`, `Task`, `TaskResult`, `WorkerEvent`, `WorkerConfig` definidos
-- [ ] `Plan.ExecutionOrder()` retorna tasks agrupadas por wave (topological sort)
-- [ ] Teste: plano com dependências gera waves corretas
-- [ ] Teste: plano sem dependências → todas as tasks na wave 1
-- [ ] Teste: dependência circular → retorna erro
+**Done when:**
+- [ ] `Create(runID, taskID, baseBranch)` creates branch `worker/<runID>/<taskSlug>`
+- [ ] Worktree path is `.worktrees/worker-<runID>-<taskSlug>`
+- [ ] `Merge` checks out `baseBranch` and refuses dirty base tree
+- [ ] `CleanupAll() (int, error)` removes `.worktrees/worker-*` and associated `worker/*` branches best-effort
+- [ ] `NewOrchestrator` calls cleanup once and logs count when > 0
+- [ ] Tests: `TestWorktreeCreate_UsesRunNamespace`, `TestMerge_ChecksOutBaseBranch`, `TestMerge_RefusesOnDirtyTree`, `TestNewOrchestrator_CleansOrphanWorktrees`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestExecutionOrder
+go test ./internal/orchestrator/... -run "TestWorktree|TestMerge|TestNewOrchestrator_Cleans" -v
 ```
 
 ---
 
-### T4: Criar WorktreeManager
+### T3: Plan schema, verify fields, and worker prompt cleanup
 
-**What**: Gerenciar git worktrees — Create, Merge, Cleanup, CleanupAll
-**Where**: `internal/orchestrator/worktree.go`
-**Depends on**: None
-**Reuses**: Nenhum — git CLI via `os/exec`
+**What:** Extend plan/task JSON and remove duplicate task body from worker system prompt.
+**Where:** `internal/orchestrator/plan.go`, `internal/orchestrator/prompt.go`
+**Depends on:** None
+**Reuses:** Existing prompt builders and extract tests
 
-**Done when**:
-- [ ] `Create(taskID, baseBranch)` cria worktree em `.worktrees/worker-<taskID>/` com branch `worker/<taskID>-<slug>`
-- [ ] `Merge(wt, baseBranch)` faz `git merge --no-ff` do branch do worktree
-- [ ] `Cleanup(wt)` remove worktree e branch
-- [ ] `CleanupAll()` remove todos os worktrees no padrão `.worktrees/worker-*`
-- [ ] Teste: create → verificar diretório e branch existem
-- [ ] Teste: cleanup → verificar diretório e branch removidos
-- [ ] Teste: merge → verificar alterações no branch base
+**Done when:**
+- [ ] `Plan` has `Feature`, `CreatePR`, `Verify`
+- [ ] `Task` has `Verify`
+- [ ] `BuildOrchestratorPrompt` and `BuildExecutionPrompt` show the new schema
+- [ ] `ParsePlan` remains backward compatible with old plans
+- [ ] `BuildWorkerPrompt` excludes `task.Prompt` and sibling prompts; it includes only task id/description and sibling summaries
+- [ ] Tests: `TestBuildWorkerPrompt_DoesNotEmbedTaskBody`, `TestExtractPlan_WithFeatureCreatePRVerify`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestWorktree
+go test ./internal/orchestrator/... -run "TestBuildWorkerPrompt|TestExtractPlan|TestBuildExecutionPrompt" -v
 ```
 
 ---
 
-### T5: Criar DefaultWorkerConfig e ResolveAgentConfig
+### T4: Artifact collection and verify command execution
 
-**What**: Worker default hardcoded + resolução cascata (agent → worker.md → default)
-**Where**: `internal/orchestrator/defaults.go`
-**Depends on**: T1, T3
-**Reuses**: `agents.Registry.Get()`
+**What:** Collect real worktree artifacts after each worker attempt: changed files, git status, diffstat, truncated diff, and verify command output.
+**Where:** `internal/orchestrator/artifacts.go`
+**Depends on:** T3
+**Reuses:** `os/exec`, context timeouts
 
-**Done when**:
-- [ ] `DefaultWorkerConfig` com model=sonnet, maxTurns=25, tools completas, prompt genérico
-- [ ] `ResolveAgentConfig(registry, "qa")` retorna config do `qa.md` se existir
-- [ ] `ResolveAgentConfig(registry, "worker")` retorna worker.md override ou default
-- [ ] `ResolveAgentConfig(registry, "inexistente")` retorna default
-- [ ] Teste: sem registry → retorna default
-- [ ] Teste: com qa.md → retorna config do qa
-- [ ] Teste: com worker.md → retorna default merged com override
+**Done when:**
+- [ ] `ArtifactSnapshot` and `VerifyResult` defined
+- [ ] `CollectArtifacts(ctx, cwd, task, plan)` captures `git status --porcelain`, `git diff --stat`, `git diff`
+- [ ] `task.Verify` overrides `plan.Verify`; empty verify is allowed but recorded
+- [ ] Verify command runs in the worktree with `OrchestratorConfig.VerifyTimeout` defaulting to 2m
+- [ ] Diff is truncated with an explicit truncation marker; changed file list and diffstat are preserved
+- [ ] Tests: `TestCollectArtifacts_CapturesDiff`, `TestCollectArtifacts_RunsTaskVerify`, `TestCollectArtifacts_VerifyTimeout`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestResolveAgentConfig
+go test ./internal/orchestrator/... -run TestCollectArtifacts -v
 ```
 
 ---
 
-### T6: Criar Orchestrator struct e interfaces
+### T5: Fail-closed validation with artifact-aware prompt
 
-**What**: Struct principal do Orchestrator com `BridgeExecutor` interface e `OrchestratorConfig`
-**Where**: `internal/orchestrator/orchestrator.go`
-**Depends on**: T3, T4, T5
-**Reuses**: `bridge.Bridge` implementa `BridgeExecutor`
+**What:** Upgrade validation to review artifacts and return errors instead of approving by default when validation infrastructure fails.
+**Where:** `internal/orchestrator/validate.go`, `internal/orchestrator/prompt.go`
+**Depends on:** T4
+**Reuses:** Existing `ValidationResult` parser
 
-**Done when**:
-- [ ] `BridgeExecutor` interface com `Execute()` e `ExecuteSync()`
-- [ ] `Orchestrator` struct com bridge, worktree, config
-- [ ] `NewOrchestrator()` constructor
-- [ ] Compila sem erro
+**Done when:**
+- [ ] `Validator` signature includes `ArtifactSnapshot`
+- [ ] `buildValidationUserPrompt` includes changed files, status, diffstat, truncated diff, and verify result
+- [ ] Bridge/parse failure returns error to caller, not `Approved=true`
+- [ ] Empty diff for a write task is treated as a concrete issue
+- [ ] Tests: `TestValidate_ReceivesDiffAndVerifyOutput`, `TestValidateBridgeFailure_IsNotApproved`, `TestValidate_EmptyDiffRejectedForWriteTask`
 
-**Verify**:
+**Verify:**
 ```bash
-go build ./internal/orchestrator/...
+go test ./internal/orchestrator/... -run TestValidate -v
 ```
 
 ---
 
-### T7: Implementar ExtractPlan
+### T6: Manifest and task status model
 
-**What**: Detectar e parsear bloco ` ```aurelia-plan ` da resposta da Aurelia
-**Where**: `internal/orchestrator/extract.go`
-**Depends on**: T3, T6
-**Reuses**: Nenhum — parsing de string
+**What:** Introduce `ExecutionManifest`, `TaskRecord`, `TaskStatus`, and richer `TaskResult` fields.
+**Where:** `internal/orchestrator/manifest.go`, `internal/orchestrator/plan.go`
+**Depends on:** None
+**Reuses:** Existing `TaskResult` as compatibility surface
 
-**Done when**:
-- [ ] Extrai JSON entre ` ```aurelia-plan\n ` e ` ``` `
-- [ ] Retorna `*Plan` se válido, `nil` se não encontrado
-- [ ] Retorna erro se JSON malformado
-- [ ] Teste: resposta com plano válido → retorna Plan
-- [ ] Teste: resposta sem marcador → retorna nil
-- [ ] Teste: resposta com JSON inválido → retorna erro
-- [ ] Teste: resposta com texto antes/depois do marcador → extrai corretamente
+**Done when:**
+- [ ] `TaskStatus` includes `pending`, `running`, `approved`, `failed`, `skipped`, `unverified`, `escalated`
+- [ ] `TaskResult` has `Status`, `Approved`, `Skipped`, `Attempts`, `ChangedFiles`, `Verify`
+- [ ] `ExecutionManifest` records repo, branch, feature, run id, started/finished, task records
+- [ ] Helpers expose `ApprovedResults`, `ApprovedChangedFiles`, and total cost/duration
+- [ ] Existing tests updated to assert status instead of only `Success`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestExtractPlan
+go test ./internal/orchestrator/... -run "Test.*Manifest|TestExecuteTask" -v
 ```
 
 ---
 
-### T8: Implementar ExecutePlan
+### T7: ExecutePlan retry loop, dependency skip, and serial merge
 
-**What**: Spawnar workers por wave, coletar resultados, gerenciar worktrees
-**Where**: `internal/orchestrator/execute.go`
-**Depends on**: T4, T5, T6, T7
-**Reuses**: `bridge.Execute()`, `WorktreeManager`
+**What:** Refactor `ExecutePlan` to receive `ExecutionContext`, validate inside the attempt loop, reuse worktrees across retries, skip failed dependents, and merge approved worktrees serially after each wave.
+**Where:** `internal/orchestrator/execute.go`
+**Depends on:** T2, T4, T5, T6
+**Reuses:** Existing wave sorting and `ExecuteTask`
 
-**Done when**:
-- [ ] Executa tasks por wave (paralelo dentro da wave, sequencial entre waves)
-- [ ] Cria worktree pra tasks com `NeedsWorktree=true`
-- [ ] Resolve agent config via `ResolveAgentConfig()` por task
-- [ ] Chama `onEvent` callback pra cada `WorkerEvent`
-- [ ] Coleta `TaskResult` de cada worker
-- [ ] Respeita `MaxConcurrentWorkers` (semáforo)
-- [ ] Teste com fake bridge: 3 tasks em 2 waves → executa corretamente
+**Done when:**
+- [ ] `ExecutePlan(ctx, exec, plan, registry, systemPromptBuilder, validate, onEvent)` returns `(*ExecutionManifest, []TaskResult, error)`
+- [ ] Each task creates at most one worktree across retries
+- [ ] Retry feedback is appended to the user prompt
+- [ ] Validation errors mark task `unverified`
+- [ ] Three validation failures mark task `escalated`
+- [ ] Dependents of failed/unverified/escalated tasks are marked `skipped` before bridge execution
+- [ ] Approved worktrees merge serially in deterministic task-id order after the wave completes
+- [ ] Merge conflict stops the run, keeps the conflicted worktree/branch, and skips not-yet-run dependents
+- [ ] Tests: `TestExecutePlan_RetriesOnValidationFailure`, `TestExecutePlan_EscalatesAfter3Failures`, `TestExecutePlan_ReusesWorktreeAcrossRetries`, `TestExecutePlan_SkipsDependentsOfFailedTask`, `TestExecutePlan_MergesWaveSerially`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestExecutePlan
+go test ./internal/orchestrator/... -run TestExecutePlan -v
 ```
 
 ---
 
-### T9: Implementar ExecuteTask
+### T8: Telegram orchestration wiring and status states
 
-**What**: Executar uma task individual — montar request, chamar bridge, processar events
-**Where**: `internal/orchestrator/execute.go`
-**Depends on**: T6, T8
-**Reuses**: `bridge.Execute()`, event processing de `processBridgeEventsAsync`
+**What:** Wire the new execution context, validator closure, feature doc lookup, and status states into `executeApprovedPlan`.
+**Where:** `internal/telegram/orchestration.go`, `internal/telegram/worker_status.go`
+**Depends on:** T0, T1, T7
+**Reuses:** `WorkerStatusReporter`, `loadFeatureDocs`
 
-**Done when**:
-- [ ] Monta `bridge.Request` com worker prompt, cwd, model, tools, maxTurns
-- [ ] Processa event channel: emite `WorkerEvent` pra cada `tool_use`
-- [ ] Retorna `TaskResult` com content, success, duration, cost
-- [ ] Timeout via context
-- [ ] Teste: fake bridge retorna result → TaskResult correto
-- [ ] Teste: fake bridge retorna error → TaskResult com erro
+**Done when:**
+- [ ] `executeApprovedPlan` accepts thread id and cwd
+- [ ] It builds `ExecutionContext` from preflight result and plan
+- [ ] `loadFeatureDocs(repoRoot, plan.Feature)` replaces alphabetical glob lookup
+- [ ] Validator closure captures spec/design and artifact snapshot
+- [ ] Old post-execution validate-once loop removed
+- [ ] Status reporter handles `skipped`, `unverified`, and `escalated`
+- [ ] All status/error/final messages include the original thread id
+- [ ] Tests: `TestLoadFeatureDocs_UsesPlanFeature`, `TestExecuteApprovedPlan_PostsEscalatedStatus`, `TestExecuteApprovedPlan_SendsToOriginalThread`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestExecuteTask
+go test ./internal/telegram/... -run "TestLoadFeatureDocs|TestExecuteApprovedPlan" -v
 ```
 
 ---
 
-### T10: Implementar Quality Gate (Validate)
+### T9: Safe tasks update, commit, and PR delivery
 
-**What**: Aurelia valida resultado de worker contra critérios da task
-**Where**: `internal/orchestrator/validate.go`
-**Depends on**: T6, T9
-**Reuses**: `bridge.ExecuteSync()`
+**What:** Update `tasks.md` based on approved status, commit only approved changed files, and build PR body from the manifest.
+**Where:** `internal/orchestrator/tasks_status.go`, `internal/orchestrator/git.go`, `internal/telegram/orchestration.go`
+**Depends on:** T6, T8
+**Reuses:** `UpdateTasksStatus`, `CreatePR`, `IsGHAvailable`
 
-**Done when**:
-- [ ] Monta prompt de validação com task, resultado, spec, design
-- [ ] Chama Aurelia via `ExecuteSync()`
-- [ ] Parseia resposta como `ValidationResult` (approved/issues/shouldRetry)
-- [ ] Retry automático até 3x, depois escala (retorna shouldRetry=false)
-- [ ] Teste: resultado bom → approved=true
-- [ ] Teste: resultado com problemas → approved=false, issues preenchidas
-- [ ] Teste: 3 retries falhando → approved=false, shouldRetry=false
+**Done when:**
+- [ ] `UpdateTasksStatus` marks checkboxes only for `TaskApproved`, not generic `Success`
+- [ ] `CommitChanges(repoRoot, files, message)` stages only provided files
+- [ ] `CommitChanges` returns `ErrNothingToCommit` for empty/no-op file list
+- [ ] Unrelated dirty files remain unstaged
+- [ ] `tasks.md` path is included in staged files only when it was successfully updated
+- [ ] PR body includes manifest summary, approved/skipped/unverified tasks, changed files, and verify summaries
+- [ ] Missing `gh` with `create_pr=true` posts friendly note, not error
+- [ ] Tests: `TestUpdateTasksStatus_OnlyApproved`, `TestCommitChanges_StagesOnlyApprovedFiles`, `TestExecuteApprovedPlan_CommitsAndUpdatesTasks`, `TestExecuteApprovedPlan_SkipsPRWhenGhMissing`
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestValidate
+go test ./internal/orchestrator/... ./internal/telegram/... -run "TestUpdateTasksStatus|TestCommitChanges|TestExecuteApprovedPlan" -v
 ```
 
 ---
 
-### T11: BuildOrchestratorPrompt [P]
+### T10: Integration smoke test in scratch repo
 
-**What**: System prompt da Aurelia com metodologia TLC, anti-overengineering, lista de agents
-**Where**: `internal/orchestrator/prompt.go`
-**Depends on**: T6
-**Reuses**: `persona.BuildPrompt()` padrão de camadas
+**What:** Add a deterministic integration test or manual smoke script notes for a one-task plan on a non-main branch.
+**Where:** `e2e/` or `internal/telegram/orchestration_test.go`
+**Depends on:** T9
+**Reuses:** Fake bridge where possible; real git repo in `t.TempDir()`
 
-**Done when**:
-- [ ] Inclui instruções TLC (Specify → Design → Tasks → Implement → Validate)
-- [ ] Inclui regras anti-overengineering
-- [ ] Inclui lista de agents disponíveis com descrições
-- [ ] Inclui instruções de quando emitir bloco `aurelia-plan`
-- [ ] Inclui JSON schema do Plan pra structured output
-- [ ] Teste: gera prompt com persona + TLC + agents
+**Done when:**
+- [ ] One-task write plan runs in a temp git repo on a non-main branch
+- [ ] Worktree is created from that branch
+- [ ] Verify command runs
+- [ ] Approved diff merges serially
+- [ ] Commit contains only approved files
+- [ ] `tasks.md` checkbox flips
+- [ ] Thread id is preserved in fake Telegram sender
 
-**Verify**:
+**Verify:**
 ```bash
-go test ./internal/orchestrator/... -v -run TestBuildOrchestratorPrompt
+go test ./internal/telegram/... ./e2e/... -run "Test.*Orchestration|Test.*Execution" -v
 ```
 
 ---
 
-### T12: BuildExecutionPrompt [P]
+### T11: Version and changelog proposal
 
-**What**: Prompt pra Aurelia gerar plano de execução JSON baseado no tasks.md
-**Where**: `internal/orchestrator/prompt.go`
-**Depends on**: T6
-**Reuses**: Nenhum
+**What:** Per project policy, propose version bump and changelog entry before committing.
+**Where:** `internal/version/version.go`, `CHANGELOG.md`
+**Depends on:** T10
 
-**Done when**:
-- [ ] Recebe conteúdo do tasks.md + agents disponíveis
-- [ ] Inclui JSON schema do Plan
-- [ ] Instruções claras de como mapear tasks.md → Plan JSON
-- [ ] Teste: gera prompt com tasks.md content e agents
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestBuildExecutionPrompt
-```
+**Done when:**
+- [ ] Proposed bump type and changelog text posted to Igor
+- [ ] After approval: version constant and changelog updated
 
 ---
 
-### T13: BuildWorkerPrompt [P]
-
-**What**: System prompt de worker com contexto completo (CLAUDE.md + AGENTS.md + spec + design + task + siblings)
-**Where**: `internal/orchestrator/prompt.go`
-**Depends on**: T6
-**Reuses**: Padrão de prompt layering de `input_pipeline.go`
-
-**Done when**:
-- [ ] Recebe: agent prompt base, CLAUDE.md, AGENTS.md, spec.md, design.md, task, siblings
-- [ ] Monta prompt em camadas claras com headers
-- [ ] Inclui regras de foco ("only touch files in your task")
-- [ ] Inclui contexto de siblings ("other workers are doing X")
-- [ ] Teste: gera prompt com todas as camadas
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestBuildWorkerPrompt
-```
-
----
-
-### T14: BuildValidationPrompt [P]
-
-**What**: Prompt pra Aurelia validar resultado de worker
-**Where**: `internal/orchestrator/prompt.go`
-**Depends on**: T6
-**Reuses**: Nenhum
-
-**Done when**:
-- [ ] Recebe: task (com "Done When"), resultado do worker, spec, design
-- [ ] Instruções de validação: critérios, scope creep, overengineering, padrões
-- [ ] Formato de resposta: JSON com approved/issues/shouldRetry
-- [ ] Teste: gera prompt com task e resultado
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestBuildValidationPrompt
-```
-
----
-
-### T15: BuildConsolidationPrompt [P]
-
-**What**: Prompt pra Aurelia sintetizar resultados finais
-**Where**: `internal/orchestrator/prompt.go`
-**Depends on**: T6
-**Reuses**: Nenhum
-
-**Done when**:
-- [ ] Recebe: plano, resultados de todos os workers
-- [ ] Instruções: resumir o que foi feito, listar problemas, próximos passos
-- [ ] Teste: gera prompt com plano e resultados
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestBuildConsolidationPrompt
-```
-
----
-
-### T16: Criar WorkerStatusReporter
-
-**What**: Mensagens de status por worker no Telegram (send, edit, mark done/error)
-**Where**: `internal/telegram/worker_status.go`
-**Depends on**: T3 (WorkerEvent)
-**Reuses**: Padrão do `progressReporter` (Send + Edit)
-
-**Done when**:
-- [ ] `SendStart(taskID, description)` envia mensagem formatada
-- [ ] `UpdateProgress(taskID, toolName)` edita mensagem com tool display name
-- [ ] `MarkDone(taskID, durationMs)` edita com ✅ e duração
-- [ ] `MarkError(taskID, errMsg)` edita com ❌ e erro
-- [ ] Thread-safe (sync.Mutex)
-- [ ] Teste com fake bot: verifica Send e Edit chamados corretamente
-
-**Verify**:
-```bash
-go test ./internal/telegram/... -v -run TestWorkerStatus
-```
-
----
-
-### T17: Criar executeApprovedPlan no input pipeline
-
-**What**: Método que executa o ciclo completo: ensure docs → spawn workers → validate → merge → consolidate
-**Where**: `internal/telegram/input_pipeline.go`
-**Depends on**: T8, T10, T16, T20
-**Reuses**: `orchestrator.ExecutePlan()`, `WorkerStatusReporter`
-
-**Done when**:
-- [ ] Chama `EnsureClaudeMd` e `EnsureAgentsMd`
-- [ ] Chama `sendPlanSummary` com fases
-- [ ] Executa workers por wave com feedback visual
-- [ ] Chama `Validate` após cada worker
-- [ ] Merge worktrees aprovados
-- [ ] Atualiza tasks.md
-- [ ] Consolida e envia resposta final
-- [ ] Tratamento de erro: falha parcial, conflito de merge
-
-**Verify**:
-```bash
-go build ./internal/telegram/...
-```
-
----
-
-### T18: Modificar processBridgeEventsAsync pra detectar plano
-
-**What**: No handler de `result`, checar se contém marcador `aurelia-plan` e disparar Execution Mode
-**Where**: `internal/telegram/input_pipeline.go`
-**Depends on**: T7, T17
-**Reuses**: `orchestrator.ExtractPlan()`
-
-**Done when**:
-- [ ] Após receber `result` event, chama `ExtractPlan(ev.Content)`
-- [ ] Se plano encontrado → filtra bloco do texto, envia texto restante, dispara `executeApprovedPlan`
-- [ ] Se plano não encontrado → fluxo existente (envia resposta normal)
-- [ ] Teste: resposta com marcador → detecta plano
-- [ ] Teste: resposta sem marcador → fluxo normal
-
-**Verify**:
-```bash
-go test ./internal/telegram/... -v -run TestDetectPlan
-```
-
----
-
-### T19: Criar sendPlanSummary
-
-**What**: Formata e envia resumo do plano de execução no Telegram
-**Where**: `internal/telegram/worker_status.go`
-**Depends on**: T3, T16
-**Reuses**: `SendTextReply()`
-
-**Done when**:
-- [ ] Formata plano como lista numerada com fases e agents
-- [ ] Envia como mensagem de reply no Telegram
-- [ ] Teste: plano com 3 tasks → mensagem formatada corretamente
-
-**Verify**:
-```bash
-go test ./internal/telegram/... -v -run TestSendPlanSummary
-```
-
----
-
-### T20: Criar EnsureAgentsMd e EnsureClaudeMd [P]
-
-**What**: Gerar AGENTS.md e CLAUDE.md na raiz do projeto se não existirem
-**Where**: `internal/orchestrator/agents_md.go`
-**Depends on**: T6
-**Reuses**: Nenhum — geração de markdown
-
-**Done when**:
-- [ ] `EnsureClaudeMd(root)` cria CLAUDE.md com template básico se não existir; NÃO sobrescreve se já existir
-- [ ] `EnsureAgentsMd(root, agents)` cria AGENTS.md com squad table; atualiza se agents mudaram
-- [ ] Teste: diretório vazio → ambos criados
-- [ ] Teste: CLAUDE.md já existe → não sobrescreve
-- [ ] Teste: AGENTS.md com squad diferente → atualiza
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestEnsureDocs
-```
-
----
-
-### T21: Criar UpdateTasksStatus [P]
-
-**What**: Atualizar `.specs/features/<feat>/tasks.md` marcando tasks como done/failed
-**Where**: `internal/orchestrator/tasks_status.go`
-**Depends on**: T3
-**Reuses**: Nenhum — manipulação de markdown
-
-**Done when**:
-- [ ] Lê tasks.md existente
-- [ ] Encontra checkboxes `- [ ]` dos critérios "Done When"
-- [ ] Marca como `- [x]` pra tasks aprovadas
-- [ ] Adiciona nota de falha pra tasks que falharam
-- [ ] Teste: tasks.md com 3 tasks, 2 done, 1 failed → atualizado corretamente
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestUpdateTasksStatus
-```
-
----
-
-### T22: Git commit e PR logic [P]
-
-**What**: Lógica de git commit (conventional commits) e PR creation via `gh` CLI
-**Where**: `internal/orchestrator/git.go`
-**Depends on**: T4 (WorktreeManager)
-**Reuses**: Git CLI via `os/exec`
-
-**Done when**:
-- [ ] `CommitChanges(repoRoot, message)` faz `git add -A` + `git commit -m`
-- [ ] `CreatePR(repoRoot, title, body, baseBranch)` chama `gh pr create`
-- [ ] `IsGHAvailable()` verifica se `gh` CLI está instalado e autenticado
-- [ ] Teste: commit cria commit com mensagem correta
-- [ ] Teste: gh indisponível → retorna erro gracioso
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v -run TestGit
-```
-
----
-
-### T23: Wiring no BotController
-
-**What**: Adicionar `Orchestrator` e `WorktreeManager` como dependências do BotController
-**Where**: `internal/telegram/bot.go`, `cmd/aurelia/app.go`
-**Depends on**: T6, T17, T18
-**Reuses**: Padrão de constructor injection existente
-
-**Done when**:
-- [ ] `BotController` recebe `*orchestrator.Orchestrator`
-- [ ] `app.go` cria Orchestrator com bridge e config
-- [ ] Orchestrator prompt inclui persona + TLC + agents disponíveis
-- [ ] System prompt da Aurelia atualizado com instruções de orquestração
-- [ ] `go build ./...` compila
-
-**Verify**:
-```bash
-go build ./...
-```
-
----
-
-### T24: Testes de integração
-
-**What**: Testes que validam o fluxo completo com fake bridge
-**Where**: `internal/orchestrator/orchestrator_test.go`
-**Depends on**: T1-T23
-**Reuses**: Padrão de testes existente com fakes
-
-**Done when**:
-- [ ] Teste: mensagem simples → Aurelia responde direto (sem plano)
-- [ ] Teste: mensagem com aprovação → ExtractPlan detecta, ExecutePlan roda workers
-- [ ] Teste: ExecutePlan com 2 waves → executa sequencialmente
-- [ ] Teste: Validate aprovado → merge worktree
-- [ ] Teste: Validate reprovado → retry + escalação
-- [ ] Teste: worker falha → erro parcial reportado
-- [ ] Todos os testes passam
-
-**Verify**:
-```bash
-go test ./internal/orchestrator/... -v
-```
-
----
-
-### T25: Testes do Telegram integration
-
-**What**: Testes que validam o fluxo Telegram com plan detection e status reporting
-**Where**: `internal/telegram/input_pipeline_test.go`
-**Depends on**: T16-T19, T23
-**Reuses**: Testes existentes de `input_pipeline_test.go`
-
-**Done when**:
-- [ ] Teste: resposta com `aurelia-plan` marcador → dispara executeApprovedPlan
-- [ ] Teste: resposta sem marcador → fluxo normal
-- [ ] Teste: WorkerStatusReporter envia e edita mensagens corretamente
-- [ ] Teste: sendPlanSummary formata plano
-- [ ] Todos os testes passam
-
-**Verify**:
-```bash
-go test ./internal/telegram/... -v
-```
-
----
-
-### T26: Validação final — build + vet + full test suite
-
-**What**: Garantir que tudo compila, passa vet, e todos os testes passam
-**Where**: Projeto inteiro
-**Depends on**: T24, T25
-**Reuses**: Comandos existentes de CLAUDE.md
-
-**Done when**:
-- [ ] `go build ./...` sem erros
-- [ ] `go vet ./...` sem warnings
-- [ ] `go test ./... -v` todos passam
-- [ ] Zero regressão nos testes existentes
-
-**Verify**:
+### T12: Full validation pass
+
+**What:** Run the standard repo validation.
+**Where:** project root
+**Depends on:** T11
+
+**Done when:**
+- [ ] `go build ./...` clean
+- [ ] `go vet ./...` clean
+- [ ] `go test ./... -v` all green
+- [ ] Manual smoke: in a scratch repo on a non-main branch, post a hand-crafted plan to a test bot account and observe worktree → verify → serial merge → commit → `tasks.md` update in the original topic
+
+**Verify:**
 ```bash
 go build ./... && go vet ./... && go test ./... -v
 ```
 
 ---
 
-## Parallel Execution Map
+## Deferred / Blocked
 
-```
-Phase 1 (Sequential):
-  T1 → T2
-  T3 (parallel com T1)
-  T4 (parallel com T1)
-
-Phase 2 (Sequential, após Phase 1):
-  T5 → T6 → T7 → T8 → T9 → T10
-
-Phase 3 (Parallel, após T6):
-  ├── T11 [P]
-  ├── T12 [P]
-  ├── T13 [P]
-  ├── T14 [P]
-  └── T15 [P]
-
-Phase 4 (Sequential, após Phase 3):
-  T16 → T17 → T18 → T19
-
-Phase 5 (Parallel, após T6):
-  ├── T20 [P]
-  ├── T21 [P]
-  └── T22 [P]
-
-Phase 6 (Sequential, após Phase 4 + 5):
-  T23 → T24 → T25 → T26
-```
+- **Per-worker `max_turns`** remains blocked until PI bridge support exists. Current `internal/bridge/protocol.go` explicitly notes that the PI SDK does not expose a max-turns analogue. Do not claim enforcement until the bridge supports it.
+- **Persistent execution resume** is not part of this spec. `ExecutionManifest` is intentionally serializable so persistence can be added later.
+- **Automatic merge conflict resolution** is out of scope; conflicts stop the run and keep branches for manual review.
 
 ---
 
-## Task Granularity Check
+## Already-Done (carried forward from prior iteration)
 
-| Task | Scope | Status |
-|------|-------|--------|
-| T1: Agent struct fields | 1 file, 2 fields | ✅ Granular |
-| T2: BuildSDKAgents update | 1 function | ✅ Granular |
-| T3: Plan data model | 1 file, structs + 1 method | ✅ Granular |
-| T4: WorktreeManager | 1 file, 4 methods | ✅ Granular |
-| T5: DefaultWorkerConfig | 1 file, 2 functions | ✅ Granular |
-| T6: Orchestrator struct | 1 file, struct + interface | ✅ Granular |
-| T7: ExtractPlan | 1 function | ✅ Granular |
-| T8: ExecutePlan | 1 function | ⚠️ Médio — mas coeso |
-| T9: ExecuteTask | 1 function | ✅ Granular |
-| T10: Validate | 1 function | ✅ Granular |
-| T11-T15: Prompt builders | 1 function cada | ✅ Granular |
-| T16: WorkerStatusReporter | 1 file, 4 methods | ✅ Granular |
-| T17: executeApprovedPlan | 1 function | ⚠️ Médio — orquestra tudo |
-| T18: Plan detection | 1 modificação pontual | ✅ Granular |
-| T19: sendPlanSummary | 1 function | ✅ Granular |
-| T20: Ensure docs | 2 functions | ✅ Granular |
-| T21: UpdateTasksStatus | 1 function | ✅ Granular |
-| T22: Git logic | 3 functions | ✅ Granular |
-| T23: Wiring | 2 files, constructor changes | ✅ Granular |
-| T24-T26: Tests | Validação | ✅ Granular |
+- Agent struct fields (`DisallowedTools`, `MaxTurns`; note `MaxTurns` is not enforced by PI yet)
+- `BuildSDKAgents` mapping
+- `Plan`, `Task`, `TaskResult`, `WorkerEvent`, `WorkerConfig` types
+- `Plan.ExecutionOrder` topological sort
+- `WorktreeManager.Create/Merge/Cleanup/CleanupAll` baseline
+- `DefaultWorkerConfig` + `ResolveAgentConfig`
+- `Orchestrator` struct + `BridgeExecutor` interface
+- `ExtractPlan` + `StripPlanBlock`
+- `ExecutePlan` + `ExecuteTask` baseline
+- `Validate` + JSON heuristic fallback baseline
+- Prompt builders baseline
+- `WorkerStatusReporter` baseline
+- `EnsureClaudeMd`, `EnsureAgentsMd`
+- `UpdateTasksStatus`
+- `CommitChanges`, `CreatePR`, `IsGHAvailable`
+- Wiring from `pipeline.tryExecutePlan` to `BotController.executeApprovedPlan`

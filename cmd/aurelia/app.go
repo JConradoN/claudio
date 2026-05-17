@@ -130,7 +130,10 @@ func bootstrapApp() (*app, error) {
 	}
 
 	// Wire orchestrator — enables autonomous agent orchestration
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get current working directory: %w", err)
+	}
 	orch := orchestrator.NewOrchestrator(br, orchestrator.OrchestratorConfig{
 		RepoRoot: cwd,
 	})
@@ -171,7 +174,10 @@ func bootstrapApp() (*app, error) {
 	bot.SetDreamer(dreamer)
 
 	// Wire project index for fast project lookup.
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("get user home directory: %w", err)
+	}
 	jsonPath := runtime.PersistPath(filepath.Join(home, ".aurelia"))
 	projectIndex := runtime.NewProjectIndex(nil, jsonPath)
 	bot.SetProjectIndex(projectIndex)

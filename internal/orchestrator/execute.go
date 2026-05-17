@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -123,6 +124,14 @@ func (o *Orchestrator) ExecutePlan(
 			go func(t Task) {
 				defer wg.Done()
 				defer func() { <-sem }()
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("orchestrator: panic executing task %s: %v", t.ID, r)
+						mu.Lock()
+						allResults = append(allResults, TaskResult{TaskID: t.ID, Success: false, Error: fmt.Sprintf("panic: %v", r)})
+						mu.Unlock()
+					}
+				}()
 
 				cfg := ResolveAgentConfig(registry, t.Agent)
 
@@ -144,9 +153,13 @@ func (o *Orchestrator) ExecutePlan(
 				// Cleanup worktree
 				if wt != nil {
 					if result.Success {
-						_ = o.worktree.Merge(wt, currentBranch(o.config.RepoRoot))
+						if err := o.worktree.Merge(wt, currentBranch(o.config.RepoRoot)); err != nil {
+							log.Printf("orchestrator: worktree merge failed for task %s: %v", t.ID, err)
+						}
 					}
-					_ = o.worktree.Cleanup(wt)
+					if err := o.worktree.Cleanup(wt); err != nil {
+						log.Printf("orchestrator: worktree cleanup failed for task %s: %v", t.ID, err)
+					}
 				}
 
 				mu.Lock()

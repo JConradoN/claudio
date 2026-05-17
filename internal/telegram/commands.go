@@ -516,7 +516,8 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 
 	// Cron jobs
 	if bc.cronHandler != nil {
-		ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 		jobs, err := bc.cronHandler.service.ListJobs(ctx, chatID)
 		if err == nil {
 			active := 0

@@ -332,7 +332,7 @@ go build -trimpath -ldflags "-s -w" -o ./build/aurelia.exe ./cmd/aurelia
 | [.specs/codebase/CONVENTIONS.md](.specs/codebase/CONVENTIONS.md) | Code conventions and Go patterns |
 | [.specs/codebase/STACK.md](.specs/codebase/STACK.md) | Technology stack and dependencies |
 | [.specs/project/PROJECT.md](.specs/project/PROJECT.md) | Vision, constraints, current state |
-| [.specs/project/ROADMAP.md](.specs/project/ROADMAP.md) | Feature roadmap |
+| [.specs/project/ROADMAP.md](.specs/project/ROADMAP.md) | Feature roadmap and implementation order |
 
 ## Development
 

@@ -14,14 +14,16 @@ O Hermes Agent resolve isso com um sistema de "nudge" — a cada N turns, spawna
 
 - [ ] Background review agent que roda a cada N turns (configurável, default 10)
 - [ ] Acesso ao contexto completo da sessão (não apenas snippets)
-- [ ] Duas revisões: memória (fatos do user + projeto) e skills (padrões reutilizáveis)
+- [ ] Revisão de memória (fatos do user + projeto) com contexto completo
+- [ ] Opcionalmente sinalizar padrões reutilizáveis como sugestão, mas **não criar skills automaticamente** nesta spec
 - [ ] Nunca interrompe o fluxo principal — roda em background
-- [ ] Resultado da revisão atualiza memórias e opcionalmente cria/atualiza skills
+- [ ] Resultado da revisão atualiza memórias; criação/edição de skills fica para `auto-skills`
 - [ ] Substituir o extrator por-turn pelo nudge periódico (menos chamadas, mais qualidade)
 
 ## Out of Scope
 
-- Sistema completo de skills com diretórios, templates e scripts (v2)
+- Sistema completo de skills com diretórios, templates e scripts (coberto por `auto-skills`)
+- Criação automática de skills sem confirmação do user
 - Hub de skills compartilhados entre usuários
 - Auto-tuning do intervalo de nudge baseado em atividade
 - Múltiplos modelos de review (usar o mesmo modelo configurado)
@@ -68,14 +70,16 @@ Only save what will help in future conversations. Update existing memories
 rather than creating duplicates.
 ```
 
-**Skill Review (v2):**
+**Reusable Pattern Review (advisory only):**
 ```
 Review the conversation above and consider if a reusable approach emerged:
 - Was a non-trivial technique used that required trial and error?
 - Did the approach change course due to experiential findings?
 - Would this be useful in future similar tasks?
 
-If yes, create or update a skill file describing the approach.
+If yes, summarize the pattern as a suggestion in memory or in the review output.
+Do not create or update skill files. Skill creation is handled by the explicit
+Auto-Skills workflow and requires user confirmation.
 ```
 
 ### Session Transcript Access

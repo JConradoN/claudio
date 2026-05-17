@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"os"
+	"time"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -144,32 +146,34 @@ func (b *Bridge) readLoop() {
 
 		if len(buf) > 0 {
 			var ev Event
-			if parseErr := json.Unmarshal(buf, &ev); parseErr == nil {
-				rid := ev.RequestID
+			if parseErr := json.Unmarshal(buf, &ev); parseErr != nil {
+				log.Printf("bridge: failed to parse NDJSON line: %v", parseErr)
+				continue
+			}
+			rid := ev.RequestID
 
-				b.pendingMu.Lock()
-				ch, ok := b.pending[rid]
-				b.pendingMu.Unlock()
+			b.pendingMu.Lock()
+			ch, ok := b.pending[rid]
+			b.pendingMu.Unlock()
 
-				if ok {
-					if ev.IsTerminal() {
-						b.sendTerminalEvent(ch, ev, rid)
-					} else {
-						// Non-blocking send — channel has buffer.
-						select {
-						case ch <- ev:
-						default:
-							b.droppedEvents.Add(1)
-							slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
-						}
+			if ok {
+				if ev.IsTerminal() {
+					b.sendTerminalEvent(ch, ev, rid)
+				} else {
+					// Non-blocking send — channel has buffer.
+					select {
+					case ch <- ev:
+					default:
+						b.droppedEvents.Add(1)
+						slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
 					}
+				}
 
-					if ev.IsTerminal() {
-						b.pendingMu.Lock()
-						delete(b.pending, rid)
-						b.pendingMu.Unlock()
-						safeClose(ch)
-					}
+				if ev.IsTerminal() {
+					b.pendingMu.Lock()
+					delete(b.pending, rid)
+					b.pendingMu.Unlock()
+					safeClose(ch)
 				}
 			}
 		}
@@ -248,7 +252,11 @@ func (b *Bridge) Stop() {
 
 	// Wait for reader goroutine to finish (it will close all pending channels).
 	if done != nil {
-		<-done
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			log.Printf("bridge: timeout waiting for reader goroutine, forcing kill")
+		}
 	}
 
 	// Ensure process is reaped.

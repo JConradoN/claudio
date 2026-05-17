@@ -1,696 +1,650 @@
-# Agent Orchestration — Design
+# Agent Orchestration — Execution Mode — Design
 
-**Spec**: `.specs/features/agent-orchestration/spec.md`
-**Status**: Draft
+**Spec:** `.specs/features/agent-orchestration-execution/spec.md`
+**Status:** Draft (gap-closing iteration on already-shipped code)
+
+---
+
+## Current State Snapshot
+
+The pipeline already wires Telegram → pipeline service → bridge → orchestrator. The flow today:
+
+```
+internal/telegram/input.go
+   └─ internal/pipeline/service.go::Run
+        └─ ResilientBridge.Execute (PI SDK call via bundled TS)
+             └─ pipeline.pipeline.go: event loop
+                  ├─ "result" event with text
+                  └─ tryExecutePlan() — orchestrator.ExtractPlan
+                       └─ BotController.executeApprovedPlan (internal/telegram/orchestration.go)
+                            ├─ EnsureClaudeMd / EnsureAgentsMd
+                            ├─ ReadFileContent CLAUDE.md / AGENTS.md
+                            ├─ findFeatureDoc spec.md / design.md   ← BROKEN: last-alphabetical
+                            ├─ repoRoot from daemon cwd              ← BROKEN: ignores chat /cwd
+                            ├─ Orchestrator.ExecutePlan
+                            │     └─ per wave, per task:
+                            │          ├─ ResolveAgentConfig
+                            │          ├─ WorktreeManager.Create (uses currentBranch="HEAD" ← BROKEN)
+                            │          ├─ systemPromptBuilder → BuildWorkerPrompt ← DUPLICATES task
+                            │          ├─ ExecuteTask (Bridge.Execute, stream events)
+                            │          └─ on success: Merge + Cleanup ← BROKEN: can merge concurrently
+                            ├─ Validate worker prose only (once, no retry ← BROKEN)
+                            ├─ BuildConsolidationPrompt + Consolidate
+                            ├─ SendTextReply
+                            └─ [stop] ← BROKEN: no UpdateTasksStatus / CommitChanges / CreatePR
+```
+
+The components that are already implemented and tested:
+
+| Component | File | Status |
+|---|---|---|
+| `Plan`, `Task`, `TaskResult`, `WorkerEvent`, `WorkerConfig` | `internal/orchestrator/plan.go` | OK |
+| `Plan.ExecutionOrder` (topological wave sort) | `internal/orchestrator/plan.go` | OK |
+| `WorktreeManager.Create/Merge/Cleanup/CleanupAll` | `internal/orchestrator/worktree.go` | OK, `CleanupAll` unused |
+| `ResolveAgentConfig`, `DefaultWorkerConfig` | `internal/orchestrator/defaults.go` | OK |
+| `Orchestrator` struct + `BridgeExecutor` interface | `internal/orchestrator/orchestrator.go` | OK |
+| `ExtractPlan`, `StripPlanBlock` | `internal/orchestrator/extract.go` | OK |
+| `ExecutePlan`, `ExecuteTask` | `internal/orchestrator/execute.go` | OK except `currentBranch` stub |
+| `Validate`, `parseValidationResponse` | `internal/orchestrator/validate.go` | OK (single-shot) |
+| `BuildOrchestratorPrompt`, `BuildExecutionPrompt`, `BuildWorkerPrompt`, `BuildValidationPrompt`, `BuildConsolidationPrompt` | `internal/orchestrator/prompt.go` | OK except task duplication |
+| `EnsureClaudeMd`, `EnsureAgentsMd` | `internal/orchestrator/agents_md.go` | OK |
+| `UpdateTasksStatus` | `internal/orchestrator/tasks_status.go` | OK but unused |
+| `CommitChanges`, `CreatePR`, `IsGHAvailable` | `internal/orchestrator/git.go` | OK but unused |
+| `WorkerStatusReporter` | `internal/telegram/worker_status.go` | OK |
+| `executeApprovedPlan` | `internal/telegram/orchestration.go` | Partial — see gaps |
+
+This design covers the **delta** needed to close the gaps. Components above keep their interfaces unless explicitly noted.
 
 ---
 
 ## Architecture Overview
 
-Dois modos de operação: **Planning Mode** (colaborativo, sessão conversacional) e **Execution Mode** (autônomo, múltiplas sessões bridge). O gatilho de transição é a aprovação do usuário.
-
-### Planning Mode (sessão conversacional existente)
-
-```mermaid
-sequenceDiagram
-    participant U as Telegram User
-    participant G as Go
-    participant B as Bridge (Aurelia)
-
-    U->>G: "implementa auth JWT no módulo de users"
-    G->>B: Execute(Aurelia, sessão conversacional)
-    B-->>G: "Pra esse caso, eu sugiro..."
-    G->>U: Proposta de abordagem
-
-    U->>G: "mas sem refresh token por agora"
-    G->>B: Execute(Aurelia, continue session)
-    B-->>G: "Faz sentido. Plano ajustado..."
-    G->>U: Plano revisado
-
-    U->>G: "aprovado, manda ver"
-    Note over G: Detecta aprovação → Execution Mode
-```
-
-### Execution Mode (após aprovação)
-
-```mermaid
-sequenceDiagram
-    participant U as Telegram User
-    participant G as Go (Orchestrator)
-    participant B as Bridge
-    participant W1 as Worker 1
-    participant W2 as Worker 2
-
-    G->>B: ExecuteSync(Aurelia, "gera plano de execução JSON")
-    B-->>G: Plan JSON com tasks
-
-    G->>U: "Executando: 1. Implementar endpoint 2. Testes 3. Review"
-    G->>G: git worktree add (×2)
-
-    par Workers em paralelo
-        G->>B: Execute(backend, cwd=worktree1, task1)
-        B-->>G: streaming events
-        G->>U: "backend — Implementando..."
-    and
-        G->>B: Execute(qa, cwd=worktree2, task2)
-        B-->>G: streaming events
-        G->>U: "qa — Escrevendo testes..."
-    end
-
-    G->>G: git merge worktrees
-    G->>B: ExecuteSync(Aurelia, "consolida resultados")
-    B-->>G: síntese final
-    G->>U: Resposta consolidada + commit + PR
-```
-
-### Fluxo de decisão
-
 ```mermaid
 flowchart TD
-    A[Mensagem do usuário] --> B{Bootstrap pendente?}
-    B -->|Sim| C[Fluxo de bootstrap]
-    B -->|Não| D{Command layer match?}
-    D -->|Sim| E[Executa comando local]
-    D -->|Não| F[Aurelia recebe mensagem]
-    F --> G{Tipo de mensagem?}
-    G -->|Conversa simples / pergunta| H[Responde direto]
-    G -->|Task trivial| I[Executa direto sem planning]
-    G -->|Feature / trabalho complexo| J[Planning Mode]
-    J --> K[Conversa colaborativa com session resume]
-    K --> L{Usuário aprovou?}
-    L -->|Não, itera| K
-    L -->|Sim| M[Execution Mode]
-    M --> N[Aurelia gera Plan JSON]
-    N --> O[Cria worktrees]
-    O --> P[Spawna workers em waves]
-    P --> Q[Coleta resultados]
-    Q --> R{Merge worktrees}
-    R -->|Sucesso| S[Aurelia consolida]
-    R -->|Conflito| T[Informa no Telegram]
-    N --> H
+    A[pipeline.tryExecutePlan] --> B[Resolve effective cwd + thread_id]
+    B --> C[Build ExecutionContext]
+    C --> D[Preflight git repo, clean base, base branch]
+    D --> E{safe?}
+    E -->|no| Z[Abort + error to same Telegram topic]
+    E -->|yes| F[Ensure CLAUDE.md / AGENTS.md]
+    F --> G[Read spec/design via plan.feature]
+    G --> H[Execute workers per wave in parallel]
+    H --> I[Retry + validate each worktree with diff/verify]
+    I --> J[Merge approved worktrees serially by task id]
+    J --> K[Skip dependents of failed/unverified tasks]
+    K --> L{more waves?}
+    L -->|yes| H
+    L -->|no| M[Update manifest]
+    M --> N{any approved?}
+    N -->|yes| O[UpdateTasksStatus]
+    O --> P[Commit approved changed files only]
+    P --> Q{plan.createPR?}
+    Q -->|yes & gh available| R[CreatePR + post URL]
+    Q -->|no or gh missing| S[Skip PR with friendly note]
+    R --> T[Consolidate + SendTextReply]
+    S --> T
+    N -->|none approved| T
 ```
 
----
+`Orchestrator` startup: on construction call `WorktreeManager.CleanupAll()` once (best-effort, log count).
 
-## Code Reuse Analysis
+Execution is split into four responsibilities:
 
-### Existing Components to Leverage
-
-| Component | Location | Como usar |
-|-----------|----------|-----------|
-| `Bridge.Execute()` | `internal/bridge/bridge.go` | Spawnar workers — já suporta multiplexação concorrente via request_id, cwd diferente por request |
-| `Bridge.ExecuteSync()` | `internal/bridge/bridge.go` | Fase 1 (planejamento) e Fase 3 (consolidação) — blocking, só precisa do resultado final |
-| `progressReporter` | `internal/telegram/progress.go` | Adaptar pra status por worker — já edita mensagens em tempo real |
-| `SendTextReply()` | `internal/telegram/output.go` | Enviar resposta final consolidada — já faz chunking e Markdown→HTML |
-| `agents.Load()` | `internal/agents/registry.go` | Carregar worker.md — parsing de frontmatter YAML já funciona |
-| `persona.BuildPrompt()` | `internal/persona/` | Montar system prompt da Aurelia orquestradora |
-| `session.Store` | `internal/session/` | Manter sessão da Aurelia (orquestradora) entre mensagens |
-| `bridgeFailureTracker` | `internal/telegram/input_pipeline.go` | Aplicar cooldown se bridge morrer durante workers |
-
-### Integration Points
-
-| Sistema | Método de integração |
-|---------|---------------------|
-| Bridge NDJSON | Mesma interface `Execute(ctx, Request)` — cada worker é uma request separada |
-| Telegram Bot API | Mensagens de status via `bot.Send()` e `bot.Edit()` — padrão do progress reporter |
-| Git | Comandos via `os/exec` — `git worktree add/remove`, `git merge`, `git commit` |
-| GitHub CLI | Worker usa `gh` via Bash tool — PR creation/comments |
+1. **Pipeline/Telegram context** resolves where this run belongs: chat, thread, original message, effective cwd.
+2. **Orchestrator preflight** proves the repo is safe before a worker touches anything.
+3. **Worker execution** can remain parallel, but validation uses real artifacts and merge is serialized per wave.
+4. **Delivery** updates tasks, commits only approved files, optionally opens a PR, and posts every user-facing message back to the originating topic.
 
 ---
 
-## Components
+## Component Changes
 
-### Orchestrator Service
+### 0. `ExecutionContext` and handoff signature
 
-- **Purpose**: Coordena o ciclo completo: planejar → executar → consolidar
-- **Location**: `internal/orchestrator/`
-- **Interfaces**:
+**Why:** The current handoff loses `threadID` and uses `OrchestratorConfig.RepoRoot`, which is created from the daemon cwd. Execution must use the chat/thread's effective `/cwd`.
+
+**Locations:** `internal/pipeline/service.go`, `internal/pipeline/pipeline.go`, `internal/telegram/pipeline.go`, `internal/telegram/orchestration.go`, `internal/orchestrator/orchestrator.go`
 
 ```go
-// Orchestrator coordena o ciclo plan→execute→consolidate.
-type Orchestrator struct {
-    bridge   BridgeExecutor
-    worktree WorktreeManager
-    config   OrchestratorConfig
+type ExecutionContext struct {
+    RunID      string
+    RepoRoot   string
+    BaseBranch string
+    ChatID     int64
+    ThreadID   int
+    MessageID  int
+    Feature    string
+    CreatePR   bool
+    StartedAt  time.Time
 }
-
-type OrchestratorConfig struct {
-    WorkerSystemPrompt  string   // prompt do worker.md
-    WorkerModel         string   // modelo padrão do worker
-    WorkerTools         []string // ferramentas do worker
-    WorkerMaxTurns      int      // default: 25
-    OrchestratorPrompt  string   // prompt da Aurelia orquestradora
-    MaxConcurrentWorkers int     // default: 3
-}
-
-// BridgeExecutor é a interface que o orchestrator precisa do bridge.
-type BridgeExecutor interface {
-    Execute(ctx context.Context, req bridge.Request) (<-chan bridge.Event, error)
-    ExecuteSync(ctx context.Context, req bridge.Request) (*bridge.Event, error)
-}
-
-// ExtractPlan detecta se a resposta da Aurelia contém um plano de execução.
-// O plano é emitido como bloco ```aurelia-plan\n{json}\n``` na resposta.
-// Retorna nil se não há plano (resposta normal de conversa).
-func (o *Orchestrator) ExtractPlan(response string) *Plan
-
-// ExecutePlan spawna workers e coleta resultados.
-// Resolve o config de cada task via ResolveAgentConfig(registry, task.Agent).
-func (o *Orchestrator) ExecutePlan(ctx context.Context, plan *Plan, registry *agents.Registry, onEvent func(WorkerEvent)) ([]TaskResult, error)
-
-// Consolidate sintetiza os resultados dos workers.
-func (o *Orchestrator) Consolidate(ctx context.Context, plan *Plan, results []TaskResult, systemPrompt string) (string, error)
 ```
 
-- **Dependencies**: `BridgeExecutor`, `WorktreeManager`
-- **Reuses**: `bridge.Execute()` pra cada worker, `bridge.ExecuteSync()` pra planejamento e consolidação
-
----
-
-### Plan (Data Model)
-
-- **Purpose**: Plano estruturado retornado pela Aurelia na fase de decomposição
-- **Location**: `internal/orchestrator/plan.go`
+Pipeline output changes from:
 
 ```go
-// Plan é o plano de execução retornado pela Aurelia.
+ExecuteApprovedPlan(chatID int64, messageID int, plan *orchestrator.Plan)
+```
+
+to:
+
+```go
+ExecuteApprovedPlan(chatID int64, threadID int, messageID int, cwd string, plan *orchestrator.Plan)
+```
+
+`pipeline.tryExecutePlan` resolves `cwd := s.effectiveCwd(agent, chatID, threadID)` before handing off. Empty cwd aborts with a message telling the user to set `/cwd`.
+
+### 0b. `PreflightExecution`
+
+**Location:** `internal/orchestrator/preflight.go` (new)
+
+```go
+type PreflightResult struct {
+    BaseBranch string
+    DirtyPaths []string
+    GHAvailable bool
+}
+
+func (o *Orchestrator) PreflightExecution(ctx context.Context, repoRoot string, createPR bool) (*PreflightResult, error)
+```
+
+Checks:
+
+- `repoRoot/.git` or `git -C repoRoot rev-parse --show-toplevel` succeeds
+- `ResolveBaseBranch` succeeds and is not detached
+- `git status --porcelain` is empty before workers start
+- if `createPR` is true, `IsGHAvailable()` is checked upfront and recorded; it does not block execution
+
+Dirty repo is fatal before workers. This is stricter than normal chat behavior because orchestration will merge and commit autonomously.
+
+### 0c. `ExecutionManifest`
+
+**Location:** `internal/orchestrator/manifest.go` (new)
+
+```go
+type TaskStatus string
+
+const (
+    TaskPending    TaskStatus = "pending"
+    TaskRunning    TaskStatus = "running"
+    TaskApproved   TaskStatus = "approved"
+    TaskFailed     TaskStatus = "failed"
+    TaskSkipped    TaskStatus = "skipped"
+    TaskUnverified TaskStatus = "unverified"
+    TaskEscalated  TaskStatus = "escalated"
+)
+
+type ExecutionManifest struct {
+    RunID      string
+    RepoRoot   string
+    BaseBranch string
+    Feature    string
+    StartedAt  time.Time
+    FinishedAt time.Time
+    Tasks      map[string]*TaskRecord
+}
+
+type TaskRecord struct {
+    TaskID       string
+    Status       TaskStatus
+    Attempts     int
+    ChangedFiles []string
+    Verify       *VerifyResult
+    CostUSD      float64
+    DurationMs   int64
+    Error        string
+}
+```
+
+For this spec the manifest can remain in-memory. It gives the consolidation prompt and PR body a single source of truth and creates a clean future path for persistence/resume.
+
+### 1. `WorktreeManager.ResolveBaseBranch` (new)
+
+**Location:** `internal/orchestrator/worktree.go`
+
+**Why:** Replace the `currentBranch()` stub in `execute.go` which returns `"HEAD"`.
+
+**Signature:**
+
+```go
+// ResolveBaseBranch returns the current branch name (e.g., "main"), or an
+// error if the repo is in a detached HEAD state or git is unavailable.
+func (wm *WorktreeManager) ResolveBaseBranch() (string, error)
+```
+
+**Implementation:** `git -C <repoRoot> rev-parse --abbrev-ref HEAD`. Reject `"HEAD"` (detached) with a typed error.
+
+**Usage:** `PreflightExecution` resolves once and stores the value in `ExecutionContext.BaseBranch`. `ExecutePlan` receives the context and threads that base branch into `Create` and `Merge`. Remove the package-private `currentBranch()` helper.
+
+### 1b. `WorktreeManager.Create` run namespace
+
+**Why:** Branches named only from task ids (`worker/t1`) collide across runs.
+
+**Signature change:**
+
+```go
+func (wm *WorktreeManager) Create(runID, taskID, baseBranch string) (*Worktree, error)
+```
+
+Branch/path format:
+
+- branch: `worker/<runID>/<slug(taskID)>`
+- path: `.worktrees/worker-<runID>-<slug(taskID)>`
+
+`runID` should be short, filesystem-safe, and generated once in `ExecutionContext` (for example timestamp + random suffix).
+
+### 2. `WorktreeManager.Merge` change
+
+**Why:** Today `Merge` runs `git merge --no-ff <branch>` against whatever branch is currently checked out in `repoRoot`. We need it to check out the captured base branch first.
+
+**Behavior change:**
+
+1. `git -C repoRoot rev-parse --abbrev-ref HEAD` — capture current
+2. If current != baseBranch, `git -C repoRoot checkout <baseBranch>` (error if dirty working tree)
+3. `git -C repoRoot merge --no-ff <wt.Branch> -m "..."`
+4. Leave the working tree on baseBranch
+
+**No new struct fields needed.**
+
+**Important:** merges are serialized by `ExecutePlan` after each wave completes validation. `Merge` itself can stay a small git operation helper; orchestration owns sequencing.
+
+### 3. `Orchestrator.ExecutePlan` — wave-aware retry loop
+
+**Location:** `internal/orchestrator/execute.go`
+
+**Why:** Move validation **inside** `ExecutePlan` so retry can reuse the worktree. Today `Validate` runs after `ExecutePlan` returns, by which point the worktree is already cleaned up.
+
+**Signature change:** add a validator callback so the orchestrator package stays unaware of Telegram concerns.
+
+```go
+type Validator func(ctx context.Context, task Task, result TaskResult, artifacts ArtifactSnapshot, attempt int) (*ValidationResult, error)
+type ArtifactCollector func(ctx context.Context, worktreePath string, task Task) (*ArtifactSnapshot, error)
+
+func (o *Orchestrator) ExecutePlan(
+    ctx context.Context,
+    exec ExecutionContext,
+    plan *Plan,
+    registry *agents.Registry,
+    systemPromptBuilder func(task Task, cfg WorkerConfig) string,
+    validate Validator,                // new
+    onEvent func(WorkerEvent),
+) (*ExecutionManifest, []TaskResult, error)
+```
+
+**Wave model:**
+
+1. Before each wave, remove tasks whose dependencies are not `TaskApproved`; emit skipped results without bridge calls.
+2. Execute ready tasks in parallel up to `MaxConcurrentWorkers`. Each task owns one worktree for all attempts.
+3. For each task, run attempt → collect artifacts → validate → optional retry.
+4. After all tasks in the wave finish validation, merge approved worktrees serially in sorted task-id order.
+5. If a merge conflict occurs, stop the run and keep the conflicted worktree/branch.
+
+**Per-task attempt loop (inside the goroutine):**
+
+```
+attempt = 1
+for attempt <= MaxValidationRetries:
+    result = ExecuteTask(ctx, t, cfg, cwd, prompt, onEvent)
+    if !result.Success:
+        break  # bridge error, no point validating
+    artifacts = CollectArtifacts(ctx, cwd, t)
+    vr, err = validate(ctx, t, result, artifacts, attempt)
+    if err != nil:
+        result.Status = TaskUnverified
+        result.Error = "validation unavailable: " + err.Error()
+        break
+    if vr.Approved:
+        result.Status = TaskApproved
+        break
+    if !vr.ShouldRetry or attempt == MaxValidationRetries:
+        result.Status = TaskEscalated
+        result.Error = "validation failed after attempts: " + strings.Join(vr.Issues, "; ")
+        onEvent(WorkerEvent{TaskID, Type: "escalated", Message: result.Error})
+        break
+    # build retry: append feedback to user prompt
+    t = t with Prompt = t.Prompt + "\n\nPrevious attempt issues:\n- " + join(vr.Issues)
+    attempt++
+# do not merge in this goroutine
+```
+
+**New fields on `TaskResult`:** `Status TaskStatus`, `Approved bool` (compat helper), `Attempts int`, `Skipped bool`, `ChangedFiles []string`, `Verify *VerifyResult`.
+
+**Config:** add `MaxValidationRetries int` (default 3) to `OrchestratorConfig`.
+
+### 4. `Plan` schema — `feature` and `create_pr`
+
+**Location:** `internal/orchestrator/plan.go`
+
+```go
 type Plan struct {
-    Tasks []Task `json:"tasks"`
+    Feature   string `json:"feature,omitempty"`    // e.g., "agent-orchestration-execution"
+    CreatePR  bool   `json:"create_pr,omitempty"`  // true when user asked to open a PR
+    Verify    string `json:"verify,omitempty"`     // optional default verify command
+    Tasks     []Task `json:"tasks"`
+}
+```
+
+**Why:** Removes the brittle "last alphabetical match" heuristic and gives the user explicit control over whether to open a PR.
+
+**Prompt update:** `BuildExecutionPrompt` and `BuildOrchestratorPrompt` mention the new fields in the JSON schema description. `verify` is optional and should be a concrete project-local command like `go test ./internal/orchestrator/...`, not a vague instruction.
+
+### 5. `BuildWorkerPrompt` — strip task body
+
+**Location:** `internal/orchestrator/prompt.go`
+
+**Change:** Stop embedding `task.Prompt` and the sibling `Prompt` fields. Embed only:
+
+- agent base prompt
+- CLAUDE.md / AGENTS.md
+- spec / design
+- a single-line summary per sibling: `- <TaskID>: <Description>`
+
+The full `task.Prompt` reaches the worker as the user prompt (request `Prompt` field). Add a test that asserts the rendered system prompt does **not** contain `task.Prompt` text.
+
+### 6. Post-execution delivery in `executeApprovedPlan`
+
+**Location:** `internal/telegram/orchestration.go`
+
+After `Consolidate` succeeds:
+
+```go
+anyApproved := false
+for _, r := range results {
+    if r.Approved {
+        anyApproved = true
+        break
+    }
 }
 
-// Task é uma subtask atômica do plano.
-type Task struct {
-    ID            string   `json:"id"`             // "1", "2", "3"
-    Description   string   `json:"description"`    // "Implementar endpoint GET /health"
-    Agent         string   `json:"agent"`           // "worker", "qa", "code-reviewer" — qual agent usar
-    Prompt        string   `json:"prompt"`          // Prompt completo pro agent
-    DependsOn     []string `json:"depends_on"`      // ["1"] — task 2 depende da 1
-    NeedsWorktree bool     `json:"needs_worktree"`  // true pra implementação, false pra review
+if anyApproved {
+    tasksPath := filepath.Join(repoRoot, ".specs", "features", plan.Feature, "tasks.md")
+    if err := orchestrator.UpdateTasksStatus(tasksPath, results); err != nil {
+        log.Printf("UpdateTasksStatus: %v", err)
+    }
+
+    commitMsg := deriveCommitMessage(plan, results) // feat(scope): summary
+    files := approvedChangedFiles(manifest)
+    if err := orchestrator.CommitChanges(repoRoot, files, commitMsg); err != nil {
+        if !errors.Is(err, orchestrator.ErrNothingToCommit) {
+            postError(bc.bot, chat, "Commit failed: "+err.Error())
+            return
+        }
+        log.Printf("nothing staged to commit")
+    }
+
+    if plan.CreatePR {
+        if !orchestrator.IsGHAvailable() {
+            _ = SendTextReply(bc.bot, chat, "Commit landed locally. Install/auth `gh` to publish a PR.")
+        } else {
+            url, err := orchestrator.CreatePR(repoRoot, prTitle(plan), prBody(plan, results), baseBranch)
+            if err != nil {
+                postError(bc.bot, chat, "PR creation failed: "+err.Error())
+            } else {
+                _ = SendTextReply(bc.bot, chat, "PR: "+url)
+            }
+        }
+    }
+}
+```
+
+**Git API change:** `CommitChanges(repoRoot string, files []string, message string) error` stages only the approved file list. It returns `ErrNothingToCommit` when that list is empty or when the staged diff is empty. No `git add -A` in orchestration.
+
+**Helpers (`internal/telegram/orchestration.go`):**
+
+- `deriveCommitMessage(plan, results) string` — `feat(<plan.Feature>): <first task description>` truncated to 72 chars
+- `prTitle(plan) string`
+- `prBody(plan, manifest, results) string` — markdown listing approved/skipped/unverified tasks, verify summaries, and changed files
+- `approvedChangedFiles(manifest) []string`
+
+### 7. Orphan cleanup on startup
+
+**Location:** `internal/orchestrator/orchestrator.go`
+
+```go
+func NewOrchestrator(b BridgeExecutor, cfg OrchestratorConfig) *Orchestrator {
+    // ... existing setup ...
+    if wm != nil {
+        if n, err := wm.CleanupAll(); err != nil {
+            log.Printf("orphan worktree cleanup: %v", err)
+        } else if n > 0 {
+            log.Printf("cleaned %d orphan worktree(s)", n)
+        }
+    }
+    return o
+}
+```
+
+**Signature change:** `CleanupAll` returns `(int, error)` instead of `error`. Update callers (none in production besides startup).
+
+### 8. Feature artifact resolution
+
+**Location:** `internal/telegram/orchestration.go`
+
+Replace `findFeatureDoc`:
+
+```go
+func (bc *BotController) loadFeatureDocs(repoRoot, feature string) (spec, design string) {
+    if feature == "" {
+        log.Printf("plan has no feature field — proceeding without spec/design context")
+        return "", ""
+    }
+    base := filepath.Join(repoRoot, ".specs", "features", feature)
+    if _, err := os.Stat(base); err != nil {
+        log.Printf("feature dir %q not found: %v", feature, err)
+        return "", ""
+    }
+    return orchestrator.ReadFileContent(filepath.Join(base, "spec.md")),
+           orchestrator.ReadFileContent(filepath.Join(base, "design.md"))
+}
+```
+
+`executeApprovedPlan` calls `loadFeatureDocs(repoRoot, plan.Feature)`.
+
+### 9. Artifact collection and verify execution
+
+**Location:** `internal/orchestrator/artifacts.go` (new)
+
+```go
+type ArtifactSnapshot struct {
+    ChangedFiles []string
+    Status       string
+    DiffStat     string
+    Diff         string
+    Verify       *VerifyResult
 }
 
-// TaskResult é o resultado de um worker.
-type TaskResult struct {
-    TaskID     string
-    Content    string  // texto retornado pelo worker
-    Success    bool
+type VerifyResult struct {
+    Command    string
+    ExitCode   int
+    Stdout     string
+    Stderr     string
     DurationMs int64
-    CostUSD    float64
-    Error      string  // se falhou
+    TimedOut   bool
 }
 
-// WorkerEvent é emitido durante a execução pro feedback visual.
-type WorkerEvent struct {
-    TaskID    string
-    Type      string // "start", "progress", "done", "error"
-    ToolName  string // qual tool tá usando (progress)
-    Message   string // descrição do progresso
-}
+func (o *Orchestrator) CollectArtifacts(ctx context.Context, cwd string, task Task, plan *Plan) (*ArtifactSnapshot, error)
 ```
 
-**Resolução de dependências:**
-```go
-// ExecutionOrder retorna tasks agrupadas por wave (paralelas dentro da wave).
-func (p *Plan) ExecutionOrder() [][]Task {
-    // Wave 1: tasks sem dependências (paralelas)
-    // Wave 2: tasks que dependem da wave 1 (paralelas entre si)
-    // Wave N: ...
-}
-```
+Commands:
 
----
+- `git -C <cwd> status --porcelain`
+- `git -C <cwd> diff --stat`
+- `git -C <cwd> diff -- .`
+- verify command = `task.Verify`, else `plan.Verify`, else empty
 
-### Worktree Manager
+Diff content should be truncated for prompt safety (for example 64KB with a note), but changed file names and diffstat should be complete when practical.
 
-- **Purpose**: Gerencia git worktrees — criar, limpar, fazer merge
-- **Location**: `internal/orchestrator/worktree.go`
+### 10. Validation prompt upgrade
 
-```go
-type WorktreeManager struct {
-    repoRoot string // raiz do repositório
-}
+`buildValidationUserPrompt` now includes:
 
-type Worktree struct {
-    Path   string // caminho absoluto do worktree
-    Branch string // nome do branch (ex: "worker/task-1-implement-health")
-}
+- task id, description, prompt
+- worker final response
+- changed files
+- git status
+- diffstat
+- truncated diff
+- verify command output and exit code
 
-// Create cria um worktree com branch isolado.
-func (wm *WorktreeManager) Create(taskID string, baseBranch string) (*Worktree, error)
-
-// Merge faz merge do branch do worktree de volta pro branch base.
-func (wm *WorktreeManager) Merge(wt *Worktree, baseBranch string) error
-
-// Cleanup remove o worktree e o branch temporário.
-func (wm *WorktreeManager) Cleanup(wt *Worktree) error
-
-// CleanupAll remove todos os worktrees temporários (recovery).
-func (wm *WorktreeManager) CleanupAll() error
-```
-
-**Implementação interna:**
-- `Create`: `git worktree add <path> -b <branch>` baseado no branch ativo
-- `Merge`: `git merge --no-ff <branch>` no repo principal
-- `Cleanup`: `git worktree remove <path>` + `git branch -d <branch>`
-- Path pattern: `<repoRoot>/.worktrees/worker-<taskID>/`
-- Branch pattern: `worker/<taskID>-<slug>`
-
-- **Dependencies**: Git CLI via `os/exec`
-- **Reuses**: Nenhum — componente novo
-
----
-
-### Worker Status Reporter
-
-- **Purpose**: Gerencia mensagens de status por worker no Telegram
-- **Location**: `internal/telegram/worker_status.go`
-
-```go
-type workerStatusReporter struct {
-    bot      *telebot.Bot
-    chat     *telebot.Chat
-    messages map[string]*telebot.Message // taskID → mensagem de status
-    mu       sync.Mutex
-}
-
-// SendStart envia mensagem de status inicial.
-func (r *workerStatusReporter) SendStart(taskID string, description string) error
-
-// UpdateProgress edita mensagem com progresso.
-func (r *workerStatusReporter) UpdateProgress(taskID string, toolName string) error
-
-// MarkDone edita mensagem pra conclusão.
-func (r *workerStatusReporter) MarkDone(taskID string, durationMs int64) error
-
-// MarkError edita mensagem pra erro.
-func (r *workerStatusReporter) MarkError(taskID string, errMsg string) error
-
-// Cleanup remove mensagens de status (opcional, pra não poluir o chat).
-func (r *workerStatusReporter) Cleanup()
-```
-
-**Formato das mensagens:**
-- Start: `"⚙️ **Worker 1** — Implementando endpoint /health..."`
-- Progress: `"⚙️ **Worker 1** — Editando internal/api/health.go..."`
-- Done: `"✅ **Worker 1** — Concluído (12s)"`
-- Error: `"❌ **Worker 1** — Falhou: timeout"`
-
-- **Dependencies**: `telebot.Bot`
-- **Reuses**: Padrão do `progressReporter` — `bot.Send()` pra criar, `bot.Edit()` pra atualizar
-
----
-
-### Quality Gate (Validação)
-
-- **Purpose**: Aurelia valida resultado de cada worker antes de aceitar merge
-- **Location**: `internal/orchestrator/validate.go`
-
-```go
-type ValidationResult struct {
-    Approved    bool     // true = pode fazer merge
-    Issues      []string // problemas encontrados
-    ShouldRetry bool     // true = spawnar worker de correção
-}
-
-// Validate chama Aurelia pra validar o resultado de um worker contra os critérios da task.
-func (o *Orchestrator) Validate(ctx context.Context, task Task, result TaskResult, specContent string, designContent string) (*ValidationResult, error)
-```
-
-**O que Aurelia valida:**
-- Critérios "Done When" da task foram atendidos?
-- Testes passam? (pede pro worker rodar antes de retornar)
-- Sem scope creep (tocou só os arquivos listados)?
-- Sem overengineering?
-- Segue padrões do CLAUDE.md?
-
-**Fluxo:**
-1. Worker retorna resultado
-2. Go chama `Validate()` → Aurelia recebe resultado + task + spec + design
-3. Se aprovado → merge worktree
-4. Se reprovado com retry → spawna novo worker com feedback
-5. Se reprovado 3x → escala pro usuário no Telegram
-
-- **Dependencies**: `BridgeExecutor` (pra chamar Aurelia)
-- **Reuses**: Padrão de `ExecuteSync()` pra chamadas blocking
-
----
-
-### AGENTS.md Generator
-
-- **Purpose**: Gerar/manter AGENTS.md na raiz do projeto com config do squad
-- **Location**: `internal/orchestrator/agents_md.go`
-
-```go
-// EnsureAgentsMd verifica se AGENTS.md existe; se não, cria com config do squad.
-func EnsureAgentsMd(repoRoot string, agents []AgentSummary) error
-
-// EnsureClaudeMd verifica se CLAUDE.md existe; se não, cria com convenções básicas.
-// Se já existe, não sobrescreve.
-func EnsureClaudeMd(repoRoot string) error
-```
-
-**AGENTS.md template:**
-```markdown
-# AGENTS.md
-
-## Squad
-
-| Agent | Descrição | Tools | Modelo |
-|-------|-----------|-------|--------|
-| worker (default) | Generic worker | Read, Write, Edit, Bash, Grep, Glob | sonnet |
-| qa | Test specialist | Read, Write, Edit, Bash, Grep, Glob | sonnet |
-| ... | ... | ... | ... |
-
-## Workflow
-
-1. Planning: Aurelia especifica, desenha e cria tasks com o usuário
-2. Execution: Workers executam tasks atômicas em worktrees isolados
-3. Validation: Aurelia valida resultados antes de aceitar
-4. Delivery: Merge, commit, PR
-
-## Conventions
-
-- Workers recebem: CLAUDE.md + AGENTS.md + spec.md + design.md + task
-- Worktrees: `.worktrees/worker-<taskID>/`
-- Branches: `worker/<taskID>-<slug>`
-- Commits: Conventional Commits
-```
-
-- **Dependencies**: File system
-- **Reuses**: Nenhum — geração simples de markdown
-
----
-
-### Orchestrator Prompt Builder
-
-- **Purpose**: Monta o system prompt da Aurelia em modo orquestradora
-- **Location**: `internal/orchestrator/prompt.go`
-
-```go
-// BuildOrchestratorPrompt monta o system prompt da Aurelia.
-// Inclui: metodologia TLC (Specify → Design → Tasks → Implement → Validate),
-// instruções de Planning Mode (discutir, questionar, criar .specs/),
-// instruções de Execution Mode (gerar plano JSON quando tasks aprovadas),
-// regras anti-overengineering, e lista de agents disponíveis.
-func BuildOrchestratorPrompt(persona string, projectContext string, availableAgents []AgentSummary) string
-
-// AgentSummary é a descrição de um agent disponível pro planejamento.
-type AgentSummary struct {
-    Name        string   // "qa", "code-reviewer", "backend-architect"
-    Description string   // "Writes and runs tests"
-    Tools       []string // ["Read", "Write", "Edit", "Bash"]
-    ReadOnly    bool     // true se só tem tools de leitura
-}
-
-// BuildExecutionPrompt monta o prompt pra gerar o plano de execução JSON.
-// Inclui: tasks.md aprovado, agents disponíveis, JSON schema do Plan.
-func BuildExecutionPrompt(tasksContent string, availableAgents []AgentSummary) string
-
-// BuildValidationPrompt monta o prompt pra Aurelia validar resultado de um worker.
-// Inclui: task original (com "Done When"), resultado do worker, spec.md e design.md.
-func BuildValidationPrompt(task Task, workerResult TaskResult, specContent string, designContent string) string
-
-// BuildConsolidationPrompt monta o prompt pra sintetizar resultados finais.
-func BuildConsolidationPrompt(persona string, plan *Plan, results []TaskResult) string
-
-// BuildWorkerPrompt monta o system prompt de um worker.
-// Inclui: agent system prompt + CLAUDE.md + AGENTS.md + spec.md + design.md + task + siblings.
-func BuildWorkerPrompt(agentPrompt string, claudeMd string, agentsMd string, specContent string, designContent string, task Task, siblings []Task) string
-```
-
-- **Dependencies**: `persona.BuildPrompt()`
-- **Reuses**: Padrão de prompt assembly de `input_pipeline.go`
-
----
-
-### Integration: Input Pipeline
-
-- **Purpose**: Conectar o orchestrator ao fluxo existente do Telegram
-- **Location**: `internal/telegram/input_pipeline.go` (modificação)
-
-```go
-// Mudança no processInput():
-// Planning Mode: fluxo conversacional existente (executeAsync).
-// Execution Mode: ativado quando Aurelia detecta aprovação do usuário.
-//
-// A Aurelia roda no mesmo fluxo de sempre (sessão conversacional com resume).
-// Quando detecta aprovação, o Go intercepta e entra em Execution Mode.
-
-func (bc *BotController) processInput(c telebot.Context, text string) error {
-    // ... bootstrap, command layer (existente) ...
-
-    // Planning Mode: Aurelia conversa normalmente (fluxo existente).
-    // A resposta da Aurelia pode incluir um marcador de "plano aprovado"
-    // que o Go detecta pra entrar em Execution Mode.
-    go bc.executeAsync(chatID, messageID, req, text)
-    return nil
-}
-
-// processBridgeEventsAsync (modificação):
-// Após receber resultado do bridge, checa se contém plano de execução.
-// Se sim, entra em Execution Mode automaticamente.
-func (bc *BotController) processBridgeEventsAsync(...) bridgeOutcome {
-    // ... processa eventos normalmente (existente) ...
-
-    case "result":
-        // NOVO: Checa se o resultado contém um plano de execução
-        if plan := bc.orchestrator.ExtractPlan(ev.Content); plan != nil {
-            // Transição pra Execution Mode
-            go bc.executeApprovedPlan(chat, messageID, plan)
-            return outcomeSuccess
-        }
-        // Senão, envia resposta normal (existente)
-        SendTextReply(bc.bot, chat, finalText, messageID)
-}
-
-// executeApprovedPlan executa um plano aprovado pelo usuário.
-// Segue o ciclo TLC: Implement → Validate → Merge/Retry → Consolidate.
-func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, plan *Plan) {
-    ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-    defer cancel()
-
-    // 0. Garantir CLAUDE.md e AGENTS.md existem
-    orchestrator.EnsureClaudeMd(repoRoot)
-    orchestrator.EnsureAgentsMd(repoRoot, availableAgents)
-
-    // 1. Informar plano no Telegram
-    bc.sendPlanSummary(chat, plan, messageID)
-
-    // 2. Executar workers por fase (respeitando dependências)
-    status := newWorkerStatusReporter(bc.bot, chat)
-    for _, wave := range plan.ExecutionOrder() {
-        var wg sync.WaitGroup
-        for _, task := range wave {
-            wg.Add(1)
-            go func(t Task) {
-                defer wg.Done()
-
-                // Resolve agent config (especialista → worker.md → default)
-                agentCfg := orchestrator.ResolveAgentConfig(bc.agents, t.Agent)
-
-                // Cria worktree se necessário
-                var wt *Worktree
-                if t.NeedsWorktree {
-                    wt, _ = bc.worktree.Create(t.ID, currentBranch)
-                }
-                cwd := repoRoot
-                if wt != nil {
-                    cwd = wt.Path
-                }
-
-                // Monta prompt do worker com contexto completo
-                workerPrompt := BuildWorkerPrompt(agentCfg.Prompt, claudeMd, agentsMd, specContent, designContent, t, wave)
-
-                // Spawna worker
-                status.SendStart(t.ID, t.Description)
-                result := bc.orchestrator.ExecuteTask(ctx, t, agentCfg, cwd, workerPrompt, func(ev WorkerEvent) {
-                    status.UpdateProgress(ev.TaskID, ev.ToolName)
-                })
-
-                // 3. Quality Gate — Aurelia valida
-                validation, _ := bc.orchestrator.Validate(ctx, t, result, specContent, designContent)
-
-                if validation.Approved {
-                    status.MarkDone(t.ID, result.DurationMs)
-                    if wt != nil {
-                        bc.worktree.Merge(wt, currentBranch)
-                    }
-                } else if validation.ShouldRetry {
-                    // Retry com feedback (max 3x, senão escala pro usuário)
-                    status.MarkError(t.ID, "Correções necessárias, retentando...")
-                    // ... retry loop ...
-                } else {
-                    status.MarkError(t.ID, strings.Join(validation.Issues, "; "))
-                }
-
-                // Cleanup worktree
-                if wt != nil {
-                    bc.worktree.Cleanup(wt)
-                }
-            }(task)
-        }
-        wg.Wait() // Espera wave completar antes da próxima
-    }
-
-    // 4. Atualizar tasks.md com status
-    bc.orchestrator.UpdateTasksStatus(plan, results)
-
-    // 5. Consolidar e responder
-    finalResponse, _ := bc.orchestrator.Consolidate(ctx, plan, results, systemPrompt)
-    SendTextReply(bc.bot, chat, finalResponse, messageID)
-
-    // 6. Commit + PR se aplicável
-    // ... git commit, gh pr create ...
-}
-```
-
-- **Reuses**: `processInput()` existente como fallback quando não há agents
-
----
-
-### Worker Default (Hardcoded) + Override via `.md`
-
-- **Purpose**: Worker genérico embutido no código. Orquestração é capacidade core, não opt-in.
-- **Location**: `internal/orchestrator/defaults.go`
-
-```go
-// DefaultWorkerConfig é o worker embutido. Funciona sem nenhum .md.
-var DefaultWorkerConfig = WorkerConfig{
-    Model:    "sonnet",
-    MaxTurns: 25,
-    Tools:    []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
-    Prompt: `You are an implementation worker in a software development squad.
-
-You receive atomic tasks from the orchestrator and execute them thoroughly.
-
-Rules:
-- Focus exclusively on the assigned task
-- Do not make changes outside the scope of your task
-- Use conventional commits if asked to commit
-- Report completion clearly with a summary of what was done
-- If blocked, explain what's blocking and what you tried`,
-}
-
-// ResolveAgentConfig retorna o config do agent pra uma task.
-// 1. Se task.Agent existe no registry → usa o .md dele
-// 2. Se task.Agent == "worker" ou não existe → usa default hardcoded
-// 3. Se worker.md existir → sobrescreve o default
-func ResolveAgentConfig(registry *agents.Registry, agentName string) WorkerConfig {
-    // Agent especialista existe?
-    if agentName != "" && agentName != "worker" {
-        if a := registry.Get(agentName); a != nil {
-            return agentToWorkerConfig(a)
-        }
-    }
-    // Fallback: worker default, com override se worker.md existir
-    if w := registry.Get("worker"); w != nil {
-        return mergeWorkerConfig(DefaultWorkerConfig, w)
-    }
-    return DefaultWorkerConfig
-}
-```
-
-**Customização opcional via `~/.aurelia/agents/worker.md`:**
-```yaml
----
-name: worker
-description: Custom worker override
-model: opus
-max_turns: 40
-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Grep
-  - Glob
-  - WebSearch
----
-Custom worker instructions here...
-```
-
-- **Reuses**: Formato `.md` do agent registry pra override opcional
+Validation bridge failure is not approval. It returns an error to `ExecutePlan`, and the task becomes `TaskUnverified`.
 
 ---
 
 ## Data Models
 
-### Agent Struct (atualizado)
+### `Plan` (changed)
 
 ```go
-// internal/agents/types.go — campos novos
-type Agent struct {
-    Name           string         `yaml:"name"`
-    Description    string         `yaml:"description"`
-    Model          string         `yaml:"model,omitempty"`
-    Schedule       string         `yaml:"schedule,omitempty"`
-    Cwd            string         `yaml:"cwd,omitempty"`
-    MCPServers     map[string]any `yaml:"mcp_servers,omitempty"`
-    AllowedTools   []string       `yaml:"allowed_tools,omitempty"`
-    DisallowedTools []string      `yaml:"disallowed_tools,omitempty"` // NOVO
-    MaxTurns       int            `yaml:"max_turns,omitempty"`        // NOVO
-    Prompt         string         `yaml:"-"`
+type Plan struct {
+    Feature  string `json:"feature,omitempty"`
+    CreatePR bool   `json:"create_pr,omitempty"`
+    Verify   string `json:"verify,omitempty"`
+    Tasks    []Task `json:"tasks"`
 }
 ```
 
-### BuildSDKAgents (atualizado)
+### `Task` (unchanged)
 
 ```go
-// internal/agents/sdk.go — campos novos
-func BuildSDKAgents(r *Registry) map[string]any {
-    for _, a := range all {
-        def := map[string]any{
-            "description": a.Description,
-            "prompt":      a.Prompt,
-        }
-        if a.Model != "" {
-            def["model"] = a.Model
-        }
-        if len(a.AllowedTools) > 0 {
-            def["tools"] = a.AllowedTools
-        }
-        if len(a.DisallowedTools) > 0 {
-            def["disallowedTools"] = a.DisallowedTools  // NOVO
-        }
-        if a.MaxTurns > 0 {
-            def["maxTurns"] = a.MaxTurns  // NOVO
-        }
-        result[a.Name] = def
-    }
-    return result
+type Task struct {
+    ID            string   `json:"id"`
+    Description   string   `json:"description"`
+    Agent         string   `json:"agent"`
+    Prompt        string   `json:"prompt"`
+    DependsOn     []string `json:"depends_on"`
+    NeedsWorktree bool     `json:"needs_worktree"`
+    Verify        string   `json:"verify,omitempty"`
 }
 ```
+
+### `TaskResult` (changed — new fields)
+
+```go
+type TaskResult struct {
+    TaskID     string
+    Content    string
+    Success    bool       // bridge call succeeded (compat)
+    Status     TaskStatus // approved, failed, skipped, unverified, escalated
+    Approved   bool       // validation passed (new, derived from Status)
+    Skipped    bool       // dependency/merge/preflight skip
+    Attempts   int        // number of execution attempts (new)
+    ChangedFiles []string
+    Verify     *VerifyResult
+    DurationMs int64
+    CostUSD    float64
+    Error      string
+}
+```
+
+### `OrchestratorConfig` (changed — new field)
+
+```go
+type OrchestratorConfig struct {
+    MaxConcurrentWorkers   int
+    DefaultMaxTurns        int
+    MaxValidationRetries   int    // new (default 3)
+    RepoRoot               string
+    VerifyTimeout          time.Duration // default 2m
+}
+```
+
+### `Validator` callback (new type)
+
+```go
+type Validator func(ctx context.Context, task Task, result TaskResult, artifacts ArtifactSnapshot, attempt int) (*ValidationResult, error)
+```
+
+The Telegram layer constructs this closure over `bc.orchestrator.Validate` so `orchestrator` doesn't need to know about Telegram.
 
 ---
 
 ## Error Handling Strategy
 
-| Cenário | Tratamento | Impacto no usuário |
-|---------|------------|-------------------|
-| Aurelia retorna JSON malformado na fase 1 | Retry 1x com prompt reforçado, depois fallback pra fluxo direto (sem orquestração) | "Não consegui decompor, vou tentar direto" |
-| Worker falha (erro/timeout) | Marca task como falha, continua com outros workers, reporta falha parcial | "Worker 2 falhou: timeout. Workers 1 e 3 completaram." |
-| Bridge morre durante workers | Recovery existente + cleanup de worktrees | "Reconectando..." (fluxo existente) |
-| Merge de worktree com conflito | Tenta `git merge --no-ff`, se falhar informa e mantém branches | "Conflito no merge de worker-1. Branch mantido: worker/task-1-..." |
-| Git worktree creation falha | Fallback: executa no diretório principal (sem isolamento) | Worker roda sem worktree, risco de conflito |
-| Todas as tasks falham | Reporta erro geral | "Nenhum worker completou com sucesso. Erros: ..." |
-| Rate limit do Telegram em status updates | Logar, continuar sem atualizar status | Status fica desatualizado mas execução continua |
+| Scenario | Handling | User-facing |
+|---|---|---|
+| Empty chat cwd | Abort before preflight | "Set `/cwd <path>` before executing a plan." |
+| Dirty base repo before workers | Abort before spawning any worker | "Working tree has local changes: foo.go, bar.md..." |
+| Detached HEAD on plan dispatch | Abort before spawning any worker | "Cannot run a plan from a detached HEAD — checkout a branch first." |
+| `rev-parse` fails (no git) | Abort | "This directory isn't a git repo." |
+| Dirty working tree at merge | Abort the merge for that task, leave worktree | "Working tree dirty on `main` — merge of `worker/T1` aborted." |
+| Validation rejected 3× | Mark task escalated, skip dependents | "T1: needs human review (3 validation attempts). Issues: …" |
+| Validation bridge fails | Mark task unverified, do not merge | "T1: validation unavailable; kept for review." |
+| Verify command fails | Feed output into validator; likely retry/escalate | "T1: verify failed: go test ..." |
+| Dependency failed/unverified | Mark dependent skipped before bridge call | "T2 skipped because T1 did not ship." |
+| `git merge` conflict | Stop the run, keep the worktree and branch | "Merge conflict on `worker/T1`. Branch kept for manual resolution." |
+| No staged changes after merge | Skip commit silently | (consolidation continues) |
+| `gh` not installed but `create_pr=true` | Commit, skip PR, post friendly note | "Commit landed locally. Install/auth `gh` to publish a PR." |
+| Bridge error during worker | Existing `pi-resilience` retry; if it fails the task ends with Success=false | "Worker T1 failed: timeout. Other workers completed." |
+| Orphan worktrees on startup | Logged, removed best-effort | (silent) |
 
 ---
 
 ## Tech Decisions
 
-| Decisão | Escolha | Justificativa |
-|---------|---------|---------------|
-| Onde colocar o orchestrator | Novo pacote `internal/orchestrator/` | Responsabilidade distinta do telegram handler, testável isoladamente |
-| Como Aurelia retorna o plano | JSON via structured output (schema no prompt) | SDK não suporta `outputFormat` no `query()` facilmente; JSON no prompt é pragmático e testável |
-| Worktree path | `.worktrees/worker-<taskID>/` dentro do repo | Fácil de limpar, não polui o projeto, git ignora automaticamente |
-| Comunicação workers→Go | Event channel existente do bridge | Já funciona, já multiplexado, sem overhead novo |
-| Execução paralela vs sequencial | Parallel por wave (respeitando dependências) | Bridge já suporta requests concorrentes; max 3 paralelos pra não sobrecarregar |
-| Quando usar orquestração | Sempre — Aurelia decide se decompõe ou responde direto | Capacidade core, não opt-in. Worker default hardcoded, `worker.md` sobrescreve se existir |
-| Como detectar plano aprovado | Marcador `aurelia-plan` em code block na resposta da Aurelia | Aurelia emite plano JSON dentro de ` ```aurelia-plan ` quando usuário aprova. Go detecta via `ExtractPlan()`, filtra o bloco antes de enviar pro Telegram |
-| Planning vs Execution Mode | Mesma sessão bridge, transição por marcador | Planning usa fluxo conversacional existente (session resume). Execution é ativado quando Go detecta o marcador no resultado |
-| Modelo da Aurelia orquestradora | Mesmo modelo do config global (default: sonnet) | Planejamento não precisa de opus; se precisar, configura via app.json |
-| Worker stateless | Sem session resume entre tasks | Cada task é independente — simplifica, evita session leaking |
-| Metodologia TLC integrada | Aurelia segue Specify → Design → Tasks → Implement → Validate | Mesmo workflow que o skill TLC, mas dentro da Aurelia como comportamento nativo |
-| Artefatos como contexto | Workers recebem CLAUDE.md + AGENTS.md + spec + design + task | Contexto estruturado evita workers "perdidos" — sabem o que fazer e por quê |
-| Quality gate obrigatório | Aurelia valida cada worker antes de merge | Evita merge cego. Retry automático até 3x, depois escala pro usuário |
-| CLAUDE.md preservado | Se existe, não sobrescreve | Projetos existentes mantêm suas convenções. Aurelia só cria se não existir |
+| Decision | Choice | Rationale |
+|---|---|---|
+| Where validation lives in the loop | Inside `ExecutePlan`, per task, before merge | Lets retry reuse the worktree; today validation runs after worktree cleanup |
+| How to pass validator to orchestrator | Callback (`Validator` type) injected by Telegram layer | Keeps the orchestrator package free of Telegram dependencies |
+| What validation sees | Worker response + git status + diff/stat + changed files + verify output | A quality gate must review artifacts, not only worker prose |
+| Validation infrastructure failure | `TaskUnverified`, not approved | Autonomous commit must fail closed |
+| Wave merge strategy | Execute/validate in parallel, merge serially by task id | Preserves parallelism without racing one repo root |
+| Dependency failure behavior | Skip dependents | A dependent task cannot safely run if prerequisites did not ship |
+| Retry feedback delivery | Append to user prompt, not system prompt | System prompt stays cache-friendly; deltas go through user message |
+| Retry cap | Hard-coded default 3, config-overridable | "3" matches the original spec; allows test injection of 1 or 0 |
+| Detached HEAD | Abort with error | Merge target is undefined; safer to refuse than to guess |
+| Identifying the feature | Explicit `feature` field on Plan | Removes the alphabetical-glob hack; keeps Aurelia in control |
+| Repo root source | Effective chat/thread cwd | Daemon cwd is only Aurelia's own repo; user work happens in target projects |
+| PR opt-in | Plan-level `create_pr` bool | User intent surfaces in the planning conversation, not as a separate command |
+| Commit message format | `feat(<feature>): <first task desc>`, 72-char truncation | Conventional Commits is project policy (see CLAUDE.md) |
+| Commit staging | Approved changed files only | Avoids committing unrelated user or daemon changes |
+| Orphan cleanup timing | On Orchestrator construction | Single deterministic moment; no risk of racing live runs |
+| `CleanupAll` return type change | Now returns `(int, error)` | Lets startup log a useful count without re-globbing |
+| BuildWorkerPrompt embedding | Sibling **summaries** only (ID + description) | Avoids cross-task prompt pollution while keeping coordination context |
+| `max_turns` | Blocked until PI bridge supports it | Current protocol explicitly dropped that field; spec should not imply enforcement |
+
+---
+
+## What stays unchanged
+
+- `Plan.ExecutionOrder` topological sort
+- `WorktreeManager.Cleanup` signature
+- Worktree creation remains the isolation mechanism, but `Create` now receives `runID`
+- `ExtractPlan` / `StripPlanBlock` parsing
+- `WorkerStatusReporter` API surface
+- `EnsureClaudeMd` / `EnsureAgentsMd`
+- `pipeline.tryExecutePlan` still detects plan blocks, but the output handoff signature now includes `threadID` and effective `cwd`
+- `bridge.Request` / `bridge.Event` — no protocol changes
+
+---
+
+## Testing Strategy
+
+| Test | Where | Validates |
+|---|---|---|
+| `TestTryExecutePlan_PassesThreadAndCWD` | `pipeline_test.go` | Handoff includes `threadID` and effective cwd |
+| `TestPreflightExecution_RejectsEmptyCWD` | `preflight_test.go` | Empty cwd fails before workers |
+| `TestPreflightExecution_RejectsDirtyBase` | `preflight_test.go` | Dirty repo aborts and reports paths |
+| `TestResolveBaseBranch_DetachedHEAD` | `worktree_test.go` | Detached state returns typed error |
+| `TestResolveBaseBranch_OnFeatureBranch` | `worktree_test.go` | Returns branch name correctly |
+| `TestMerge_ChecksOutBaseBranch` | `worktree_test.go` | Merge happens on the captured branch |
+| `TestExecutePlan_RetriesOnValidationFailure` | `execute_test.go` | Worker called twice when first validation rejects |
+| `TestExecutePlan_EscalatesAfter3Failures` | `execute_test.go` | Worker called 3 times, then marked escalated |
+| `TestExecutePlan_ReusesWorktreeAcrossRetries` | `execute_test.go` | `WorktreeManager.Create` called once across 3 attempts |
+| `TestExecutePlan_MergesWaveSerially` | `execute_test.go` | Same-wave approved worktrees merge in deterministic order |
+| `TestExecutePlan_SkipsDependentsOfFailedTask` | `execute_test.go` | Dependent tasks are not sent to bridge |
+| `TestValidate_ReceivesDiffAndVerifyOutput` | `validate_test.go` | Validator prompt includes artifact snapshot |
+| `TestValidateBridgeFailure_MarksUnverified` | `execute_test.go` | Validation infra errors fail closed |
+| `TestCollectArtifacts_RunsTaskVerify` | `artifacts_test.go` | Verify command output is captured |
+| `TestBuildWorkerPrompt_DoesNotEmbedTaskBody` | `prompt_test.go` | Rendered prompt lacks `task.Prompt` content |
+| `TestExecuteApprovedPlan_CommitsAndUpdatesTasks` | new `orchestration_test.go` (Telegram pkg) | `UpdateTasksStatus` + `CommitChanges` called when any task approved |
+| `TestCommitChanges_StagesOnlyApprovedFiles` | `git_test.go` | Unrelated dirty files remain unstaged |
+| `TestExecuteApprovedPlan_SkipsPRWhenGhMissing` | same | Posts friendly note, no error |
+| `TestNewOrchestrator_CleansOrphanWorktrees` | new `orchestrator_test.go` | Pre-existing `.worktrees/worker-*` removed |
+| `TestLoadFeatureDocs_UsesPlanFeature` | new `orchestration_test.go` | Different `plan.Feature` → different files read |
+
+All tests use the existing fake bridge pattern. No production-shell-out tests required (use `t.TempDir()` git repos).
+
+---
+
+## Rollout
+
+This change set lands as a single PR. There's no flag — the new behavior is straight-up better than the broken paths it replaces, and the test surface gives us the safety net. Once merged, the planning spec can take its companion role and start producing the feature artifacts this design consumes.

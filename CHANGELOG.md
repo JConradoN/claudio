@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.6.9] - 2026-05-17
+
+### Fixed
+- **Security**: path traversal em `downloadTelegramFile` — sanitiza `filename` com `filepath.Base()` antes de `os.TempDir()`.
+- **Crash**: panic não recuperado em `pipeline.processRun` goroutine — adiciona `recover()` com log.
+- **Crash**: panic não recuperado em `orchestrator.ExecutePlan` worker goroutine — adiciona `recover()` que loga task ID e registra resultado falho.
+- **Deadlock**: `cron.WithTx` sem `defer tx.Rollback()` — transação vazava conexão SQLite em panic, deadlockando o scheduler.
+- **Hang**: `bridge.Stop()` esperava `<-done` sem timeout — adiciona 10s timeout antes de forçar kill.
+- **Race**: `memoryCache.get()` validava mtimes fora do lock e retornava conteúdo stale se `invalidate()` deletasse a entrada no meio.
+- **Leak**: erros de `worktree.Merge` e `worktree.Cleanup` eram descartados com `_` — agora logados explicitamente.
+- **Data loss**: `dreamer.run()` zerava o turn counter no fim, perdendo turns que chegaram durante o dream — agora subtrai apenas os turns consumidos via CAS.
+- **Logic**: `tryExecutePlan` retornava `OutcomeSuccess` sem chamar `afterSuccessfulTurn`, pulando dreamer update e memory invalidation.
+- **Reliability**: `cron.scheduler.Start()` morria no primeiro erro do SQLite — agora loga e continua o loop.
+- **Burst**: `computeNextRun` usava `now` (início do poll) em vez de `finishedAt` — jobs longos causavam reexecução imediata.
+- **Resilience**: `agents.Load` abortava todo o registro no primeiro arquivo `.md` malformado — agora loga e pula o arquivo.
+- **Thundering herd**: `getModels` tinha race no cache expiry — múltiplas goroutines batiam no bridge simultaneamente; agora o lock cobre toda a operação.
+- **Silent errors**: `json.Unmarshal` no bridge, `os.Getwd` em `app.go` e `bot.go`, `os.UserHomeDir` em `app.go` — todos agora tratados ou logados.
+- **Timeout**: `cmdCronCreate` usava `context.Background()` sem deadline para SQLite — agora usa 30s timeout.
+- **Cleanup**: `worktree.Cleanup` não tentava deletar o branch se `git worktree remove` falhasse — agora tenta sempre.
+- **Crash**: `onNotify` callbacks em `resilient_bridge.go` sem `recover()` — panic no output layer matava o daemon.
+
 ## [v0.6.8] - 2026-05-16
 
 ### Added

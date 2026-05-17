@@ -112,7 +112,10 @@ func NewBotController(
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
 
-	botCwd, _ := os.Getwd()
+	botCwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get current working directory: %w", err)
+	}
 
 	allowedUsers := make(map[int64]struct{}, len(cfg.TelegramAllowedUserIDs))
 	for _, id := range cfg.TelegramAllowedUserIDs {
@@ -213,22 +216,19 @@ func (s *botChatSender) Send(chatID int64, text string) error {
 // getModels returns cached models or fetches from bridge with 5-minute TTL.
 func (bc *BotController) getModels(ctx context.Context) ([]bridge.ModelInfo, error) {
 	bc.modelCacheMu.Lock()
+	defer bc.modelCacheMu.Unlock()
+
 	if bc.modelCache != nil && time.Now().Before(bc.modelCacheExpiry) {
-		cached := bc.modelCache
-		bc.modelCacheMu.Unlock()
-		return cached, nil
+		return bc.modelCache, nil
 	}
-	bc.modelCacheMu.Unlock()
 
 	models, err := bc.bridge.ListModels(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	bc.modelCacheMu.Lock()
 	bc.modelCache = models
 	bc.modelCacheExpiry = time.Now().Add(5 * time.Minute)
-	bc.modelCacheMu.Unlock()
 	return models, nil
 }
 

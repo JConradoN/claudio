@@ -337,7 +337,7 @@ func isSupportedImageMIME(mimeType string) bool {
 }
 
 func (bc *BotController) downloadTelegramFile(file *telebot.File, filename string) (string, error) {
-	filePath := filepath.Join(os.TempDir(), filename)
+	filePath := filepath.Join(os.TempDir(), filepath.Base(filename))
 	if err := bc.bot.Download(file, filePath); err != nil {
 		return "", err
 	}

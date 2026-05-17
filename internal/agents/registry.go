@@ -47,12 +47,14 @@ func Load(dir string) (*Registry, error) {
 
 		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
-			return nil, fmt.Errorf("reading agent file %s: %w", entry.Name(), err)
+			slog.Warn("skipping agent file due to read error", "file", entry.Name(), "err", err)
+			continue
 		}
 
 		agent, err := parseAgentFile(data)
 		if err != nil {
-			return nil, fmt.Errorf("parsing agent file %s: %w", entry.Name(), err)
+			slog.Warn("skipping agent file due to parse error", "file", entry.Name(), "err", err)
+			continue
 		}
 		if agent == nil {
 			// No valid frontmatter, skip.

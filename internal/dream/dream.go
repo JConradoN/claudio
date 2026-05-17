@@ -120,6 +120,9 @@ func (d *Dreamer) run() {
 	log.Println("[dream] starting memory consolidation...")
 	start := time.Now()
 
+	// Capture turns that triggered this run so we can subtract them later.
+	turnsAtStart := int(d.turns.Load())
+
 	if err := acquireLock(d.memoryDir); err != nil {
 		log.Printf("[dream] skipped: %v", err)
 		return
@@ -153,7 +156,19 @@ func (d *Dreamer) run() {
 		return
 	}
 
-	d.turns.Store(0)
+	// Subtract the turns that were consumed by this run, preserving any
+	// turns that arrived while the dream was in progress.
+	for {
+		current := int(d.turns.Load())
+		newVal := current - turnsAtStart
+		if newVal < 0 {
+			newVal = 0
+		}
+		if int(d.turns.Load()) == current && d.turns.CompareAndSwap(int32(current), int32(newVal)) {
+			break
+		}
+	}
+
 	touchLock(d.memoryDir)
 
 	log.Printf("[dream] completed in %s — cost=$%.4f turns=%d",

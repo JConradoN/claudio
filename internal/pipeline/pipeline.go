@@ -75,7 +75,14 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 	run, admission, active := s.runs.admit(input)
 	switch admission {
 	case admitStart:
-		go s.processRun(input, run)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("pipeline: panic in processRun: %v", r)
+				}
+			}()
+			s.processRun(input, run)
+		}()
 	case admitCancelOnly:
 		_, _ = s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior.")
 		s.output.ConfirmMessage(chatID, messageID)
@@ -485,6 +492,7 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		s.output.ConfirmMessage(chatID, messageID)
+		s.afterSuccessfulTurn(chatID, threadID, userText, finalText)
 		return OutcomeSuccess
 	}
 
