@@ -25,6 +25,7 @@ Before installing, ensure you have:
 
 - **Go** `1.25+` — [go.dev](https://go.dev/)
 - **Node.js** `18+` and **npm** `8+` — [nodejs.org](https://nodejs.org/)
+  - *The PI SDK is installed automatically via npm on first run — no manual installation needed*
 - **git** `2+`
 - **gh** (GitHub CLI) — optional but recommended
 - A **Telegram bot token** from [@BotFather](https://t.me/botfather)
@@ -259,7 +260,7 @@ aurelia telegram reply <chat-id> <message-id> <text>
 Requirements:
 
 - Go `1.25+`
-- Node.js `18+` and npm `8+`
+- Node.js `18+` and npm `8+` (the PI SDK installs automatically on first run)
 - Telegram bot token
 - One LLM provider API key:
   - **OpenRouter** — recommended (multi-model proxy, one key for many models)
