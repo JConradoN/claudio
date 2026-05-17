@@ -1,50 +1,17 @@
 package telegram
 
-const (
-	unsupportedDocumentMessage = "⚠️ **Formato não suportado**\n\n" +
-		"No momento eu consigo processar:\n" +
-		"- arquivos `.md`\n" +
-		"- arquivos `.pdf`\n" +
-		"- imagens em `.jpg`, `.png`, `.gif` ou `.webp`\n" +
-		"- áudio e voz\n\n" +
-		"💡 Dica: converta para `.pdf` ou copie o texto diretamente."
+import "github.com/igormaneschy/aurelia/internal/i18n"
 
-	downloadFailureMessage = "❌ **Falha no download**\n\n" +
-		"Nao consegui baixar o arquivo enviado pelo Telegram. Tente novamente."
+var bundle = i18n.NewBundle(i18n.DefaultLocale)
 
-	audioNotConfiguredMessage = "⚠️ **Audio indisponivel**\n\n" +
-		"Meu modulo de transcricao nao esta configurado.\n\n" +
-		"Configure `groq_api_key` no arquivo `~/.aurelia/config/app.json`."
-
-	audioProcessingFailureMessage = "❌ **Falha na transcricao**\n\n" +
-		"Nao consegui compreender o audio. Tente falar mais claro ou mais perto do microfone."
-
-	emptyAudioMessage = "⚠️ **Audio vazio**\n\n" +
-		"Nao captei conteudo util. Pode reenviar?"
-
-	alreadyConfiguredMessage = "✅ **Aurelia online**\n\n" +
-		"Ja estou configurado e pronto. Como posso ajudar?"
-
-	bootstrapWelcomeMessage = "# Boas-vindas\n\n" +
-		"Eu sou o **Aurelia** recem-iniciado.\n\n" +
-		"Escolha como voce quer que eu atue primariamente hoje."
-
-	bootstrapFailureMessage = "❌ **Falha no bootstrap**\n\n" +
-		"Nao consegui criar os arquivos base de persona."
-
-	bootstrapAssistantMessage = "✅ **Modo inicial selecionado**\n\n" +
-		"Agora descreva como voce quer que eu seja: personalidade, tom, estilo.\n\n" +
-		"Exemplo: `Quero um assistente direto, sem floreios, que use humor seco quando apropriado.`"
-
-	bootstrapProfileMessage = "✅ **Personalidade configurada**\n\n" +
-		"Agora me diga seu nome e como prefere que eu trabalhe com voce.\n\n" +
-		"Exemplo: `Me chamo Igor, sou dev e quero respostas diretas.`"
-
-	bootstrapSuccessMessage = "✅ **Personas criadas**\n\n" +
-		"Suas configuracoes base foram salvas em `~/.aurelia/memory/personas/`.\n\n" +
-		"Voce ja pode conversar comigo ou editar:\n" +
-		"- `IDENTITY.md`\n" +
-		"- `SOUL.md`\n" +
-		"- `USER.md`\n\n" +
-		"para refinar nosso comportamento."
-)
+func unsupportedDocumentMessage() string  { return bundle.T("unsupported_document") }
+func downloadFailureMessage() string      { return bundle.T("download_failure") }
+func audioNotConfiguredMessage() string   { return bundle.T("audio_not_configured") }
+func audioProcessingFailureMessage() string { return bundle.T("audio_processing_failure") }
+func emptyAudioMessage() string           { return bundle.T("empty_audio") }
+func alreadyConfiguredMessage() string    { return bundle.T("already_configured") }
+func bootstrapWelcomeMessage() string     { return bundle.T("bootstrap_welcome") }
+func bootstrapFailureMessage() string      { return bundle.T("bootstrap_failure") }
+func bootstrapAssistantMessage() string   { return bundle.T("bootstrap_assistant") }
+func bootstrapProfileMessage() string     { return bundle.T("bootstrap_profile") }
+func bootstrapSuccessMessage() string     { return bundle.T("bootstrap_success") }

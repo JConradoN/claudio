@@ -75,6 +75,19 @@ func main() {
 		log.Fatalf("Failed to bootstrap Aurelia: %v", err)
 	}
 
+	// Guardrail: require onboarding before starting daemon
+	if !app.config.Onboarded() {
+		log.Println("Aurelia is not configured yet.")
+		log.Println("Run the onboarding wizard first:")
+		log.Println("")
+		log.Println("    go run ./cmd/aurelia/ onboard")
+		log.Println("")
+		log.Println("Then start the daemon:")
+		log.Println("")
+		log.Println("    go run ./cmd/aurelia/")
+		os.Exit(1)
+	}
+
 	// Set up structured logging from config.
 	setupSlog(app.config.LogLevel, app.config.LogFormat)
 	slog.Info("starting aurelia", "version", version.BuildInfo())

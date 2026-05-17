@@ -101,6 +101,11 @@ func (c *AppConfig) VisionFallback() (model, provider string) {
 	return c.VisionModel, c.VisionProvider
 }
 
+// Onboarded returns true if the config has the minimum required fields to run.
+func (c *AppConfig) Onboarded() bool {
+	return c.TelegramBotToken != "" && len(c.TelegramAllowedUserIDs) > 0 && c.DefaultProvider != ""
+}
+
 // Editable returns a mutable copy of the user-editable configuration subset.
 func (c *AppConfig) Editable() *EditableConfig {
 	return appConfigToEditable(c)

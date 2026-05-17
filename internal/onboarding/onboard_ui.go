@@ -330,7 +330,16 @@ func (u *onboardingUI) commitInput() error {
 	case stepSTTKey:
 		u.cfg.GroqAPIKey = strings.TrimSpace(u.input)
 	case stepTelegramToken:
-		u.cfg.TelegramBotToken = strings.TrimSpace(u.input)
+		token := strings.TrimSpace(u.input)
+		if token == "" {
+			return fmt.Errorf("token is required")
+		}
+		username, err := validateToken(token)
+		if err != nil {
+			return fmt.Errorf("invalid token: %v", err)
+		}
+		u.cfg.TelegramBotToken = token
+		u.message = fmt.Sprintf("Token valid! Bot: @%s", username)
 	case stepTelegramUsers:
 		values, err := parseInt64List(u.input)
 		if err != nil {

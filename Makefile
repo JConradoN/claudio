@@ -10,7 +10,7 @@ LOG_DIR       := $(HOME)/.aurelia/logs
 STDERR_LOG    := $(LOG_DIR)/aurelia.stderr.log
 STDOUT_LOG    := $(LOG_DIR)/aurelia.stdout.log
 
-.PHONY: help build test vet bridge install install-service deploy restart stop status logs stdout uninstall-service
+.PHONY: help build test vet bridge install install-service install-service-macos install-service-linux deploy restart stop status logs stdout uninstall-service
 
 help:
 	@echo "Common targets:"
@@ -19,15 +19,17 @@ help:
 	@echo "  make vet              Run go vet ./..."
 	@echo "  make bridge           Rebuild the TS bridge bundle"
 	@echo ""
-	@echo "Service targets (macOS launchd):"
-	@echo "  make install-service  Install/refresh launchd plist (run once after fresh clone)"
-	@echo "  make deploy           Build atomically + kick the service"
-	@echo "  make restart          Restart the service without rebuilding"
-	@echo "  make stop             Stop the service (bootout)"
-	@echo "  make status           Show launchd state for the service"
-	@echo "  make logs             Tail stderr log"
-	@echo "  make stdout           Tail stdout log"
-	@echo "  make uninstall-service Remove plist and unload"
+	@echo "Service targets:"
+	@echo "  make install-service     Auto-detect OS and install service"
+	@echo "  make install-service-macos  Install/refresh launchd plist (macOS)"
+	@echo "  make install-service-linux   Install/refresh systemd service (Linux)"
+	@echo "  make deploy              Build atomically + kick the service"
+	@echo "  make restart             Restart the service without rebuilding"
+	@echo "  make stop                Stop the service (bootout)"
+	@echo "  make status              Show service state"
+	@echo "  make logs                Tail stderr log"
+	@echo "  make stdout              Tail stdout log"
+	@echo "  make uninstall-service   Remove plist and unload"
 
 # --- Build ---
 
@@ -56,7 +58,17 @@ bridge:
 # --- Service (launchd) ---
 
 install-service:
+ifeq ($(shell uname -s),Darwin)
 	./scripts/install-service.sh
+else
+	./scripts/install-systemd.sh
+endif
+
+install-service-macos:
+	./scripts/install-service.sh
+
+install-service-linux:
+	./scripts/install-systemd.sh
 
 # Atomic deploy: build + swap + kickstart. Use this for every change.
 deploy: install

@@ -11,6 +11,13 @@ import (
 	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
+func init() {
+	// Override token validation to avoid real HTTP calls in tests.
+	validateToken = func(token string) (string, error) {
+		return "@testbot", nil
+	}
+}
+
 func TestRunOnboard_SavesInteractiveConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("AURELIA_HOME", tmpDir)

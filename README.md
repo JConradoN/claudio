@@ -19,6 +19,17 @@ One persistent daemon, many projects, many agents.
 
 </div>
 
+## Prerequisites
+
+Before installing, ensure you have:
+
+- **Go** `1.25+` — [go.dev](https://go.dev/)
+- **Node.js** `18+` and **npm** `8+` — [nodejs.org](https://nodejs.org/)
+- **git** `2+`
+- **gh** (GitHub CLI) — optional but recommended
+- A **Telegram bot token** from [@BotFather](https://t.me/botfather)
+- An **LLM provider account** (Anthropic, Kimi, OpenRouter, Z.ai, or Alibaba)
+
 ## Why Aurelia OS
 
 Aurelia is an autonomous agent operating system accessible via Telegram. Talk naturally — Aurelia decides whether to respond directly, delegate to a specialist agent, or schedule automated execution.
@@ -262,28 +273,36 @@ Requirements:
 
 ### Quick Start
 
-1. Clone the canonical repository:
+1. **Clone** the repository:
    ```bash
    git clone https://github.com/igormaneschy/aurelia.git
    cd aurelia
    ```
 
-2. Configure PI auth/models if you have not already:
+2. **Configure PI auth** (if you haven't already):
    ```bash
    pi /login
    ```
 
-3. Run onboarding:
+3. **Run the onboarding wizard** (required before first start):
    ```bash
    go run ./cmd/aurelia/ onboard
    ```
+   This interactive wizard will guide you through:
+   - Dependency verification
+   - LLM provider selection
+   - API key configuration
+   - Telegram bot token validation
+   - User access control
 
-4. Start:
+4. **Start the daemon**:
    ```bash
    go run ./cmd/aurelia/
    ```
 
-5. Send `/start` to your bot on Telegram.
+5. **Send `/start`** to your bot on Telegram.
+
+> **Note**: If you skip step 3 and run the daemon directly, it will exit with instructions to complete onboarding first.
 
 ### Hot Reload (Development)
 
@@ -349,7 +368,9 @@ To rebuild the Bridge bundle after modifying `bridge/index.ts`:
 make bridge           # bundles + copies into internal/bridge/
 ```
 
-## Running as a service (macOS)
+## Running as a Service
+
+### macOS (launchd)
 
 ```bash
 make install-service  # one-time: install launchd plist (auto-restart, RunAtLoad)
@@ -358,7 +379,24 @@ make logs             # tail daemon stderr
 make status           # show launchd state
 ```
 
+### Linux (systemd)
+
+```bash
+make install-service-linux  # one-time: install user systemd service
+make deploy                 # build atomically + restart service
+journalctl --user -u aurelia -f  # tail logs
+```
+
 Full guide: [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Daemon exits immediately | Run `go run ./cmd/aurelia/ onboard` first |
+| "Token is invalid" during onboard | Verify token with @BotFather, ensure bot is not already running elsewhere |
+| Bridge fails to build | Check `node --version` ≥ 18 and `npm --version` ≥ 8 |
+| "Dependency missing" error | Install the missing tool and re-run onboarding |
 
 ## Current State
 

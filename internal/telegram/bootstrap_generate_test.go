@@ -180,8 +180,8 @@ func TestWriteGeneratedPersona_WritesFiles(t *testing.T) {
 }
 
 func TestBootstrapStepAssistant_MessageConstant(t *testing.T) {
-	if bootstrapAssistantMessage == "" {
-		t.Fatal("bootstrapAssistantMessage must not be empty")
+	if bootstrapAssistantMessage() == "" {
+		t.Fatal("bootstrapAssistantMessage() must not be empty")
 	}
 }
 

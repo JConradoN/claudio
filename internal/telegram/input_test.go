@@ -127,8 +127,8 @@ func TestUnsupportedDocumentMessageIncludesConversionHint(t *testing.T) {
 	t.Parallel()
 
 	for _, want := range []string{".md", ".pdf", "Dica", "copie o texto"} {
-		if !strings.Contains(unsupportedDocumentMessage, want) {
-			t.Fatalf("unsupported document message missing %q: %q", want, unsupportedDocumentMessage)
+		if !strings.Contains(unsupportedDocumentMessage(), want) {
+			t.Fatalf("unsupported document message missing %q: %q", want, unsupportedDocumentMessage())
 		}
 	}
 }

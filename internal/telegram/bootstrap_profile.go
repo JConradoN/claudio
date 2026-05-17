@@ -67,7 +67,7 @@ func bootstrapFallbackName(user *telebot.User) string {
 func (bc *BotController) completeBootstrapAssistant(c telebot.Context, state bootstrapState, text string) error {
 	preset, err := bootstrapPresetForChoice(state.Choice)
 	if err != nil {
-		return SendContextText(c, bootstrapFailureMessage)
+		return SendContextText(c, bootstrapFailureMessage())
 	}
 
 	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval, c.Message().ThreadID)
@@ -78,7 +78,7 @@ func (bc *BotController) completeBootstrapAssistant(c telebot.Context, state boo
 	if err != nil {
 		log.Printf("Bootstrap assistant LLM error: %v", err)
 		bc.setPendingBootstrap(c.Sender().ID, bootstrapState{Choice: state.Choice, Step: bootstrapStepProfile})
-		return SendContextText(c, bootstrapProfileMessage)
+		return SendContextText(c, bootstrapProfileMessage())
 	}
 
 	log.Printf("Bootstrap assistant LLM output (%d chars): %.500s", len(generated), generated)
@@ -87,17 +87,17 @@ func (bc *BotController) completeBootstrapAssistant(c telebot.Context, state boo
 	if err != nil {
 		log.Printf("Bootstrap assistant parse error: %v — raw output: %.300s", err, generated)
 		bc.setPendingBootstrap(c.Sender().ID, bootstrapState{Choice: state.Choice, Step: bootstrapStepProfile})
-		return SendContextText(c, bootstrapProfileMessage)
+		return SendContextText(c, bootstrapProfileMessage())
 	}
 
 	if err := writeGeneratedPersona(bc.personasDir, identity, soul); err != nil {
 		log.Printf("Bootstrap assistant write error: %v", err)
 		bc.setPendingBootstrap(c.Sender().ID, bootstrapState{Choice: state.Choice, Step: bootstrapStepProfile})
-		return SendContextText(c, bootstrapProfileMessage)
+		return SendContextText(c, bootstrapProfileMessage())
 	}
 
 	bc.setPendingBootstrap(c.Sender().ID, bootstrapState{Choice: state.Choice, Step: bootstrapStepProfile})
-	return SendContextText(c, bootstrapProfileMessage)
+	return SendContextText(c, bootstrapProfileMessage())
 }
 
 func (bc *BotController) completeBootstrapProfile(c telebot.Context, state bootstrapState, text string) error {
@@ -115,10 +115,10 @@ func (bc *BotController) completeBootstrapProfile(c telebot.Context, state boots
 
 	if err := os.WriteFile(filepath.Join(bc.personasDir, "USER.md"), []byte(generated), 0o644); err != nil {
 		log.Printf("Bootstrap user profile write error: %v\n", err)
-		return SendContextText(c, bootstrapFailureMessage)
+		return SendContextText(c, bootstrapFailureMessage())
 	}
 
-	return SendContextText(c, bootstrapSuccessMessage)
+	return SendContextText(c, bootstrapSuccessMessage())
 }
 
 // bootstrapGenerate calls the LLM via bridge to generate persona content.

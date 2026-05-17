@@ -109,7 +109,7 @@ func TestBotController_IsAllowedGroup(t *testing.T) {
 func TestBootstrapStartResponse_WhenAlreadyConfigured(t *testing.T) {
 	message, menu := bootstrapStartResponse(true)
 
-	if message != alreadyConfiguredMessage {
+	if message != alreadyConfiguredMessage() {
 		t.Fatalf("unexpected configured message: %q", message)
 	}
 	if menu != nil {
@@ -120,7 +120,7 @@ func TestBootstrapStartResponse_WhenAlreadyConfigured(t *testing.T) {
 func TestBootstrapStartResponse_WhenBootstrapNeeded(t *testing.T) {
 	message, menu := bootstrapStartResponse(false)
 
-	if message != bootstrapWelcomeMessage {
+	if message != bootstrapWelcomeMessage() {
 		t.Fatalf("unexpected bootstrap welcome message: %q", message)
 	}
 	if menu == nil {

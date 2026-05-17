@@ -51,9 +51,9 @@ Seja honesto quando errar e transparente de que nao sabe algo sem antes pesquisa
 
 func bootstrapStartResponse(identityExists bool) (string, *telebot.ReplyMarkup) {
 	if identityExists {
-		return alreadyConfiguredMessage, nil
+		return alreadyConfiguredMessage(), nil
 	}
-	return bootstrapWelcomeMessage, newBootstrapMenu()
+	return bootstrapWelcomeMessage(), newBootstrapMenu()
 }
 
 func newBootstrapMenu() *telebot.ReplyMarkup {

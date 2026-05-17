@@ -2,8 +2,10 @@ package onboarding
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 
@@ -85,6 +87,7 @@ const (
 )
 
 var llmModelCatalog = listModels
+var validateToken = validateTelegramToken
 
 func RunOnboard(stdin io.Reader, stdout io.Writer) error {
 	resolver, err := runtime.New()
@@ -159,7 +162,29 @@ func RunOnboardPrompt(stdin io.Reader, stdout io.Writer, resolver *runtime.PathR
 	}
 	current.LLMModel, _ = promptLLMModel(reader, stdout, current)
 	current.GroqAPIKey, _ = promptString(reader, stdout, "Groq API key", current.GroqAPIKey, true)
-	current.TelegramBotToken, _ = promptString(reader, stdout, "Telegram bot token", current.TelegramBotToken, true)
+	for {
+		current.TelegramBotToken, _ = promptString(reader, stdout, "Telegram bot token", current.TelegramBotToken, true)
+		if current.TelegramBotToken == "" {
+			if err := writeln(stdout, "Token is required."); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := writeln(stdout, "Validating token with Telegram..."); err != nil {
+			return err
+		}
+		username, err := validateToken(current.TelegramBotToken)
+		if err != nil {
+			if err := writef(stdout, "Invalid token: %v\nPlease try again.\n\n", err); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := writef(stdout, "Token valid! Bot: @%s\n\n", username); err != nil {
+			return err
+		}
+		break
+	}
 	current.TelegramAllowedUserIDs, _ = promptInt64List(reader, stdout, "Telegram allowed user IDs (comma-separated)", current.TelegramAllowedUserIDs)
 	current.MaxIterations, _ = promptInt(reader, stdout, "Max iterations", current.MaxIterations)
 
@@ -262,6 +287,35 @@ func newOnboardingUI(cfg config.EditableConfig) *onboardingUI {
 		step:            stepDependencies,
 		reviewOptions:   []string{"Save config", "Back", "Cancel"},
 	}
+}
+
+// validateTelegramToken calls Telegram's getMe API to verify a bot token.
+// Returns the bot's username on success, or an error if the token is invalid.
+func validateTelegramToken(token string) (string, error) {
+	if token == "" {
+		return "", fmt.Errorf("token is empty")
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", token)
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to reach Telegram API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Username string `json:"username"`
+		} `json:"result"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode Telegram response: %w", err)
+	}
+	if !result.OK {
+		return "", fmt.Errorf("invalid token: %s", result.Description)
+	}
+	return result.Result.Username, nil
 }
 
 // termFd returns the file descriptor of a terminal, or -1 if not a terminal.

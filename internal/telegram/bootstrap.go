@@ -32,15 +32,15 @@ func (bc *BotController) handleBootstrapChoice(choice string) func(telebot.Conte
 		// Write base preset as fallback (will be overwritten by LLM generation)
 		preset, err := bootstrapPresetForChoice(choice)
 		if err != nil {
-			return SendContextText(c, bootstrapFailureMessage)
+			return SendContextText(c, bootstrapFailureMessage())
 		}
 		if err := writeBootstrapPreset(bc.personasDir, preset); err != nil {
 			log.Printf("Bootstrap error: %v\n", err)
-			return SendContextText(c, bootstrapFailureMessage)
+			return SendContextText(c, bootstrapFailureMessage())
 		}
 
 		bc.setPendingBootstrap(c.Sender().ID, bootstrapState{Choice: choice, Step: bootstrapStepAssistant})
-		return SendContextText(c, bootstrapAssistantMessage)
+		return SendContextText(c, bootstrapAssistantMessage())
 	}
 }
 

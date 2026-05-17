@@ -1,0 +1,19 @@
+[Unit]
+Description=Aurelia OS Agent Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__BINARY__
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aurelia
+Environment="PATH=__PATH__"
+Environment="HOME=__HOME__"
+WorkingDirectory=__HOME__
+
+[Install]
+WantedBy=default.target

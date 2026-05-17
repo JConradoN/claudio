@@ -220,7 +220,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 	if !isSupportedDocument(doc.FileName, doc.MIME) {
 		log.Println("Unsupported document type:", doc.MIME)
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, unsupportedDocumentMessage)
+		return SendContextText(c, unsupportedDocumentMessage())
 	}
 
 	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval, c.Message().ThreadID)
@@ -230,7 +230,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 	if err != nil {
 		log.Println("Failed to download file:", err)
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, downloadFailureMessage)
+		return SendContextText(c, downloadFailureMessage())
 	}
 	defer func() { _ = os.Remove(filePath) }()
 
@@ -299,7 +299,7 @@ func (bc *BotController) handleVoice(c telebot.Context) error {
 	if err != nil {
 		log.Println("Failed to download audio:", err)
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, downloadFailureMessage)
+		return SendContextText(c, downloadFailureMessage())
 	}
 	defer func() { _ = os.Remove(filePath) }()
 
@@ -310,7 +310,7 @@ func (bc *BotController) handleVoice(c telebot.Context) error {
 		if ok := errorAs(err, &msgErr); ok {
 			return SendContextText(c, msgErr.Error())
 		}
-		return SendContextText(c, audioProcessingFailureMessage)
+		return SendContextText(c, audioProcessingFailureMessage())
 	}
 	return bc.processInput(c, transcribedText)
 }
@@ -477,17 +477,17 @@ func resolveAudioAttachment(c telebot.Context) (string, string, bool) {
 
 func (bc *BotController) transcribeAudioFile(filePath string) (string, error) {
 	if bc.stt == nil || !bc.stt.IsAvailable() {
-		return "", SendContextTextError(audioNotConfiguredMessage)
+		return "", SendContextTextError(audioNotConfiguredMessage())
 	}
 
 	log.Printf("Enviando audio [%s] para transcricao via Groq API...", filePath)
 	transcribedText, err := bc.stt.Transcribe(context.Background(), filePath)
 	if err != nil {
 		log.Printf("Groq STT error: %v\n", err)
-		return "", SendContextTextError(audioProcessingFailureMessage)
+		return "", SendContextTextError(audioProcessingFailureMessage())
 	}
 	if strings.TrimSpace(transcribedText) == "" {
-		return "", SendContextTextError(emptyAudioMessage)
+		return "", SendContextTextError(emptyAudioMessage())
 	}
 	return transcribedText, nil
 }
