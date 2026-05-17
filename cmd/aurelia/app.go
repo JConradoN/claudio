@@ -441,6 +441,8 @@ func piProviderEnvName(provider string) string {
 		return "GEMINI_API_KEY"
 	case "opencode-go":
 		return "OPENCODE_API_KEY"
+	case "ollama":
+		return "OLLAMA_API_KEY"
 	default:
 		return ""
 	}

@@ -93,6 +93,13 @@ var providerSpecs = []ProviderSpec{
 		SupportsModelSearch: true,
 	},
 	{
+		ID:           "ollama",
+		Label:        "Ollama (local models)",
+		DefaultModel: "llama3.1:8b",
+		APIKeyLabel:  "Ollama API key (any value)",
+		APIKeyHelp:   "Local Ollama server. Requires 'ollama serve' running. Any value works for API key.",
+	},
+	{
 		ID:           "zai",
 		Label:        "Z.ai (GLM)",
 		DefaultModel: "glm-5",
@@ -280,6 +287,12 @@ func fallbackModels(p string) []ModelOption {
 			{ID: "moonshot-v1-8k", Name: "Moonshot v1 8K"},
 			{ID: "moonshot-v1-32k", Name: "Moonshot v1 32K"},
 			{ID: "moonshot-v1-128k", Name: "Moonshot v1 128K"},
+		}
+	case "ollama":
+		return []ModelOption{
+			{ID: "llama3.1:8b", Name: "Llama 3.1 8B"},
+			{ID: "qwen2.5-coder:7b", Name: "Qwen2.5 Coder 7B"},
+			{ID: "codellama:7b", Name: "CodeLlama 7B"},
 		}
 	case "opencode-go":
 		return []ModelOption{

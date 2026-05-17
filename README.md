@@ -263,9 +263,10 @@ Requirements:
 - Go `1.25+`
 - Node.js `18+` and npm `8+` (the PI SDK installs automatically on first run)
 - Telegram bot token
-- One LLM provider API key:
+- One LLM provider:
   - **OpenRouter** — recommended (multi-model proxy, one key for many models)
   - **opencode-go** — alternative (OpenCode API key)
+  - **Local models** — Ollama or any OpenAI-compatible local server (optional, see [Local Models](#local-models))
 - Groq API key for voice transcription (optional)
 
 ### Quick Start
@@ -334,6 +335,76 @@ Provider auth uses API keys configured during onboarding. OpenRouter is recommen
 ```bash
 go build -trimpath -ldflags "-s -w" -o ./build/aurelia.exe ./cmd/aurelia
 ```
+
+## Local Models
+
+Aurelia supports local models via [Ollama](https://ollama.com/) or any OpenAI-compatible inference server. This is ideal for offline work, privacy, or cost reduction.
+
+### Setup
+
+1. **Install Ollama** and pull a model:
+   ```bash
+   ollama pull llama3.1:8b
+   ollama pull qwen2.5-coder:7b
+   ```
+
+2. **Configure Aurelia** by editing `~/.aurelia/pi-agent/models.json`:
+   ```json
+   {
+     "providers": {
+       "ollama": {
+         "baseUrl": "http://localhost:11434/v1",
+         "api": "openai-completions",
+         "apiKey": "ollama",
+         "compat": {
+           "supportsDeveloperRole": false,
+           "supportsReasoningEffort": false,
+           "supportsToolChoice": false
+         },
+         "models": [
+           {
+             "id": "llama3.1:8b",
+             "name": "Llama 3.1 8B (local)",
+             "reasoning": false,
+             "input": ["text"],
+             "contextWindow": 128000,
+             "maxTokens": 32000,
+             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+           },
+           {
+             "id": "qwen2.5-coder:7b",
+             "name": "Qwen2.5 Coder 7B (local)",
+             "reasoning": false,
+             "input": ["text"],
+             "contextWindow": 32768,
+             "maxTokens": 8192,
+             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+           }
+         ]
+       }
+     }
+   }
+   ```
+
+3. **Update Aurelia config** (`~/.aurelia/config/app.json`):
+   ```json
+   {
+     "default_provider": "ollama",
+     "default_model": "llama3.1:8b"
+   }
+   ```
+
+4. **Restart the daemon**:
+   ```bash
+   make restart
+   ```
+
+### Notes
+
+- Ollama must be running (`ollama serve`) before starting Aurelia
+- The `apiKey` field is required by the PI SDK but ignored by Ollama — any value works
+- Local models do not support image input or advanced tool calling — use cloud providers for those features
+- For other local servers (vLLM, LM Studio, etc.), adjust `baseUrl` and `api` accordingly
 
 ## Documentation
 

@@ -34,6 +34,8 @@ func defaultModelForProvider(provider string) string {
 		return "glm-5"
 	case "alibaba":
 		return "qwen3-coder-plus"
+	case "ollama":
+		return "llama3.1:8b"
 	default:
 		return "kimi-k2-thinking"
 	}

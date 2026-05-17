@@ -105,6 +105,7 @@ function mapProvider(provider: string | undefined): string | undefined {
     anthropic: "anthropic",
     openrouter: "openrouter",
     zai: "zai",
+    ollama: "ollama",
   };
   return aliases[normalized] ?? normalized;
 }

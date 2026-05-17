@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Internationalization (i18n)**: new `internal/i18n/` package with Portuguese (pt-BR) default and English fallback. All user-facing Telegram messages now use the i18n bundle.
 - **Linux systemd support**: `scripts/aurelia.service.tmpl` and `scripts/install-systemd.sh` for user-mode systemd installation. `Makefile` auto-detects OS (`install-service` works on both macOS and Linux).
 - **Onboarding testability**: `validateToken` is overridable in tests to avoid real HTTP calls during onboarding unit tests.
+- **Local models support**: Ollama provider added to onboarding wizard and configuration. README now includes a "Local Models" section with setup instructions for Ollama and OpenAI-compatible local inference servers.
 
 ### Changed
 - `README.md` restructured with Prerequisites section, improved Quick Start flow, Linux service instructions, and Troubleshooting table.

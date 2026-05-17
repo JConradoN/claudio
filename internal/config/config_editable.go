@@ -19,6 +19,7 @@ type EditableConfig struct {
 	KimiAPIKey              string
 	OpenRouterAPIKey        string
 	ZAIAPIKey               string
+	OllamaAPIKey            string
 	AlibabaAPIKey           string
 	AnthropicAuthMode       string
 	GroqAPIKey              string
@@ -45,6 +46,8 @@ func (c EditableConfig) LLMAPIKey(provider string) string {
 		return c.OpenRouterAPIKey
 	case "zai":
 		return c.ZAIAPIKey
+	case "ollama":
+		return c.OllamaAPIKey
 	case "alibaba":
 		return c.AlibabaAPIKey
 	default:
@@ -64,6 +67,8 @@ func (c *EditableConfig) SetLLMAPIKey(provider, value string) {
 		c.OpenRouterAPIKey = value
 	case "zai":
 		c.ZAIAPIKey = value
+	case "ollama":
+		c.OllamaAPIKey = value
 	case "alibaba":
 		c.AlibabaAPIKey = value
 	default:
@@ -112,6 +117,7 @@ func appConfigToEditable(cfg *AppConfig) *EditableConfig {
 		KimiAPIKey:              cfg.ProviderAPIKey("kimi"),
 		OpenRouterAPIKey:        cfg.ProviderAPIKey("openrouter"),
 		ZAIAPIKey:               cfg.ProviderAPIKey("zai"),
+		OllamaAPIKey:            cfg.ProviderAPIKey("ollama"),
 		AlibabaAPIKey:           cfg.ProviderAPIKey("alibaba"),
 		GroqAPIKey:              cfg.ProviderAPIKey("groq"),
 		MaxIterations:           cfg.MaxIterations,
@@ -146,6 +152,7 @@ func editableToFileConfig(editable EditableConfig) fileConfig {
 	maybeSet("google", editable.GoogleAPIKey)
 	maybeSet("opencode-go", editable.OpencodeGoAPIKey)
 	maybeSet("kimi", editable.KimiAPIKey)
+	maybeSet("ollama", editable.OllamaAPIKey)
 	maybeSet("openrouter", editable.OpenRouterAPIKey)
 	maybeSet("zai", editable.ZAIAPIKey)
 	maybeSet("alibaba", editable.AlibabaAPIKey)
