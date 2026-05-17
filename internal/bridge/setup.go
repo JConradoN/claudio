@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -61,13 +62,30 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		return "", fmt.Errorf("create bridge dir: %w", err)
 	}
 
-	// Ensure PI agent directory exists so the SDK can write auth.json and
-	// models.json even when the user has never run the PI CLI.
+	// Create isolated PI agent directory for Aurelia to avoid credential
+	// conflicts with PI CLI. If the user already has PI CLI configured,
+	// copy its auth.json and models.json once for inheritance.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		slog.Warn("cannot determine home directory for PI agent dir", "error", err)
-	} else if err := os.MkdirAll(filepath.Join(home, ".pi", "agent"), 0700); err != nil {
-		slog.Warn("failed to create PI agent directory", "error", err)
+	} else if home != "" {
+		aureliaPiAgentDir := filepath.Join(home, ".aurelia", "pi-agent")
+		if err := os.MkdirAll(aureliaPiAgentDir, 0700); err != nil {
+			slog.Warn("failed to create isolated PI agent dir", "error", err)
+		} else {
+			// One-time inheritance: copy PI CLI config if it exists and
+			// Aurelia's isolated dir is empty.
+			piCliDir := filepath.Join(home, ".pi", "agent")
+			if _, statErr := os.Stat(piCliDir); statErr == nil {
+				if isEmptyDir(aureliaPiAgentDir) {
+					if err := copyDirContents(piCliDir, aureliaPiAgentDir); err != nil {
+						slog.Warn("failed to inherit PI CLI config", "error", err)
+					} else {
+						slog.Info("Inherited PI CLI config into isolated agent directory")
+					}
+				}
+			}
+		}
 	}
 
 	buildingFromSource := !bundleExists && len(bundleJS) == 0
@@ -134,4 +152,38 @@ func writeBridgeSource(targetDir string) error {
 		return fmt.Errorf("write index.ts: %w", err)
 	}
 	return nil
+}
+
+// isEmptyDir returns true if the directory exists and contains no entries.
+func isEmptyDir(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	return len(entries) == 0
+}
+
+// copyDirContents copies all files from src to dst recursively.
+func copyDirContents(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0600)
+	})
 }

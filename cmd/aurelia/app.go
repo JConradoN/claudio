@@ -82,6 +82,15 @@ func bootstrapApp() (*app, error) {
 		}
 	}
 
+	// Isolate PI agent directory to prevent credential conflicts with PI CLI.
+	// The bridge will use ~/.aurelia/pi-agent/ instead of ~/.pi/agent/.
+	homeDir, _ := os.UserHomeDir()
+	if homeDir == "" {
+		log.Printf("Warning: cannot determine home directory — PI_CODING_AGENT_DIR not set, bridge will use default ~/.pi/agent/")
+	} else {
+		os.Setenv("PI_CODING_AGENT_DIR", filepath.Join(homeDir, ".aurelia", "pi-agent"))
+	}
+
 	br := setupBridge()
 	personaSvc := setupPersona(resolver)
 
@@ -174,11 +183,10 @@ func bootstrapApp() (*app, error) {
 	bot.SetDreamer(dreamer)
 
 	// Wire project index for fast project lookup.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("get user home directory: %w", err)
+	if homeDir == "" {
+		return nil, fmt.Errorf("cannot determine home directory for project index path")
 	}
-	jsonPath := runtime.PersistPath(filepath.Join(home, ".aurelia"))
+	jsonPath := runtime.PersistPath(filepath.Join(homeDir, ".aurelia"))
 	projectIndex := runtime.NewProjectIndex(nil, jsonPath)
 	bot.SetProjectIndex(projectIndex)
 	go func() {
@@ -443,7 +451,22 @@ func hasPIAuth(provider string) bool {
 	if err != nil {
 		return false
 	}
-	path := filepath.Join(home, ".pi", "agent", "auth.json")
+
+	// Check isolated dir first, then fall back to PI CLI dir for users who
+	// configured PI CLI after the initial one-time inheritance.
+	candidates := []string{
+		filepath.Join(home, ".aurelia", "pi-agent", "auth.json"),
+		filepath.Join(home, ".pi", "agent", "auth.json"),
+	}
+	for _, path := range candidates {
+		if providerInAuthFile(path, provider) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerInAuthFile(path, provider string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
 		return false

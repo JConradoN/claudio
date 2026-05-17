@@ -18,12 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `internal/telegram/messages.go` migrated from hardcoded Portuguese constants to i18n-backed functions.
 - **Provider rename**: "kilo" renamed to "opencode-go" throughout the codebase — provider ID, API key field, config migration, and onboarding UI all updated.
 - **Documentation clarity**: README and onboarding wizard now explicitly state that the PI SDK installs automatically via npm on first run — no manual PI CLI installation required.
-- **PI CLI coexistence documented**: README now explains that Aurelia inherits PI CLI auth/models/skills from `~/.pi/agent/`, and that PI CLI credentials take precedence over Aurelia's onboarding configuration when there is a provider conflict.
+- **PI CLI isolation**: Aurelia now uses its own PI agent directory (`~/.aurelia/pi-agent/`) instead of sharing `~/.pi/agent/` with PI CLI. On first run, existing PI CLI auth/models config is automatically copied to the isolated directory. Credential conflicts between Aurelia and PI CLI are eliminated.
 
 ### Fixed
 - **UX**: running daemon without onboarding produced cryptic Telegram API errors — now shows friendly step-by-step instructions.
 - **UX**: invalid Telegram tokens were only discovered at runtime — now caught during onboarding wizard.
-- **Reliability**: bridge setup now creates `~/.pi/agent/` directory to ensure PI SDK can write auth.json and models.json even when the user has never installed the PI CLI.
+- **Reliability**: bridge setup now creates `~/.aurelia/pi-agent/` directory (instead of `~/.pi/agent/`) to ensure PI SDK has an isolated writable agent directory even when the user has never installed the PI CLI.
 
 ## [v0.6.9] - 2026-05-17
 
