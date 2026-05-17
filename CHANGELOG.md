@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.7.0] - 2026-05-17
+
+### Added
+- **Onboarding guardrail**: daemon now exits cleanly with instructions if run before `onboard` completes (`AppConfig.Onboarded()` check in `main.go`).
+- **Telegram token validation**: onboarding wizard calls `getMe` API to verify bot tokens before saving config — catches invalid tokens immediately instead of failing at daemon startup.
+- **Internationalization (i18n)**: new `internal/i18n/` package with Portuguese (pt-BR) default and English fallback. All user-facing Telegram messages now use the i18n bundle.
+- **Linux systemd support**: `scripts/aurelia.service.tmpl` and `scripts/install-systemd.sh` for user-mode systemd installation. `Makefile` auto-detects OS (`install-service` works on both macOS and Linux).
+- **Onboarding testability**: `validateToken` is overridable in tests to avoid real HTTP calls during onboarding unit tests.
+
+### Changed
+- `README.md` restructured with Prerequisites section, improved Quick Start flow, Linux service instructions, and Troubleshooting table.
+- `internal/telegram/messages.go` migrated from hardcoded Portuguese constants to i18n-backed functions.
+
+### Fixed
+- **UX**: running daemon without onboarding produced cryptic Telegram API errors — now shows friendly step-by-step instructions.
+- **UX**: invalid Telegram tokens were only discovered at runtime — now caught during onboarding wizard.
+
 ## [v0.6.9] - 2026-05-17
 
 ### Fixed
