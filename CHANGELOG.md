@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `internal/telegram/messages.go` migrated from hardcoded Portuguese constants to i18n-backed functions.
 - **Provider rename**: "kilo" renamed to "opencode-go" throughout the codebase — provider ID, API key field, config migration, and onboarding UI all updated.
 - **Documentation clarity**: README and onboarding wizard now explicitly state that the PI SDK installs automatically via npm on first run — no manual PI CLI installation required.
+- **PI CLI coexistence documented**: README now explains that Aurelia inherits PI CLI auth/models/skills from `~/.pi/agent/`, and that PI CLI credentials take precedence over Aurelia's onboarding configuration when there is a provider conflict.
 
 ### Fixed
 - **UX**: running daemon without onboarding produced cryptic Telegram API errors — now shows friendly step-by-step instructions.

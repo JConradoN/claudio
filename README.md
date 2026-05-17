@@ -298,6 +298,18 @@ Requirements:
 
 > **Note**: If you skip step 2 and run the daemon directly, it will exit with instructions to complete onboarding first.
 
+### PI CLI Coexistence
+
+If you already use the PI CLI (`pi`), Aurelia automatically shares its configuration:
+
+- **Auth** — credentials from `~/.pi/agent/auth.json` are inherited
+- **Models** — model registry from `~/.pi/agent/models.json` is reused
+- **Skills & Extensions** — installed PI skills and extensions are available
+
+**Important**: When there is a credential conflict (same provider configured in both PI CLI and Aurelia), the PI CLI configuration takes precedence. To use independent settings, either:
+- Remove the provider from `~/.pi/agent/auth.json`, or
+- Use a different provider in Aurelia than the one configured in PI CLI
+
 ### Hot Reload (Development)
 
 ```bash
@@ -391,6 +403,7 @@ Full guide: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 | "Token is invalid" during onboard | Verify token with @BotFather, ensure bot is not already running elsewhere |
 | Bridge fails to build | Check `node --version` ≥ 18 and `npm --version` ≥ 8 |
 | "Dependency missing" error | Install the missing tool and re-run onboarding |
+| Aurelia uses wrong provider / ignores my API key | PI CLI credentials in `~/.pi/agent/auth.json` take precedence. Remove the conflicting provider from PI CLI auth or use a different provider in Aurelia |
 
 ## Current State
 
