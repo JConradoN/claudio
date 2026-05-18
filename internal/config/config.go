@@ -108,6 +108,10 @@ type AppConfig struct {
 
 	// DefaultOwnerUserID is the fallback user ID when none is explicitly provided.
 	DefaultOwnerUserID int64 `json:"default_owner_user_id,omitempty"`
+
+	// ChatAPIPort enables a local HTTP endpoint for programmatic chat access
+	// (e.g. Agent Benchmark Suite). Only binds on 127.0.0.1. 0 = disabled.
+	ChatAPIPort int `json:"chat_api_port,omitempty"`
 }
 
 // DefaultOwnerUserIDOrFallback returns the configured DefaultOwnerUserID, or the
@@ -210,6 +214,7 @@ type fileConfig struct {
 	SummaryInterval int                     `json:"summary_interval,omitempty"`
 
 	DefaultOwnerUserID int64 `json:"default_owner_user_id"`
+	ChatAPIPort        int   `json:"chat_api_port,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -432,6 +437,7 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		SecurityConfig:          cfg.SecurityConfig,
 		SummaryInterval:         cfg.SummaryInterval,
 		DefaultOwnerUserID:      cfg.DefaultOwnerUserID,
+		ChatAPIPort:             cfg.ChatAPIPort,
 	}
 	applyEnvOverrides(app)
 	return app

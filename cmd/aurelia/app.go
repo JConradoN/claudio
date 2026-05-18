@@ -33,17 +33,23 @@ type app struct {
 	resolver   *runtime.PathResolver
 	bridge     *bridge.Bridge
 	agents     *agents.Registry
+	persona    *persona.CanonicalIdentityService
 	cronStore  *cron.SQLiteCronStore
 	bindings   projectbinding.Store
 	runLog     runlog.Store
 	continuity continuity.Store
 	bot        *telegram.BotController
 	sessions   *session.Store
+	tracker    *session.Tracker
 	scheduler  *cron.Scheduler
 	cronCtx    context.Context
 	cronCancel context.CancelFunc
 
 	onboardingStore *users.OnboardingStore
+	chatAPI         interface {
+		Start()
+		Shutdown(context.Context) error
+	}
 }
 
 var runClaudeAuthStatus = func() ([]byte, error) {
@@ -348,12 +354,14 @@ func bootstrapApp() (*app, error) {
 		resolver:        resolver,
 		bridge:          br,
 		agents:          agentReg,
+		persona:         personaSvc,
 		cronStore:       cronStore,
 		bindings:        bindings,
 		runLog:          runLogStore,
 		continuity:      continuityStore,
 		bot:             bot,
 		sessions:        sessions,
+		tracker:         tracker,
 		scheduler:       scheduler,
 		cronCtx:         cronCtx,
 		cronCancel:      cronCancel,
@@ -473,6 +481,7 @@ func (a *app) start() {
 		}()
 	}
 	a.startSessionGC()
+	a.startChatAPI()
 	go a.bot.Start()
 }
 
@@ -503,6 +512,7 @@ func (a *app) shutdown(ctx context.Context) {
 	if a.cronCancel != nil {
 		a.cronCancel()
 	}
+	a.shutdownChatAPI(ctx)
 	if a.bot != nil {
 		done := make(chan struct{})
 		go func() {
