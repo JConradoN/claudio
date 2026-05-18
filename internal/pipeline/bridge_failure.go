@@ -17,6 +17,10 @@ const (
 )
 
 const (
+	bridgeEmptyResultMessage = "Nao consegui gerar uma resposta util desta vez. Tente reenviar ou reformular."
+)
+
+const (
 	failureWindowMax = 3                // max failures before cooldown
 	failureWindowDur = 1 * time.Minute  // window to count failures
 	cooldownDuration = 30 * time.Second // cooldown period after max failures

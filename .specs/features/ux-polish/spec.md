@@ -1,5 +1,7 @@
 # UX Polish — Especificação
 
+**Status:** Mostly validated — see `.specs/features/ux-polish/validation.md` for manual smoke-test gaps.
+
 ## Problem Statement
 
 A experiência do usuário no Telegram tem vários pontos de fricção pequenos mas cumulativos que deixam a interação menos fluida do que poderia ser:

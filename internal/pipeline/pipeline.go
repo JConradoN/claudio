@@ -497,7 +497,13 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	s.recordUsage(chatID, threadID, ev)
 	finalText := strings.TrimSpace(assistantText.String())
 	if finalText == "" {
-		finalText = "(sem resposta)"
+		log.Printf("bridge: empty result chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d content_len=0",
+			chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
+		if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
+			log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
+		}
+		s.output.ConfirmMessage(chatID, messageID)
+		return OutcomeLLMError
 	}
 
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
@@ -515,6 +521,9 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 }
 
 func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) {
+	if s.config == nil || s.tracker == nil {
+		return
+	}
 	if ev.CostUSD <= 0 && ev.NumTurns <= 0 {
 		return
 	}

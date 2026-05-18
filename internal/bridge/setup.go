@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const bridgePackageJSON = `{
@@ -48,6 +49,31 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		}
 	}
 
+	// Ensure isolated PI agent directory exists and inherit credentials
+	// from PI CLI on first run. This MUST happen before the early return
+	// so that restarts also pick up credentials (the hasNonEmptyAuth
+	// guard ensures one-time-only inheritance).
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.Warn("cannot determine home directory for PI agent dir", "error", err)
+	} else if home != "" {
+		aureliaPiAgentDir := filepath.Join(home, ".aurelia", "pi-agent")
+		if err := os.MkdirAll(aureliaPiAgentDir, 0700); err != nil {
+			slog.Warn("failed to create isolated PI agent dir", "error", err)
+		} else {
+			piCliDir := filepath.Join(home, ".pi", "agent")
+			if _, statErr := os.Stat(piCliDir); statErr == nil {
+				if !hasNonEmptyAuth(aureliaPiAgentDir) {
+					if err := copyDirContents(piCliDir, aureliaPiAgentDir); err != nil {
+						slog.Warn("failed to inherit PI CLI config", "error", err)
+					} else {
+						slog.Info("Inherited PI CLI config into isolated agent directory")
+					}
+				}
+			}
+		}
+	}
+
 	if bundleExists && !needsNpmInstall {
 		return targetDir, nil
 	}
@@ -60,32 +86,6 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return "", fmt.Errorf("create bridge dir: %w", err)
-	}
-
-	// Create isolated PI agent directory for Aurelia to avoid credential
-	// conflicts with PI CLI. If the user already has PI CLI configured,
-	// copy its auth.json and models.json once for inheritance.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		slog.Warn("cannot determine home directory for PI agent dir", "error", err)
-	} else if home != "" {
-		aureliaPiAgentDir := filepath.Join(home, ".aurelia", "pi-agent")
-		if err := os.MkdirAll(aureliaPiAgentDir, 0700); err != nil {
-			slog.Warn("failed to create isolated PI agent dir", "error", err)
-		} else {
-			// One-time inheritance: copy PI CLI config if it exists and
-			// Aurelia's isolated dir is empty.
-			piCliDir := filepath.Join(home, ".pi", "agent")
-			if _, statErr := os.Stat(piCliDir); statErr == nil {
-				if isEmptyDir(aureliaPiAgentDir) {
-					if err := copyDirContents(piCliDir, aureliaPiAgentDir); err != nil {
-						slog.Warn("failed to inherit PI CLI config", "error", err)
-					} else {
-						slog.Info("Inherited PI CLI config into isolated agent directory")
-					}
-				}
-			}
-		}
 	}
 
 	buildingFromSource := !bundleExists && len(bundleJS) == 0
@@ -154,13 +154,13 @@ func writeBridgeSource(targetDir string) error {
 	return nil
 }
 
-// isEmptyDir returns true if the directory exists and contains no entries.
-func isEmptyDir(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return true
+// hasNonEmptyAuth returns true if the directory contains a non-empty auth.json.
+func hasNonEmptyAuth(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "auth.json"))
+	if err != nil || len(data) == 0 {
+		return false
 	}
-	return len(entries) == 0
+	return len(strings.TrimSpace(string(data))) > 0 && string(data) != "{}"
 }
 
 // copyDirContents copies all files from src to dst recursively.

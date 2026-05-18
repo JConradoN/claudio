@@ -1,5 +1,7 @@
 # Dependency Checker — Specification
 
+**Status:** Validation plan exists — see `.specs/features/dependency-checker/validation.md`.
+
 ## Problem Statement
 
 Quando um usuário instala a Aurelia pela primeira vez e roda `aurelia setup`, o onboarding pede API keys e modelo, mas nunca verifica se as dependencias de runtime estao presentes (Node.js, npm, git). Se Node.js nao esta instalado, o usuario so descobre depois do onboarding, quando o bridge falha com um erro criptico como "exec: node: executable file not found in PATH".

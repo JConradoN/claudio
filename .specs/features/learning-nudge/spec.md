@@ -1,149 +1,229 @@
-# Learning Nudge System — Specification
+# Learning Nudge — Scoped Memory Review
+
+**Status:** Draft — revised for PI, User Isolation and Guard-Rails  
+**Depende de:** `.specs/features/multi-user-profiles/`, `.specs/features/project-binding/`, `.specs/features/project-memory/`, `.specs/features/security-guard-rails/`  
+**Complementa:** `.specs/features/auto-skills/`
 
 ## Problem Statement
 
-A Aurelia extrai memórias após cada turn usando um agente Haiku leve. Porém essa extração é superficial — recebe apenas um snippet truncado (user message + assistant response) sem acesso ao contexto completo da conversa. Isso causa:
+Aurelia aprende hoje por extrações pequenas e frequentes, normalmente baseadas em snippets do turno. Isso perde contexto: tool calls, decisões intermediárias, erros corrigidos e padrões reutilizáveis ficam fora da memória.
 
-1. **Perda de informação**: detalhes de tool calls, decisões intermediárias e raciocínio são perdidos
-2. **Falta de profundidade**: o extrator não tem contexto suficiente pra entender o que realmente importa
-3. **Sem aprendizado de padrões**: não identifica abordagens reutilizáveis ou erros repetidos
+Por outro lado, um nudge profundo sem escopo correto pode vazar dados entre usuários, projetos ou tópicos. A versão anterior desta spec também mencionava detalhes antigos de SDK/path e permitia `Bash` para o nudge, o que não combina com o novo modelo de guard-rails.
 
-O Hermes Agent resolve isso com um sistema de "nudge" — a cada N turns, spawna um agente em background com **acesso ao histórico completo da conversa** que faz uma revisão profunda e salva memórias/skills de forma autônoma.
+A nova direção é um **Learning Nudge escopado**: uma revisão periódica em background, executada pelo PI com contexto suficiente, mas limitada por `SessionKey{chat_id, thread_id, user_id}`, `ConversationKey{chat_id, thread_id}`, project binding/effective `cwd` e `CapabilityProfile=edit_project` sem `Bash`.
 
 ## Goals
 
-- [ ] Background review agent que roda a cada N turns (configurável, default 10)
-- [ ] Acesso ao contexto completo da sessão (não apenas snippets)
-- [ ] Revisão de memória (fatos do user + projeto) com contexto completo
-- [ ] Opcionalmente sinalizar padrões reutilizáveis como sugestão, mas **não criar skills automaticamente** nesta spec
-- [ ] Nunca interrompe o fluxo principal — roda em background
-- [ ] Resultado da revisão atualiza memórias; criação/edição de skills fica para `auto-skills`
-- [ ] Substituir o extrator por-turn pelo nudge periódico (menos chamadas, mais qualidade)
+- [ ] Rodar revisão periódica em background a cada N turns ou em eventos relevantes
+- [ ] Usar transcript escopado por `SessionKey`, sem ler sessões de outros usuários
+- [ ] Classificar memórias nas camadas de `project-memory`
+- [ ] Redigir secrets antes de enviar transcript ao nudge
+- [ ] Usar `CapabilityProfile=edit_project` sem `Bash`
+- [ ] Nunca criar skills automaticamente; apenas sugerir candidatos para `auto-skills`
+- [ ] Evitar nudges concorrentes por sessão/projeto
+- [ ] Registrar custo, duração, writes e camada alvo
+- [ ] Não interromper o fluxo principal do usuário
 
 ## Out of Scope
 
-- Sistema completo de skills com diretórios, templates e scripts (coberto por `auto-skills`)
-- Criação automática de skills sem confirmação do user
-- Hub de skills compartilhados entre usuários
-- Auto-tuning do intervalo de nudge baseado em atividade
-- Múltiplos modelos de review (usar o mesmo modelo configurado)
+- Criação automática de skills sem confirmação
+- Leitura direta de arquivos internos de sessão do PI como contrato primário
+- Uso de Bash pelo nudge
+- Consolidação cross-user
+- Full-text search em histórico antigo
+- UI completa de revisão/edição de memória
+
+---
 
 ## Architecture
 
-### Nudge Trigger
-
-```
-User turn #1  → normal
-User turn #2  → normal
-...
-User turn #N  → nudge triggered (background)
-User turn #N+1 → normal (nudge running in parallel)
-...
-User turn #2N → nudge triggered again
+```text
+Pipeline turn complete
+  → Recorder appends scoped transcript event
+  → Nudge gate evaluates interval/budget/running state
+  → Background nudge request to PI
+  → PI writes/edits memory files in allowed layers
+  → Go reconciles changed files and records summary
 ```
 
-**Gates (checadas a cada turn):**
-1. `turns_since_nudge >= config.NudgeTurns` (default 10)
-2. `nudge_running == false` (prevent concurrent)
-3. `config.NudgeEnabled == true`
+### Trigger gates
 
-### Review Agent
+1. `config.nudge_enabled == true`
+2. `turns_since_nudge >= nudge_turns` OR explicit event (`/new`, handoff complete, long run complete)
+3. no nudge currently running for same `SessionKey`
+4. transcript has enough new material
+5. budget/cooldown allows execution
 
-O nudge spawna um agente via bridge com:
-- **Prompt**: resumo do que revisar (memory + optional skill review)
-- **Contexto**: histórico da conversa (obtido via session transcript do SDK)
-- **Tools**: Read, Write, Edit, Glob, Grep (para memória), Bash (para deletion)
-- **persistSession**: false (efêmero)
-- **Modelo**: configurável (default: mesmo modelo do dream)
+### Transcript source
 
-### Prompts de Review
+Preferred: Go-owned scoped transcript recorder.
 
-**Memory Review:**
-```
-Review the conversation above and save things worth remembering:
-- Facts the user revealed about themselves (persona, preferences, workflow habits)
-- Decisions made about the project or approach
-- Work completed and current state
-- Problems encountered and how they were resolved
+The recorder captures:
 
-Only save what will help in future conversations. Update existing memories
-rather than creating duplicates.
-```
+- user text/media summary
+- selected agent/model
+- effective `cwd`
+- assistant final answer
+- tool_use/tool_result summaries, redigidos e truncados
+- result stats: tokens, cost, duration
+- orchestration/agent-comms summaries when present
 
-**Reusable Pattern Review (advisory only):**
-```
-Review the conversation above and consider if a reusable approach emerged:
-- Was a non-trivial technique used that required trial and error?
-- Did the approach change course due to experiential findings?
-- Would this be useful in future similar tasks?
+Do **not** depend on PI internal session file paths for MVP.
 
-If yes, summarize the pattern as a suggestion in memory or in the review output.
-Do not create or update skill files. Skill creation is handled by the explicit
-Auto-Skills workflow and requires user confirmation.
-```
+---
 
-### Session Transcript Access
+## User Stories
 
-O nudge precisa do histórico completo. Duas opções:
+### P0: Scoped transcript recorder ⭐ MVP
 
-**Opção A — Acumular no Go**: o `processBridgeEventsAsync` já recebe todos os events. Acumular user/assistant messages num buffer e passar ao nudge.
+**User Story:** Como sistema, quero registrar contexto suficiente para aprendizado sem vazar dados entre usuários.
 
-**Opção B — Ler session file do SDK**: as sessões são JSONL em `~/.claude/projects/<cwd>/<session-id>.jsonl`. O nudge pode ler direto.
+**Acceptance Criteria:**
 
-**Recomendação**: Opção A — mais simples, não depende de paths internos do SDK.
+1. WHEN um turno começa THEN recorder SHALL associar eventos a `SessionKey{chat_id, thread_id, user_id}`.
+2. WHEN há `cwd` THEN recorder SHALL armazenar project slug derivado, não depender de path bruto para lookup.
+3. WHEN tool events chegam THEN recorder SHALL guardar nome da tool e input/output redigidos/truncados.
+4. WHEN turno falha/cancela THEN recorder MAY registrar erro, mas não substituir último sucesso capturável de Auto-Skills.
+5. WHEN user pede `/forget-me` THEN transcripts pendentes desse user SHALL ser removidos.
 
-### Substituição do Extrator
+**Independent Test:** Dois users no mesmo tópico geram transcripts separados; User B não aparece no nudge de User A.
 
-O extrator por-turn atual (`ExtractMemories`) seria substituído pelo nudge:
+---
 
-| | Extrator atual | Nudge |
-|---|---|---|
-| Frequência | Cada turn | Cada N turns |
-| Contexto | Snippet truncado | Histórico completo |
-| Modelo | Haiku (barato) | Sonnet/configurável |
-| Custo por chamada | ~$0.02 | ~$0.05-0.10 |
-| Custo total (10 turns) | ~$0.20 | ~$0.05-0.10 |
-| Qualidade | Superficial | Profunda |
+### P0: Redaction antes do nudge ⭐ MVP
 
-O nudge é **mais barato** no total (1 chamada profunda vs 10 chamadas superficiais) e **mais eficaz** (contexto completo).
+**User Story:** Como operador, quero impedir que secrets sejam enviados ao review agent ou gravados em memória.
 
-### Configuração
+**Acceptance Criteria:**
+
+1. Redactor SHALL cobrir API keys, bearer tokens, passwords, env assignments e strings high-entropy.
+2. Paths sensíveis (`~/.ssh`, `~/.aurelia/config`, `~/.pi`, `.env`) SHALL ser mascarados.
+3. Redaction SHALL acontecer antes de montar o prompt do nudge.
+4. Se conteúdo continuar suspeito após redaction THEN nudge SHALL abortar fail-closed.
+5. Audit SHALL registrar redaction counts, não valores.
+
+**Independent Test:** Transcript com `OPENAI_API_KEY=...` chega ao nudge como `<REDACTED:api_key>`.
+
+---
+
+### P1: Memory review por camadas ⭐ MVP
+
+**User Story:** Como Aurelia, quero transformar conversas em memória útil no escopo correto.
+
+**Acceptance Criteria:**
+
+1. Nudge prompt SHALL listar targets permitidos: user global, user project private, project team, topic memory.
+2. Nudge SHALL receber guia de classificação da spec `project-memory`.
+3. Nudge SHALL ser instruído a preferir camada privada quando houver dúvida.
+4. Nudge SHALL nunca escrever fatos pessoais em team memory.
+5. Go SHALL reconciliar arquivos alterados e registrar quais camadas foram tocadas.
+
+**Independent Test:** Transcript com fato pessoal + convenção de projeto resulta em writes nas camadas corretas.
+
+---
+
+### P1: Capability profile mínimo ⭐ MVP
+
+**User Story:** Como operador, quero que o nudge escreva memórias, mas não execute comandos shell.
+
+**Acceptance Criteria:**
+
+1. Nudge request SHALL usar `CapabilityProfile=edit_project`.
+2. Active tools SHALL incluir no máximo `Read`, `Grep`, `Glob/Find`, `LS`, `Write`, `Edit`.
+3. `Bash` SHALL estar indisponível.
+4. `NoUserSettings=true` SHOULD ser usado para evitar extensões/settings pessoais no review interno.
+5. Security policy hook SHALL continuar ativo mesmo com `NoUserSettings=true`.
+
+**Independent Test:** Fake bridge recebe request de nudge sem Bash e com security context.
+
+---
+
+### P1: Sugestão de Auto-Skill, não criação automática ⭐ MVP
+
+**User Story:** Como usuário, quero que Aurelia perceba padrões úteis, mas só crie skill quando eu confirmar.
+
+**Acceptance Criteria:**
+
+1. Nudge MAY identificar candidato a skill.
+2. Nudge SHALL salvar apenas sugestão/resumo em memória ou output estruturado.
+3. Nudge SHALL NOT escrever em `users/<id>/skills/`.
+4. `/skill save <slug>` continua sendo o caminho explícito para criar skill.
+5. Auto-Skills MAY consumir sugestões do nudge como contexto.
+
+---
+
+### P2: Event-based nudge after orchestration
+
+**User Story:** Como Aurelia, quero aprender após execuções longas ou orquestradas sem esperar N turnos.
+
+**Acceptance Criteria:**
+
+1. WHEN orchestration completes THEN nudge MAY run with execution manifest summary.
+2. WHEN Agent Comms occurred THEN nudge MAY include peer summary, not raw sensitive payloads.
+3. WHEN execution failed THEN nudge MAY save lessons learned/workarounds.
+4. Nudge SHALL respect same budget/cooldown gates.
+
+---
+
+## Prompt Requirements
+
+Nudge prompt deve incluir:
+
+- SessionKey e ConversationKey como metadados, não como conteúdo narrativo
+- cwd/project slug efetivo
+- camadas de memória permitidas e seus paths
+- transcript redigido/truncado
+- instrução para atualizar arquivos existentes, não duplicar
+- instrução para não salvar secrets/PII desnecessária
+- instrução para não criar skills automaticamente
+
+---
+
+## Config
 
 ```go
-type DreamConfig struct {
-    // ... campos existentes ...
-    NudgeEnabled  bool   // habilitar nudge (default true)
-    NudgeTurns    int    // intervalo em turns (default 10)
-    NudgeModel    string // modelo pro nudge (default: DreamModel)
+type NudgeConfig struct {
+    Enabled          bool
+    Turns            int
+    MinTranscriptLen int
+    Cooldown         time.Duration
+    MaxTranscriptBytes int
+    Model            string
 }
 ```
 
-No `app.json`:
+Defaults sugeridos:
+
 ```json
 {
-    "nudge_enabled": true,
-    "nudge_turns": 10,
-    "nudge_model": "claude-sonnet-4-6"
+  "nudge_enabled": true,
+  "nudge_turns": 10,
+  "nudge_min_transcript_len": 2000,
+  "nudge_max_transcript_bytes": 80000
 }
 ```
 
-## Pacotes afetados
+---
 
-| Pacote | Mudança |
+## Affected Packages
+
+| Package | Change |
 |---|---|
-| `internal/dream/` | Novo `nudge.go` com lógica de nudge, substituir `extract.go` |
-| `internal/dream/` | `DreamConfig` com campos de nudge |
-| `internal/telegram/` | Acumular histórico de mensagens, passar ao nudge |
-| `internal/telegram/bot.go` | Interface do dreamer atualizada |
-| `internal/config/` | Novos campos no AppConfig |
-| `cmd/aurelia/app.go` | Wiring dos novos campos de config |
+| `internal/session/` | Transcript buffer keyed by SessionKey |
+| `internal/pipeline/` | Recorder observes turns and tool events |
+| `internal/dream/` | Nudge runner, prompt and reconciliation |
+| `internal/security/` | Redaction + capability profile integration |
+| `internal/runtime/` | Memory target paths |
+| `internal/config/` | Nudge config fields |
 
-## Acceptance Criteria
+---
 
-1. Nudge roda em background a cada N turns sem interromper o chat
-2. Review agent tem acesso ao histórico completo da conversa (não snippet)
-3. Memórias salvas pelo nudge são mais completas que as do extrator atual
-4. Custo total é menor ou igual ao extrator por-turn
-5. Configurável via app.json (enabled, interval, model)
-6. persistSession: false — não polui sessões do SDK
-7. Gate system previne nudges concorrentes
+## Success Criteria
+
+- [ ] Nudge never mixes users in same chat/thread
+- [ ] Nudge writes to correct memory layers
+- [ ] Nudge runs without Bash
+- [ ] Secrets are redacted before PI call
+- [ ] Auto-Skills remains explicit user-confirmed flow
+- [ ] Background nudge does not block main response
+- [ ] `go build ./... && go vet ./... && go test ./...` clean when implemented

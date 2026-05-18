@@ -1,5 +1,7 @@
 # Bridge Recovery Automático — Specification
 
+**Status:** Validated — see `.specs/features/bridge-recovery/validation.md`.
+
 ## Problem Statement
 
 Quando o processo bridge (TypeScript) morre durante uma execução, a request em voo é perdida. O usuário no Telegram recebe "O processador encerrou sem resposta" e precisa reenviar a mensagem manualmente. Além disso, todas as sessions marcadas como `active` ficam stale — apontando pra um processo que não existe mais — e a próxima mensagem tenta `Continue` (warm session) num processo novo, o que falha silenciosamente.

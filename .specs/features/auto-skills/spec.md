@@ -1,7 +1,7 @@
 # Auto-Skills
 
 **Depende de:** User Isolation (`multi-user-profiles`) para `TurnContext`, `SessionKey`, `UserGate` e diretórios privados por `user_id`
-**Complementa:** Plan Mode e Orchestration, mas o MVP manual funciona sem eles
+**Complementa:** Plan Mode, Orchestration, Agent Comms e Security Guard-Rails, mas o MVP manual funciona sem eles
 
 ## Problem Statement
 
@@ -20,6 +20,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 - [ ] Recorder de transcript mínimo, redigido e com TTL curto, sem armazenar system prompt completo
 - [ ] Geração via LLM dedicada, model-only, sem tools e com `NoUserSettings`
 - [ ] Validação rígida do markdown gerado antes de gravar: frontmatter permitido, slug seguro, sem `schedule`, sem `mcp_servers`, sem path/cwd perigoso
+- [ ] Skills geradas declaram `capability_profile` compatível com guard-rails; `Bash` só via `execute_safe`
 - [ ] Storage privado em `~/.aurelia/users/<user_id>/skills/<slug>.md` ou path equivalente do resolver de User Isolation
 - [ ] Escrita atômica e sem overwrite sem confirmação
 - [ ] Registry per-user carrega agentes globais + skills do usuário sem permitir shadowing silencioso de agentes globais
@@ -112,6 +113,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
    name: <slug>
    description: <short description>
    model: <optional model>
+   capability_profile: read_only | edit_project | execute_safe
    allowed_tools: [Read, Bash]
    disallowed_tools: []
    created_by: auto-skill
@@ -121,6 +123,8 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 4. O body SHALL conter seções `Procedure`, `Pitfalls` e `Verify`.
 5. WHEN frontmatter contém campos proibidos (`schedule`, `cwd`, `mcp_servers`, path absoluto, shell secreto) THEN validator SHALL rejeitar ou remover conforme regra documentada.
 6. WHEN `allowed_tools` inclui tool desconhecida THEN validator SHALL rejeitar.
+7. WHEN skill inclui `Bash` THEN `capability_profile` SHALL ser `execute_safe`; `Bash` com `read_only` ou `edit_project` SHALL ser rejeitado.
+8. WHEN skill pede `privileged` THEN validator SHALL rejeitar no MVP.
 7. WHEN conteúdo ainda contém segredo detectável THEN writer SHALL recusar salvar e informar que a skill precisa ser regenerada/editada.
 
 **Independent Test:** Fake bridge retorna skill com `tools` em vez de `allowed_tools`; validator rejeita e retry pede correção.
@@ -198,6 +202,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 - WHEN generator tenta usar tools THEN request deve estar sem tools; se o bridge não suportar `NoTools`, usar denylist total como fallback.
 - WHEN skill gerada tem `schedule` THEN rejeitar no MVP.
 - WHEN skill gerada tem `tools` em vez de `allowed_tools` THEN retry com erro estruturado.
+- WHEN skill gerada omite `capability_profile` THEN validator SHALL defaultar para `read_only` se não houver write/bash, ou pedir correção estruturada se houver tools perigosas.
 - WHEN transcript contém caminho absoluto sensível fora do cwd THEN redigir ou resumir.
 - WHEN dois `/skill save` simultâneos usam mesmo slug do mesmo user THEN writer SHALL usar lock/atomic create para evitar corrida.
 - WHEN skill file é symlink THEN writer SHALL recusar overwrite.
@@ -211,7 +216,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 - [ ] Manual capture end-to-end: turno bem-sucedido → `/skill save` → arquivo privado → `@slug` funciona
 - [ ] Transcript não guarda system prompt completo e redige segredos antes do generator
-- [ ] Validator rejeita frontmatter incompatível (`tools`, `schedule`, tool desconhecida)
+- [ ] Validator rejeita frontmatter incompatível (`tools`, `schedule`, tool desconhecida, profile/tool incompatível)
 - [ ] Registry per-user isola skills entre usuários e não shadowa global silenciosamente
 - [ ] Auto-offer P2 é configurável e default-off
 - [ ] Testes cobrem isolamento, colisão, retry, atomic write, registry e comandos

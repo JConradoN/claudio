@@ -1,6 +1,7 @@
 # Plan Mode Architecture
 
-**Depende de:** `.specs/features/multi-user-profiles/` (`TurnContext`, `SessionKey`, `UserGate`, comandos por usuário)
+**Depende de:** `.specs/features/multi-user-profiles/` (`TurnContext`, `SessionKey`, `UserGate`, comandos por usuário)  
+**Depende de:** `.specs/features/project-binding/` (`/cwd` persistente por `ConversationKey`)
 **Companion de:** `.specs/features/agent-orchestration-execution/` (`ExecutionContext`, handoff seguro, executor fail-closed)
 
 ## Problem Statement
@@ -20,10 +21,12 @@ O problema a resolver é transformar planejamento em um modo explícito, persist
 - [ ] Plan Mode tem estado persistente em SQLite por `SessionKey{chat_id, thread_id, user_id}`
 - [ ] `UserGate` roda antes de `/plan`, `/plan status`, `/plan list`, `/plan cancel` e antes de qualquer state lookup por usuário
 - [ ] Intent heuristic apenas **oferece** Plan Mode com throttle; nunca injeta prompt de orquestração silenciosamente
-- [ ] Context discovery roda ao entrar no modo e quando `cwd` muda, respeitando padrões existentes do projeto
+- [ ] Context discovery roda ao entrar no modo e quando project binding (`/cwd`) muda, respeitando padrões existentes do projeto
 - [ ] System prompt de Plan Mode injeta `ProjectContext`, fase, artefatos rastreados e regras de handoff
 - [ ] LLM pode materializar artefatos via `Write`/`Edit`; Go observa, valida caminho de forma segura e registra múltiplos artefatos por fase
 - [ ] Handoff para o executor usa o `ExecutionContext` da spec de orquestração e só limpa o estado depois que o executor aceita o plano
+- [ ] Plan Mode pode declarar `capability_profile` por task e `peers` explícitos quando colaboração entre agentes for útil
+- [ ] Plan Mode respeita guard-rails: materialização usa profile compatível e não pede tools fora do contexto aprovado
 - [ ] Resume funciona após restart do daemon ou reset de sessão do bridge
 - [ ] Comandos de status/cancel/list funcionam por usuário sem vazar estado entre pessoas no mesmo chat
 
@@ -66,7 +69,7 @@ O problema a resolver é transformar planejamento em um modo explícito, persist
 **Acceptance Criteria:**
 
 1. WHEN user manda `/plan` com `cwd` resolvido THEN Aurelia SHALL criar `planning_state` com `phase=specify`, `status=active`, `SessionKey`, `cwd` e `ProjectContext`.
-2. WHEN user manda `/plan` sem `cwd` THEN Aurelia SHALL pedir `/cwd <path>` antes de criar estado.
+2. WHEN user manda `/plan` sem project binding/effective cwd THEN Aurelia SHALL pedir `/cwd <path>` antes de criar estado.
 3. WHEN `looksLikePlanningIntent` dispara e não há estado ativo THEN Aurelia SHALL oferecer Plan Mode uma vez por janela de TTL, sem alterar o system prompt daquele turno.
 4. WHEN user aceita a oferta (`/plan`, botão futuro, ou frase explícita configurada) THEN Aurelia SHALL criar estado.
 5. WHEN user manda `/plan cancel` THEN Aurelia SHALL deletar o estado e preservar artefatos físicos.
@@ -146,10 +149,12 @@ O problema a resolver é transformar planejamento em um modo explícito, persist
 
 1. WHEN user manifesta aprovação final (`/execute`, “aprovado”, “pode executar”, “manda ver”) durante Plan Mode THEN state SHALL ir para `phase=awaiting_exec`.
 2. WHEN a LLM emite `aurelia-plan` sem aprovação explícita ou sem `phase=awaiting_exec` THEN Aurelia SHALL pedir confirmação em vez de executar.
-3. WHEN `aurelia-plan` parseia com sucesso THEN pipeline SHALL montar `ExecutionContext` com `chatID`, `threadID`, `userID`, `cwd`, `feature`, `sourcePlanPath/materialized`.
+3. WHEN `aurelia-plan` parseia com sucesso THEN pipeline SHALL montar `ExecutionContext` com `chatID`, `threadID`, `userID`, `cwd`, `feature`, `sourcePlanPath/materialized` e security context.
 4. WHEN executor/preflight aceita o plano THEN `planning_state` SHALL ser deletada ou marcada `handoff_started` com cleanup posterior.
 5. WHEN parse, preflight ou aceite do executor falha THEN `planning_state` SHALL permanecer com `last_handoff_error`.
 6. WHEN handoff acontece THEN a resposta ao usuário SHALL explicar que a execução começou e referenciar o plano/fase, sem repetir JSON bruto.
+7. WHEN o plano contém tasks executáveis THEN cada task SHOULD declarar `capability_profile` (`read_only`, `edit_project`, `execute_safe`) conforme necessidade.
+8. WHEN o plano contém colaboração entre tasks THEN cada task SHALL declarar `peers` por `task_id`; peers não concedem tools adicionais.
 
 **Independent Test:** Plano válido com executor mock aceito remove state; plano inválido ou executor recusado preserva state e registra erro.
 
@@ -185,7 +190,7 @@ O problema a resolver é transformar planejamento em um modo explícito, persist
 
 - WHEN bridge tool event não contém `input` parseável THEN observer SHALL registrar warning e não atualizar `materialized`.
 - WHEN LLM emite `aurelia-plan` fora do Plan Mode THEN comportamento legado só poderá executar se a spec de orquestração considerar seguro; Plan Mode não deve criar state retroativo.
-- WHEN cwd muda durante Plan Mode THEN state deve registrar o novo cwd e preservar artefatos antigos com seus paths absolutos.
+- WHEN project binding muda durante Plan Mode THEN state deve registrar o novo cwd, reexecutar discovery e preservar artefatos antigos com seus paths absolutos.
 - WHEN artefato materializado é deletado manualmente THEN `/plan status` SHALL mostrar como missing depois de reconciliar.
 - WHEN dois turnos concorrentes tentam salvar state THEN versionamento otimista SHALL evitar sobrescrita silenciosa.
 - WHEN discovery encontra `.specs/features/` vazia THEN layout TLC ainda conta como detectado.

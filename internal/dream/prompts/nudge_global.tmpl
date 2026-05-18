@@ -7,8 +7,7 @@ SAVE DIRECTORIES:
 - TOPIC ({{.TopicDir}}) — facts specific to this forum topic
 {{- end}}
 
-## What to save (extract ALL of these)
-- What topics were discussed (always save this)
+## What to save (extract these)
 - What the user asked for or wanted to do
 - Facts about the user (name, role, preferences, habits)
 - Decisions made or opinions expressed
@@ -29,7 +28,8 @@ SAVE DIRECTORIES:
 ```
 
 ## Rules
-- You MUST use the Write tool — do not just describe what you would save
+- IMPORTANT: Only write durable facts worth remembering. If nothing durable exists, do not write and finish.
+- Limit: maximum 3 files changed per run.
 - Do NOT touch anything in personas/ subdirectory
 - Do NOT copy full conversation text — only extract facts
 - If a file already exists with the same topic, READ it first then append new facts

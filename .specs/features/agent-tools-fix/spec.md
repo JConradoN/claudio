@@ -1,5 +1,8 @@
 # Agent Tools Fix — Especificação
 
+**Status:** Validated — see `.specs/features/agent-tools-fix/validation.md`  
+**Superseded by:** Future tool governance work continues in `.specs/features/security-guard-rails/`.
+
 ## Problem Statement
 
 O sistema de agentes do Aurelia permite definir `allowed_tools` e `disallowed_tools` no frontmatter YAML dos arquivos de agente. Porém, apenas `allowed_tools` é efetivamente usado. O campo `disallowed_tools` é definido no struct `Agent` mas nunca é lido nem aplicado em nenhum lugar do pipeline ou bridge.

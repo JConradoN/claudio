@@ -1,150 +1,235 @@
-# Project-Scoped Memory — Specification
+# User-Scoped Project Memory — Specification
+
+**Status:** Draft — revised for User Isolation  
+**Depende de:** `.specs/features/multi-user-profiles/`  
+**Depende de:** `.specs/features/project-binding/` para project slug/effective cwd persistente  
+**Complementa:** `.specs/features/learning-nudge/`, `.specs/features/plan-mode-architecture/`, `.specs/features/auto-skills/`
 
 ## Problem Statement
 
-A Aurelia atualmente tem apenas memória global (`~/.aurelia/memory/`). Todos os fatos — pessoais, de projeto, preferências — ficam num único diretório. Isso causa poluição quando o usuário trabalha em múltiplos projetos: fatos do projeto A aparecem no contexto do projeto B, consumindo tokens e confundindo o modelo.
+Aurelia precisa lembrar fatos globais, preferências pessoais e contexto de projeto sem misturar informações entre usuários autorizados nem entre projetos. A versão anterior desta spec modelava memória de projeto como global por `cwd`:
 
-O Claude Code resolve isso com memória em 3 camadas por projeto:
-1. **Auto Memory (privada)** — fatos pessoais do dev naquele projeto
-2. **Team Memory** — convenções e decisões compartilhadas com o time
-3. **Managed/Policy** — configurações corporativas
+```text
+~/.aurelia/projects/<project_slug>/memory/
+```
 
-O auto-memory do SDK está desabilitado via feature flag server-side (`tengu_auto_mode_config`), então não há conflito — toda a gestão de memória é da Aurelia.
+Isso conflita com **User Isolation**: dois usuários autorizados podem trabalhar no mesmo repositório, mas suas anotações pessoais, work log, decisões individuais e preferências de projeto não devem se misturar.
+
+A nova direção é separar claramente:
+
+1. **Aurelia global** — identidade da Aurelia, políticas e conhecimento compartilhado do deployment.
+2. **User global** — fatos e preferências pessoais do usuário, cross-project.
+3. **User × Project private** — memória pessoal daquele usuário naquele projeto.
+4. **Project team memory** — convenções e decisões compartilháveis do projeto, opcionalmente versionáveis no futuro.
+5. **Conversation/topic memory** — contexto compartilhado por tópico Telegram autorizado.
 
 ## Goals
 
-- [ ] Memória em 3 camadas: global + projeto (privada) + projeto (team)
-- [ ] Global: fatos pessoais, preferências, estilo de comunicação — cross-projeto
-- [ ] Projeto privada: contexto pessoal do usuário naquele projeto (anotações, decisões individuais)
-- [ ] Projeto team: stack, convenções, padrões, decisões arquiteturais — compartilhável com o time
-- [ ] System prompt injeta as 3 camadas (global + projeto privada + projeto team)
-- [ ] Extrator classifica automaticamente cada fato na camada correta
-- [ ] Dream consolida cada camada independentemente
-- [ ] Troca de projeto carrega memórias diferentes sem perder as globais
+- [ ] Memória pessoal isolada por `user_id`
+- [ ] Memória de projeto privada isolada por `(user_id, project_slug)`
+- [ ] Team memory separada da memória privada, com possibilidade futura de sincronizar via git
+- [ ] IDENTITY/SOUL continuam globais ao deployment; USER é por usuário
+- [ ] System prompt injeta apenas camadas relevantes ao `TurnContext`
+- [ ] Extrator/nudge classifica fatos na camada correta
+- [ ] Dream consolida cada camada sem vazar entre usuários
+- [ ] `/cwd` é um project binding persistente por conversa/thread, mas memória pessoal vem do sender
+- [ ] Migração single-user é explícita, idempotente e reversível em duas fases
 
 ## Out of Scope
 
-- Busca full-text em sessões anteriores (FTS5 como Hermes)
-- Providers externos de memória (Honcho, Mem0)
-- Memória por usuário em cenários multi-tenant
-- Sincronização de team memory via git (v2)
+- Abrir memória de um usuário para outro usuário
+- Multi-tenant entre vários donos/deployments
+- Busca full-text em todo histórico de sessões
+- Provider externo de memória (Mem0, Honcho etc.)
+- Sincronização automática da team memory via git no MVP
+- UI web para editar memória
 
-## Architecture
+---
 
-### Diretórios
+## Memory Layers
 
-```
+### Directory model
+
+```text
 ~/.aurelia/
-├── memory/                                    # GLOBAL — cross-projeto
-│   ├── MEMORY.md                              # Índice global
-│   ├── user_preferences.md                    # Preferências, idioma, estilo
-│   ├── user_facts.md                          # Fatos pessoais
-│   └── ...
+├── memory/
+│   ├── personas/
+│   │   ├── IDENTITY.md                  # global: quem é Aurelia
+│   │   └── SOUL.md                      # global: personalidade/valores
+│   └── policy/                          # global: regras do deployment, futuras
+│
+├── users/
+│   └── <user_id>/
+│       ├── profile.json
+│       ├── personas/
+│       │   └── USER.md                  # quem é este usuário
+│       ├── memory/
+│       │   ├── MEMORY.md                # índice pessoal cross-project
+│       │   ├── preferences.md
+│       │   └── facts.md
+│       ├── projects/
+│       │   └── <project_slug>/
+│       │       └── memory/
+│       │           ├── MEMORY.md        # índice pessoal neste projeto
+│       │           ├── notes.md
+│       │           └── work_log.md
+│       └── skills/                      # Auto-Skills privadas
 │
 ├── projects/
-│   ├── <sanitized-cwd>/
-│   │   └── memory/                            # PROJETO — privada
-│   │       ├── MEMORY.md                      # Índice privado
-│   │       ├── my_notes.md                    # Anotações pessoais
-│   │       ├── work_log.md                    # O que EU fiz
-│   │       └── team/                          # PROJETO — team (compartilhável)
-│   │           ├── MEMORY.md                  # Índice team
-│   │           ├── architecture.md            # Decisões de arquitetura
-│   │           ├── conventions.md             # Padrões do time
-│   │           ├── stack.md                   # Stack e dependências
-│   │           └── ...
-│   └── <outro-cwd>/
-│       └── memory/
-│           ├── ...
-│           └── team/
-│               └── ...
+│   └── <project_slug>/
+│       └── team/
+│           ├── MEMORY.md                # índice compartilhável
+│           ├── architecture.md
+│           ├── conventions.md
+│           └── stack.md
+│
+└── topics/
+    └── chat_<chat_id>/thread_<thread_id>/
+        └── MEMORY.md                    # contexto compartilhado do tópico
 ```
 
-### Camadas e escopo
+### Layer semantics
 
-| Camada | Diretório | Escopo | Exemplos |
+| Layer | Path | Scope | Examples |
 |---|---|---|---|
-| Global | `~/.aurelia/memory/` | Cross-projeto, pessoal | Idioma, pets, preferências de comunicação |
-| Projeto (privada) | `~/.aurelia/projects/<cwd>/memory/` | Por projeto, pessoal | Anotações, work log, decisões individuais |
-| Projeto (team) | `~/.aurelia/projects/<cwd>/memory/team/` | Por projeto, compartilhável | Stack, convenções, arquitetura, padrões |
+| Aurelia persona | `~/.aurelia/memory/personas/` | deployment global | IDENTITY, SOUL |
+| User global | `~/.aurelia/users/<id>/memory/` | user cross-project | nome, idioma, preferências |
+| User project private | `~/.aurelia/users/<id>/projects/<slug>/memory/` | user × project | work log, notas pessoais |
+| Project team | `~/.aurelia/projects/<slug>/team/` | project shared | stack, padrões, ADRs resumidos |
+| Topic memory | `~/.aurelia/topics/chat_<id>/thread_<id>/` | conversation shared | decisões do tópico, contexto temporário |
 
-### Sanitização do path
+---
 
-Mesmo padrão do Claude Code: substitui `/` por `-`, remove prefixo de drive.
+## User Stories
 
-Exemplo: `/media/rafael/projetos/app-test-cep` → `-media-rafael-projetos-app-test-cep`
+### P0: Prompt assembly com camadas corretas ⭐ MVP
 
-### Injeção no System Prompt
+**User Story:** Como usuário autorizado, quero que Aurelia use minhas memórias, o contexto do projeto e o tópico correto sem misturar com outro usuário.
 
-```
-## Your Memory
+**Acceptance Criteria:**
 
-### Global (cross-project)
-<conteúdo de ~/.aurelia/memory/>
+1. WHEN `TurnContext` contém `user_id` THEN prompt SHALL carregar `USER.md` e memória pessoal desse usuário.
+2. WHEN `cwd` efetivo existe THEN prompt SHALL carregar memória privada `(user_id, project_slug)`.
+3. WHEN `cwd` efetivo existe THEN prompt MAY carregar team memory do projeto.
+4. WHEN `chat_id/thread_id` existe THEN prompt MAY carregar topic memory compartilhada.
+5. WHEN outro usuário no mesmo tópico fala THEN ele SHALL compartilhar `/cwd` e topic memory, mas não USER/memória privada.
+6. WHEN não há `cwd` THEN nenhuma memória de projeto SHALL ser injetada.
 
-### Project: app-test-cep (private)
-<conteúdo de ~/.aurelia/projects/<cwd>/memory/>
+**Independent Test:** User A e User B no mesmo tópico/projeto recebem prompts com mesma team/topic memory, mas USER e project-private diferentes.
 
-### Project: app-test-cep (team)
-<conteúdo de ~/.aurelia/projects/<cwd>/memory/team/>
-```
+---
 
-Quando não há cwd definido, apenas a memória global é injetada.
+### P0: Path resolver para user × project ⭐ MVP
 
-### Extração (background)
+**User Story:** Como sistema, quero um único resolver para calcular paths de memória sem duplicar sanitização.
 
-O extrator recebe o cwd ativo e classifica cada fato:
+**Acceptance Criteria:**
 
-| Tipo de informação | Camada |
+1. `PathResolver.UserMemoryDir(userID)` SHALL apontar para `~/.aurelia/users/<id>/memory/`.
+2. `PathResolver.UserProjectMemoryDir(userID, cwd)` SHALL apontar para `~/.aurelia/users/<id>/projects/<slug>/memory/`.
+3. `PathResolver.ProjectTeamMemoryDir(cwd)` SHALL apontar para `~/.aurelia/projects/<slug>/team/`.
+4. `ProjectSlug(cwd)` SHALL ser determinístico, filesystem-safe e estável entre boots.
+5. Path traversal, symlink ambíguo ou cwd vazio SHALL retornar erro claro.
+
+**Independent Test:** Mesmo cwd + users diferentes geram project-private diferentes e team memory igual.
+
+---
+
+### P1: Classificação de fatos por camada ⭐ MVP
+
+**User Story:** Como Aurelia, quero salvar cada memória no lugar certo para reduzir ruído e evitar vazamento.
+
+**Acceptance Criteria:**
+
+1. Fatos pessoais e preferências SHALL ir para user global.
+2. Work log e notas individuais do projeto SHALL ir para user project private.
+3. Stack, padrões e decisões compartilháveis SHALL ir para project team.
+4. Decisões específicas do tópico SHALL ir para topic memory.
+5. Fatos sensíveis ou ambíguos SHALL preferir camada privada do usuário.
+6. Extrator SHALL receber instruções explícitas de não escrever dados pessoais em team memory.
+
+**Independent Test:** Entrada com nome do usuário, stack do projeto e nota pessoal produz três writes em camadas distintas.
+
+---
+
+### P1: Dream/consolidação por camada ⭐ MVP
+
+**User Story:** Como operador, quero consolidar memórias sem misturar escopos.
+
+**Acceptance Criteria:**
+
+1. Dream global de user SHALL consolidar apenas `~/.aurelia/users/<id>/memory/`.
+2. Dream project private SHALL consolidar apenas `(user_id, project_slug)`.
+3. Dream team SHALL consolidar apenas project team memory e nunca incluir USER facts.
+4. Dream topic SHALL consolidar apenas topic memory daquele `ConversationKey`.
+5. Dream/nudge SHALL usar `CapabilityProfile=edit_project` sem `Bash`.
+
+**Independent Test:** Rodar dream para User A não altera arquivos de User B.
+
+---
+
+### P1: Migração single-user explícita ⭐ MVP
+
+**User Story:** Como dono do deployment, quero migrar a memória atual para o novo layout por usuário sem risco de perda.
+
+**Acceptance Criteria:**
+
+1. Migração SHALL ser comando explícito, não automática no boot.
+2. `--dry-run` SHALL mostrar todos os moves/copies planejados.
+3. Migração SHALL copiar, verificar e só então remover origem.
+4. `USER.md` legado SHALL ir para `users/<target_id>/personas/USER.md`.
+5. Memórias pessoais legadas SHALL ir para `users/<target_id>/memory/`.
+6. Project memories legadas SHALL ir para `users/<target_id>/projects/<slug>/memory/` salvo classificação explícita como team.
+7. Marker de migração SHALL evitar rerun acidental.
+
+---
+
+### P2: Team memory compartilhável
+
+**User Story:** Como time, quero separar convenções compartilháveis das notas privadas.
+
+**Acceptance Criteria:**
+
+1. Team memory SHALL ter diretório próprio por projeto.
+2. Escritas em team memory SHALL exigir classificação clara como compartilhável.
+3. Futuro sync via git SHALL ser possível sem exportar memórias privadas.
+4. `/memory team` futuro MAY listar/resumir team memory.
+
+---
+
+## Extraction Classification Guide
+
+| Informação | Camada |
 |---|---|
-| Fatos pessoais (nome, pets, hobbies) | Global |
-| Preferências de comunicação, idioma | Global |
-| Estilo de trabalho pessoal | Global |
-| Stack, dependências, versões | Projeto → team |
-| Convenções de código, padrões | Projeto → team |
-| Decisões de arquitetura | Projeto → team |
-| Bugs conhecidos e workarounds | Projeto → team |
-| Anotações pessoais ("preciso revisar X") | Projeto → privada |
-| Work log ("hoje implementei Y") | Projeto → privada |
-| Estado de tarefas individuais | Projeto → privada |
+| Nome, idioma, estilo do usuário | User global |
+| Preferência pessoal de ferramenta | User global |
+| “Neste projeto eu quero revisar X” | User project private |
+| “Hoje implementei Y” | User project private |
+| Stack, versões, comandos de validação | Project team |
+| Convenções de arquitetura/testes | Project team |
+| Decisão tomada no tópico atual | Topic memory ou Project team, conforme escopo |
+| PII, segredo, dado privado | User private ou descartar; nunca team |
 
-O prompt do extrator recebe 3 diretórios (global, projeto-privada, projeto-team) e decide onde cada fato vai.
+---
 
-### Dream (consolidação)
+## Affected Packages
 
-- Dream global: consolida `~/.aurelia/memory/` (a cada 24h/5 turns)
-- Dream projeto: consolida `~/.aurelia/projects/<cwd>/memory/` + `team/` (mesma cadência, só quando projeto ativo)
-
-### Criação automática de diretórios
-
-Quando um cwd é setado pela primeira vez, o sistema cria automaticamente:
-- `~/.aurelia/projects/<sanitized-cwd>/memory/`
-- `~/.aurelia/projects/<sanitized-cwd>/memory/team/`
-- `MEMORY.md` vazio em cada um
-
-### Migração
-
-A memória global atual (`~/.aurelia/memory/`) é preservada. Arquivos de projeto existentes (como `project_app_test_cep.md`) podem ser migrados para o diretório do projeto correspondente na primeira vez que o cwd é setado.
-
-## Pacotes afetados
-
-| Pacote | Mudança |
+| Package | Change |
 |---|---|
-| `internal/runtime/` | `ProjectMemoryDir(cwd)` e `ProjectTeamMemoryDir(cwd)` no PathResolver |
-| `internal/dream/` | Extrator com 3 targets, dream per-project |
-| `internal/dream/` | Prompt de extração com classificação por camada |
-| `internal/telegram/` | `buildMemoryInstructions` injeta 3 camadas |
-| `internal/telegram/` | `loadMemoryContents` lê global + projeto + team |
-| `internal/session/` | `SetCwd` cria diretórios de memória do projeto |
+| `internal/runtime/` | Path resolver para user/project/team/topic memory |
+| `internal/persona/` | USER por user; IDENTITY/SOUL globais |
+| `internal/pipeline/` | Prompt assembly com `TurnContext` e camadas corretas |
+| `internal/dream/` | Extrator/nudge com targets escopados |
+| `internal/session/` | Separar `SessionKey` de `ConversationKey` |
+| `cmd/aurelia/` | Comando de migração explícito |
 
-## Acceptance Criteria
+---
 
-1. Com cwd definido, model recebe memória global + projeto privada + projeto team
-2. Sem cwd, model recebe apenas memória global
-3. Extrator classifica fatos nas 3 camadas corretamente
-4. `/new` reseta sessão mas mantém todas as memórias
-5. Trocar de cwd carrega memórias do novo projeto, mantém globais
-6. Dream consolida cada camada independentemente
-7. Diretórios de projeto criados automaticamente no primeiro uso
-8. Team memory fica em subpasta separada (futuramente compartilhável via git)
-9. Memória global existente preservada sem migração forçada
+## Success Criteria
+
+- [ ] User A não lê memória privada de User B
+- [ ] Mesmo projeto tem private memory por user e team memory compartilhada
+- [ ] Prompt sem cwd não injeta memória de projeto
+- [ ] Dream/nudge não misturam camadas
+- [ ] Migração single-user preserva dados e é dry-run friendly
+- [ ] `go build ./... && go vet ./... && go test ./...` limpo quando implementado

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-05-18
+
+### Corrigido
+- Corrigido falso sucesso quando o Bridge retorna resultado vazio, evitando resposta "(sem resposta)" e contaminação da memória.
+- Endurecido o sistema de nudge/dream para executar extração e consolidação de memória sem ferramentas de arquivo do PI SDK.
+- Adicionado writer seguro em Go para memória, com validação de paths, bloqueio de `personas/`, proteção contra symlinks e sanitização de fatos/títulos.
+- Adicionado rate limit por chat/thread para nudge, incluindo tentativas com erro ou JSON inválido.
+- Memórias carregadas no prompt agora são marcadas como dados não confiáveis para reduzir risco de prompt injection persistente.
+
+### Adicionado
+- Testes de regressão para resposta vazia, parsing JSON de memória, path traversal, symlinks, sanitização, rate limit e consolidação segura.
+
 ## [0.7.1] - 2026-05-18
 
 ### Corrigido

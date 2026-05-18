@@ -1,138 +1,281 @@
 # Roadmap
 
-## Done
+## Done / Validated Foundation
 
-| Feature | Spec | Notes |
-|---------|------|-------|
-| Bridge Recovery | `.specs/features/bridge-recovery/` | Auto retry with session resume, cooldown after 3 consecutive failures (commit `0484f08`) |
-| Command Layer | `.specs/features/command-layer/` | Local interception of cron CRUD, reset, status, list agents/models — saves ~15s per call |
-| Agent Tools Fix | `.specs/features/agent-tools-fix/` | `disallowed_tools` now honored end-to-end (commit `1bf7572`) |
-| Project Memory | `.specs/features/project-memory/` | Project-scoped 3-layer memory + nudge integration (commit `fa53095`) |
-| Learning Nudge | `.specs/features/learning-nudge/` | Periodic dream/nudge review replaces per-turn extraction (commit `81a58d4`) |
-| PI Resilience | `.specs/features/pi-resilience/` | Resilient bridge wrapper + per-class circuit breaker + run supervisor in `internal/pipeline/` |
-| Dependency Checker | `.specs/features/dependency-checker/` | Pre-flight check for Node/npm/git/gh during onboarding (commit `3f9dd19`) |
-| UX Polish | `.specs/features/ux-polish/` | Ack, status, progress, queue, reset summary, help, error hints (commit `da8abeb`) |
+Estas features já foram implementadas ou têm validação registrada. Elas são base do roadmap atual, não entram como próximas fases principais.
 
----
-
-## In Flight — Evolution Track
-
-Aurelia hoje funciona como personal agent de um deployment. A próxima onda de evolução mantém essa identidade, mas endurece o isolamento por identidade Telegram: cada `user_id` autorizado pela whitelist tem memória, sessão, cron e skills privados. Isso não transforma Aurelia em plataforma multi-tenant; é proteção contra vazamento em DMs, grupos e deployments com mais de uma pessoa autorizada.
-
-**Ordem é importante**: cada spec depende da anterior. A dependência é tanto técnica (estruturas, paths, `user_id`) quanto conceitual (cada uma encaixa peças que a próxima usa).
-
-### 1. Agent Orchestration — Execution
-
-**Spec:** `.specs/features/agent-orchestration-execution/`
-**Status:** ~80% no código (`internal/orchestrator/`); spec reescrita para fechar gaps remanescentes
-**Tamanho:** ~12 tasks
-
-**Problem:** Aurelia já decompõe planos em workers e executa em worktrees, mas o ciclo não fecha: `currentBranch` é stub, validation não tem retry, `CommitChanges`/`CreatePR`/`UpdateTasksStatus` existem mas não são chamados, worktrees órfãos não são limpos no startup, `task.Prompt` aparece duplicado no system+user, e o lookup de spec.md/design.md por feature pega o último alfabético.
-
-**Scope (P1):** real `git rev-parse` para base branch, retry-with-feedback no Quality Gate (até 3x antes de escalar), wiring de commit/PR/tasks-status, orphan cleanup no startup, plan carrega campo `feature` e `create_pr`.
-
-**Scope (P2):** per-worker `max_turns`, cost tracking, partial-failure polish.
-
-**Scope (P3):** budget enforcement por worker.
-
-**Packages:** `internal/orchestrator/`, `internal/pipeline/`, `internal/telegram/`
+| Feature | Spec | Status | Notes |
+|---|---|---|---|
+| Bridge Recovery | `.specs/features/bridge-recovery/` | Validated | Auto retry with session resume, cooldown after consecutive bridge failures |
+| Command Layer | `.specs/features/command-layer/` | Done | Local interception of deterministic commands; avoids unnecessary LLM calls |
+| Agent Tools Fix | `.specs/features/agent-tools-fix/` | Validated | `disallowed_tools` honored end-to-end; future governance moved to guard-rails |
+| PI Resilience | `.specs/features/pi-resilience/` | Validated | Retry, fallback, circuit breaker, translated actionable errors |
+| Dependency Checker | `.specs/features/dependency-checker/` | Validation plan exists | Pre-flight checks for Node/npm/git/gh |
+| UX Polish | `.specs/features/ux-polish/` | Mostly validated | Ack, queue/status/progress polish, better errors and help |
 
 ---
 
-### 2. User Isolation
+## Current Evolution Track
 
-**Spec:** `.specs/features/multi-user-profiles/`
-**Status:** A implementar
-**Tamanho:** ~20 tasks
-**Depende de:** Nenhuma (mas executar **antes** de 3 e 4)
+Aurelia continua sendo um **personal agent persistente via Telegram**, com PI como motor de execução e Go como camada de orquestração, persistência, segurança e memória.
 
-**Problem:** A whitelist (`TelegramAllowedUserIDs`) está pronta para vários users, mas internamente Aurelia ainda precisa tratar cada sender como uma identidade isolada. `~/.aurelia/memory/` é global, `USER.md` é único, sessões ainda são por chat/thread, e cron owner precisa ser normalizado. Adicionar uma segunda conta autorizada hoje pode resultar em vazamento de contexto.
+A próxima onda foca em tornar o sistema seguro e estável para trabalho autônomo em projetos reais:
 
-**Scope (P1):** `TurnContext` com `user_id`, sessão LLM por `(chat_id, thread_id, user_id)`, memória pessoal por `user_id` (`~/.aurelia/users/<id>/`), `USER.md` per-user (IDENTITY/SOUL continuam globais), cron jobs filtrados por `owner_user_id`, onboarding conversacional via Telegram para users novos, comando CLI `aurelia migrate-multi-user` idempotente para migrar deployment existente.
+1. isolar usuários autorizados;
+2. tornar `/cwd` um vínculo persistente de conversa com projeto;
+3. governar tools do PI sem quebrar o fluxo de coding;
+4. reconstruir memória/nudge sobre escopos corretos;
+5. só então ativar planejamento, execução, agent comms e auto-skills.
 
-**Scope (P2):** comandos `/users` e `/forget-me`.
-
-**Por que primeiro entre as próximas:** Plan Mode e Auto-Skills ambos precisam de `user_id` propagado e de paths per-user (planning state é por user; skills são privadas por user). Construir essas duas sem isolamento pronto causa retrofit caro.
-
-**Packages:** `internal/users/` (novo), `internal/persona/`, `internal/dream/`, `internal/cron/`, `internal/pipeline/`, `cmd/aurelia/`
+**Ordem é importante:** cada spec abaixo depende da anterior, técnica e conceitualmente.
 
 ---
 
-### 3. Plan Mode Architecture
+## 1. User Isolation
 
-**Spec:** `.specs/features/plan-mode-architecture/`
-**Status:** A implementar
-**Tamanho:** ~17 tasks
-**Depende de:** User Isolation (precisa de `user_id` no `pipeline.Input` e nas chaves de state)
+**Spec:** `.specs/features/multi-user-profiles/`  
+**Status:** A implementar  
+**Prioridade:** P0 foundation
 
-**Problem:** Hoje a heurística `looksLikePlanningIntent` injeta um prompt de TLC quando keywords gatilho aparecem, mas Plan Mode não é um modo — é um prompt que evapora na próxima mensagem. Sem estado persistente, sem discovery do contexto do projeto, sem rastreabilidade do que foi materializado.
+**Problem:** A whitelist já permite múltiplos `user_id`s, mas o runtime ainda mistura estado pessoal: sessões, memória, persona USER, cron, usage e comandos de controle.
 
-**Scope (P1):** estado de Plan Mode em SQLite (`planning_state` por chat × thread × user), context discovery automático (CLAUDE.md, AGENTS.md, padrões TLC/RFC/ADR, stack), `BuildPlanningPrompt` informa LLM sobre o contexto e oferece opções de materialização — **Go não força layout**, LLM decide via tools do PI. Observer captura paths de Write/Edit em `materialized`. Handoff pro executor via `aurelia-plan` (mecânica existente) deleta o state. Resume nativo após restart.
+**Scope mínimo recomendado primeiro:**
 
-**Scope (P2):** comandos `/plan`, `/plan status`, `/plan list`, `/cancel`.
+- `TurnContext` com `user_id`;
+- `SessionKey{chat_id, thread_id, user_id}` para sessão LLM/usage/active run;
+- `ConversationKey{chat_id, thread_id}` para `/cwd` e topic memory;
+- `UserGate` antes de comandos/pipeline;
+- USER/persona/memória pessoal por usuário;
+- cron owner normalizado.
 
-**Scope (P3):** materialização sob demanda ("salva isso como spec agora").
-
-**Por que depois de User Isolation:** State persistente é por user. Sem isso, ou todos os users compartilham planning_state (vazamento), ou degrade pra single-user (retrofit depois).
-
-**Packages:** `internal/orchestrator/planning/` (novo), `internal/pipeline/`, `internal/telegram/`
-
----
-
-### 4. Auto-Skills
-
-**Spec:** `.specs/features/auto-skills/`
-**Status:** A implementar
-**Tamanho:** ~17 tasks
-**Depende de:** User Isolation (skills privadas por user em `~/.aurelia/users/<id>/skills/`)
-
-**Problem:** Tarefas complexas bem-sucedidas viram conhecimento perdido. Hermes mostrou que skill auto-creation é uma das features mais valorizadas — o agente "cresce com você". Aurelia tem o esqueleto (agent registry, `~/.aurelia/agents/`) mas não captura skills automaticamente.
-
-**Scope (P1):** captura manual explícita (`/skill save <slug>`) do último turn/execução bem-sucedido, geração via LLM auto-resumo (`BuildSkillCapturePrompt` + bloco `aurelia-skill`), storage privado em `~/.aurelia/users/<id>/skills/<slug>.md`, registry per-user (skills sobrescrevem agents globais), comandos básicos `/skills`.
-
-**Scope (P2):** detector heurístico de tarefa complexa (N+ tool calls OR duração OR diversidade de tools) e oferta com botões inline no Telegram após turn candidato, atrás de config para evitar ruído.
-
-**Scope (P3):** tuning fino dos thresholds e UX de ofertas.
-
-**Out of scope desta spec:** auto-improvement de skills (Hermes faz; aqui MVP é capture), skill sharing entre users, versioning.
-
-**Por que por último:** depende de User Isolation (paths) e ganha mais valor se Plan Mode estiver entregue (planos viram skills mais ricas).
-
-**Packages:** `internal/skills/` (novo), `internal/agents/`, `internal/pipeline/`, `internal/telegram/`
+**Por que primeiro:** sem `user_id` propagado, Plan Mode, Auto-Skills, memória e nudge vazam estado entre usuários autorizados.
 
 ---
 
-## Sequenciamento e Dependências
+## 2. Persistent Project Binding
 
+**Spec:** `.specs/features/project-binding/`  
+**Status:** A implementar  
+**Depende de:** User Isolation slice mínimo (`ConversationKey` separado de `SessionKey`)
+
+**Problem:** hoje `/cwd` vive no `session.Store` em memória e pode sumir no restart ou GC. Mas `/cwd` representa “esta conversa trabalha neste projeto”, não uma sessão temporária.
+
+**Scope:**
+
+- persistir `/cwd` manual por `ConversationKey{chat_id, thread_id}`;
+- manter fallback tópico → grupo;
+- `/cwd clear` e `/cwd clear --group`;
+- auto-detect não persiste sem confirmação;
+- Plan Mode/Orchestration/Nudge/Memory usam binding persistente.
+
+**Por que agora:** todas as features de projeto precisam de um `cwd` confiável e permanente.
+
+---
+
+## 3. Security Guard-Rails
+
+**Spec:** `.specs/features/security-guard-rails/`  
+**Status:** Draft revisado  
+**Depende de:** Project Binding para `cwd` confiável
+
+**Problem:** PI executa tools com privilégios do usuário local. Desligar `Bash` globalmente é restritivo demais; o correto é governar tools por contexto.
+
+**Scope:**
+
+- `CapabilityProfile`: `observe`, `read_only`, `edit_project`, `execute_safe`, `privileged`;
+- PI `tool_call` hooks no bridge;
+- policy para `bash`, `read`, `write`, `edit` e paths sensíveis;
+- audit redigido;
+- fail-closed se policy/hook não carregar;
+- manter build/test/lint funcionando em `execute_safe`.
+
+**Por que antes de autonomia:** Plan Mode, Orchestration, Nudge e Auto-Skills vão acionar tools; precisam de governança antes de escalar.
+
+---
+
+## 4. User-Scoped Project Memory
+
+**Spec:** `.specs/features/project-memory/`  
+**Status:** Draft revisado  
+**Depende de:** User Isolation + Project Binding
+
+**Problem:** a versão antiga de memória por projeto era global por `cwd`. Com mais de um usuário autorizado, isso mistura notas pessoais entre users.
+
+**Scope:**
+
+- user global memory;
+- user × project private memory;
+- project team memory por repositório/cwd;
+- topic memory por `ConversationKey`;
+- prompt assembly com camadas corretas;
+- migration explícita do layout single-user.
+
+**Por que antes do nudge:** nudge precisa saber onde salvar cada memória.
+
+---
+
+## 5. Learning Nudge — Scoped Memory Review
+
+**Spec:** `.specs/features/learning-nudge/`  
+**Status:** Draft revisado  
+**Depende de:** User Isolation + Project Binding + Project Memory + Security Guard-Rails
+
+**Problem:** extração por-turn/snippet perde contexto; nudge profundo precisa ser escopado para não vazar entre usuários/projetos.
+
+**Scope:**
+
+- transcript recorder por `SessionKey`;
+- redaction antes de chamar PI;
+- `CapabilityProfile=edit_project`, sem `Bash`;
+- escrita nas camadas de memória corretas;
+- sugestões de Auto-Skills, sem criar skills automaticamente.
+
+**Por que aqui:** usa as camadas de memória e guard-rails já definidos.
+
+---
+
+## 6. Plan Mode Architecture
+
+**Spec:** `.specs/features/plan-mode-architecture/`  
+**Status:** Revised after code review + roadmap updates  
+**Depende de:** User Isolation + Project Binding + Security Guard-Rails
+
+**Problem:** hoje planejamento é heurístico e evapora; precisa virar modo explícito, persistente e retomável.
+
+**Scope:**
+
+- `/plan`, `/plan status`, `/plan cancel`, `/plan list`;
+- state persistente por `SessionKey`;
+- discovery baseado no project binding;
+- materialização observada via Write/Edit;
+- handoff seguro para executor;
+- tasks podem declarar `capability_profile` e `peers`.
+
+**Por que antes da execução:** produz o plano aprovado que a execução consome.
+
+---
+
+## 7. Agent Orchestration — Execution
+
+**Spec:** `.specs/features/agent-orchestration-execution/`  
+**Status:** Draft gap-closing; parte já existe em `internal/orchestrator/`  
+**Depende de:** Project Binding + Security Guard-Rails; idealmente Plan Mode para produção dos artefatos
+
+**Problem:** Aurelia já tem parte do executor, mas o ciclo não fecha com segurança: cwd errado, retry ausente, validação fraca, merge concorrente, commit/PR não chamados, staging amplo.
+
+**Scope:**
+
+- `ExecutionContext` com cwd persistente, thread/user/security context;
+- git preflight;
+- workers por wave;
+- validation com diff/verify real;
+- retry com feedback;
+- merge serial;
+- update `tasks.md`, commit seguro e PR opcional;
+- manifest com security decisions e peer metadata.
+
+**Por que depois do Plan Mode:** pode ser implementado em paralelo parcialmente, mas o fluxo completo depende de plano aprovado e cwd estável.
+
+---
+
+## 8. Agent Comms
+
+**Spec:** `.specs/features/agent-comms/`  
+**Status:** Draft  
+**Depende de:** Agent Orchestration + Security Guard-Rails
+
+**Problem:** workers especializados ganham qualidade quando podem consultar peers, mas isso precisa ser local, auditado e com limites.
+
+**Scope:**
+
+- Agent Bus local por run;
+- peers explícitos por task;
+- anti-loop/budget/timeouts;
+- payload policy e audit;
+- manifest com peer message counts;
+- sem rede/cross-device no MVP.
+
+**Por que depois da execução:** é melhoria da orquestração, não requisito para o primeiro executor seguro.
+
+---
+
+## 9. Auto-Skills
+
+**Spec:** `.specs/features/auto-skills/`  
+**Status:** Revised after code review + roadmap updates  
+**Depende de:** User Isolation + Security Guard-Rails; ganha valor com Nudge, Plan Mode, Orchestration e Agent Comms
+
+**Problem:** tarefas bem-sucedidas viram conhecimento perdido; Auto-Skills transforma procedimentos úteis em skill-agents privados.
+
+**Scope:**
+
+- recorder de último turno bem-sucedido;
+- `/skill save <slug>` explícito;
+- geração via LLM sem tools;
+- validação rígida de frontmatter;
+- storage privado por user;
+- `capability_profile` obrigatório/validado;
+- registry per-user.
+
+**Por que por último:** depende de isolamento e segurança; fica muito mais valioso quando pode aprender com nudge/orchestration/agent-comms.
+
+---
+
+## Sequenciamento resumido
+
+```text
+Validated foundation
+      │
+      ▼
+1. User Isolation
+      │
+      ▼
+2. Persistent Project Binding
+      │
+      ▼
+3. Security Guard-Rails
+      │
+      ▼
+4. User-Scoped Project Memory
+      │
+      ▼
+5. Learning Nudge
+      │
+      ▼
+6. Plan Mode Architecture
+      │
+      ▼
+7. Agent Orchestration — Execution
+      │
+      ▼
+8. Agent Comms
+      │
+      ▼
+9. Auto-Skills
 ```
-Done foundation
-     │
-     ▼
-1. Agent Orchestration — Execution   ──→  fecha trabalho já 80% feito
-     │
-     ▼
-2. User Isolation                    ──→  fundação pra 3 e 4
-     │
-     ├──────────────────────────────┐
-     ▼                              ▼
-3. Plan Mode Architecture       4. Auto-Skills
-                                    ↑
-                  (ganha mais valor se 3 estiver pronto, mas não bloqueia)
+
+## Nota de implementação incremental
+
+`User Isolation` é grande. Não é necessário implementar tudo antes de seguir. O primeiro slice deve entregar apenas a base que desbloqueia o resto:
+
+```text
+TurnContext
+SessionKey com user_id
+ConversationKey sem user_id
+UserGate básico
+paths mínimos por user
 ```
 
-Ordem de entrega proposta:
+Depois disso, `project-binding` já pode ser implementado e estabilizar o conceito de projeto/cwd para o restante do roadmap.
 
-1. **Agent Orchestration — Execution** — 1 semana, fecha gaps que já se manifestam
-2. **User Isolation** — 1-2 semanas, mexe em várias camadas mas com fases pequenas e plano claro de migração
-3. **Plan Mode Architecture** — 1 semana, depende de (2)
-4. **Auto-Skills** — 1 semana, depende de (2); melhor se (3) estiver pronto
+## Backlog futuro
 
-## Backlog
-
-_(Vazio — features futuras serão adicionadas quando emergirem.)_
+- Cross-device Agent Comms seguro
+- Human approval flow para guard-rails ambíguos
+- OS sandbox para Bridge
+- Project history/favorites para `/cwd`
+- Team memory sync via git
 
 ## Notas de visão
 
-O Aurelia ocupa o nicho de **personal agent persistente via Telegram**, estilo Hermes Agent (Nous Research) e OpenClaw. Não é IDE, não é coding agent in-editor — é um agente que vive em background no seu deployment (laptop ou VPS), aceita tarefas via mensagem, executa, e mantém memória entre sessões. PI SDK é o motor de inferência; Go é o orquestrador, o observador, e a camada de persistência.
-
-A evolução proposta aqui mantém essa identidade: nada de UI web, nada de multi-tenant, nada de coding-only. “User Isolation” é apenas isolamento de dados entre `user_id`s autorizados, não uma virada para SaaS. A capacidade de planejamento e auto-skills se aplica tanto a tarefas de desenvolvimento quanto a outras (pesquisa, organização, operações) — a LLM decide o tipo de tarefa com base no contexto, Go fornece a infraestrutura.
+Aurelia ocupa o nicho de **personal agent persistente via Telegram**. Não é IDE, não é SaaS multi-tenant, não é apenas coding agent. PI SDK é o motor de inferência/execução; Go é a camada de orquestração, segurança, memória, persistência e UX Telegram.

@@ -28,7 +28,7 @@ Esta spec resolve **isolamento interno de dados entre os users já autorizados p
 - [ ] Onboarding/user gate roda antes de comandos e antes do pipeline LLM, depois apenas da whitelist e do bootstrap inicial do deployment
 - [ ] Migração do layout single-user legado para layout isolado por user é um comando CLI explícito e idempotente
 - [ ] Sessão LLM, usage tracking, active run e fila são isolados por `(chat_id, thread_id, user_id)`
-- [ ] CWD e memória de tópico continuam escopados à conversa `(chat_id, thread_id)`, compartilhados entre users autorizados do mesmo tópico
+- [ ] CWD vira project binding persistente escopado à conversa `(chat_id, thread_id)`, compartilhado entre users autorizados do mesmo tópico
 - [ ] Cron CLI, cron follow-ups e cron criado por agents sempre gravam owner real; nenhum job novo fica com `owner_user_id` vazio
 - [ ] Comandos que alteram configuração global do deployment são owner-only
 - [ ] Zero regressão pra você (1 user autorizado, comportamento idêntico após migração)

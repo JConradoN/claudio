@@ -1,5 +1,7 @@
 # PI Resilience — Especificação
 
+**Status:** Validated — see `.specs/features/pi-resilience/validation.md`
+
 ## Problem Statement
 
 O Aurelia usa o PI SDK (`@earendil-works/pi-coding-agent`) como seu "cérebro". Quando o PI falha — seja por rate limit do provider, API key inválida, modelo indisponível, ou erro de rede — a experiência do usuário é ruim:

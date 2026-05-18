@@ -1,6 +1,7 @@
 # Agent Orchestration — Execution Mode
 
-**Companion spec:** `.specs/features/plan-mode-architecture/` (covers how the artifacts this spec consumes are produced)
+**Companion spec:** `.specs/features/plan-mode-architecture/` (covers how the artifacts this spec consumes are produced)  
+**Depends on:** `.specs/features/project-binding/` for persistent effective cwd resolution
 
 ## Problem Statement
 
@@ -24,8 +25,10 @@ This spec scopes the work to **close the execution cycle** so an approved plan c
 ## Goals
 
 - [ ] Worktrees branch off the real current branch, not the string `"HEAD"`
-- [ ] The execution context resolves the repo from the chat/thread effective cwd and preserves Telegram `thread_id`
+- [ ] The execution context resolves the repo from persistent project binding/effective cwd and preserves Telegram `thread_id`
 - [ ] Git preflight refuses unsafe execution before spawning workers
+- [ ] Worker execution applies `CapabilityProfile` per task and passes security context into the PI bridge
+- [ ] Agent Comms peer metadata, if present, is validated before execution and recorded in the manifest
 - [ ] Validation supports retry-with-feedback with a hard cap before escalating
 - [ ] Validation reviews actual artifacts: git status, diff/stat, changed files, and verify output
 - [ ] Same-wave worker execution remains parallel, but merges happen serially and dependents of failed/unverified tasks are skipped
@@ -53,7 +56,7 @@ This spec scopes the work to **close the execution cycle** so an approved plan c
 
 ### P0: Execution context from chat cwd + thread-safe handoff ⭐
 
-**User Story:** As a user, when I approve a plan from a Telegram topic with a configured `/cwd`, I want execution to happen in that project and all status updates to stay in the same topic.
+**User Story:** As a user, when I approve a plan from a Telegram topic with a configured persistent `/cwd`, I want execution to happen in that project and all status updates to stay in the same topic.
 
 **Why P0:** The orchestrator is currently constructed with `os.Getwd()` and the handoff interface drops `threadID`. That is a correctness bug before any worker starts.
 
@@ -80,7 +83,7 @@ This spec scopes the work to **close the execution cycle** so an approved plan c
 1. WHEN orchestration starts THEN it SHALL run a preflight against the resolved repo root: git repo exists, branch is not detached, and base working tree is clean
 2. WHEN `plan.create_pr=true` THEN preflight SHALL also check whether `gh` is available/authenticated and report upfront if PR creation will be skipped
 3. WHEN preflight finds a dirty base tree THEN it SHALL abort before spawning workers and list the first few dirty paths
-4. WHEN preflight passes THEN it SHALL return an `ExecutionContext` containing repo root, base branch, chat id, thread id, message id, run id, feature, and create_pr
+4. WHEN preflight passes THEN it SHALL return an `ExecutionContext` containing repo root, base branch, chat id, thread id, user id, message id, run id, feature, create_pr, and security defaults
 5. WHEN any preflight check fails THEN no worktree SHALL be created
 
 **Independent test:** Put an unstaged file in the base repo, emit a plan, verify orchestration aborts before `WorktreeManager.Create`.
@@ -240,7 +243,7 @@ This spec scopes the work to **close the execution cycle** so an approved plan c
 **Acceptance Criteria:**
 
 1. WHEN orchestration starts THEN it SHALL create an in-memory `ExecutionManifest`
-2. WHEN each attempt finishes THEN manifest SHALL record status, attempts, changed files, verify output summary, cost, and duration
+2. WHEN each attempt finishes THEN manifest SHALL record status, attempts, changed files, verify output summary, cost, duration, capability profile, security decisions summary, and peer message counts
 3. WHEN consolidation runs THEN the PR body and final Telegram summary SHALL be derived from the manifest
 4. WHEN future persistence is added THEN the manifest structure SHALL be serializable without changing public behavior
 
