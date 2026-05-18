@@ -4,7 +4,7 @@
 **Status:** Revised after code review
 
 > Depende de User Isolation entregar `TurnContext`, `SessionKey`, `UserGate` e diretório privado por `user_id`.
-> MVP gera Aurelia skill-agents, não PI-native skills.
+> MVP gera skills PI-compatible (`<slug>/SKILL.md`), mas Aurelia-managed e privadas por `user_id`; não escreve em `~/.pi/agent` nem usa `pi-hermes-memory`.
 
 ---
 
@@ -97,11 +97,12 @@ flowchart TD
 **Done when:**
 
 - [ ] `BuildSkillCapturePrompt` inclui transcript redigido e formato correto
-- [ ] Prompt usa `allowed_tools`, não `tools`
+- [ ] Prompt usa Agent Skills/PI `allowed-tools`, não `tools`
 - [ ] `ExtractSkillBlock` parseia fenced block
-- [ ] Validator parseia frontmatter compatível com `internal/agents`
+- [ ] Validator parseia frontmatter PI-compatible e normaliza para o modelo interno do Aurelia
 - [ ] Validator rejeita `tools`, `schedule`, `cwd`, `mcp_servers`, unknown tools e secrets restantes
 - [ ] Validator exige seções `Procedure`, `Pitfalls`, `Verify`
+- [ ] Validator/adapter mapeia `allowed-tools` para as tools internas usadas por guard-rails/registry
 - [ ] Tests cobrem happy path e rejeições
 
 **Verify:** `go test ./internal/skills/... -run 'TestBuildSkillCapture|TestExtractSkill|TestValidator' -v`
@@ -137,8 +138,8 @@ flowchart TD
 **Done when:**
 
 - [ ] Slug kebab-case validado antes de path join
-- [ ] User skills dir criado `0700`
-- [ ] Arquivo escrito `0600`
+- [ ] User skills dir e `<slug>/` criados `0700`
+- [ ] `SKILL.md` escrito `0600`
 - [ ] Temp file + rename atômico
 - [ ] No overwrite sem confirmação explícita
 - [ ] Symlink overwrite recusado
@@ -176,9 +177,9 @@ flowchart TD
 
 **Done when:**
 
-- [ ] `Agent` ganha `CreatedBy`, `Kind`, `Source`, `Path`
+- [ ] `Agent` ganha metadata/source/path suficientes para skills PI-compatible (`metadata.aurelia.kind`, `Source`, `Path`)
 - [ ] Loader tolera diretórios ausentes quando configurado
-- [ ] Provider carrega global + user skills em registry imutável
+- [ ] Provider carrega global + user skills de `UserSkillsDir(userID)/*/SKILL.md` em registry imutável
 - [ ] Skill global-collision não sobrescreve global
 - [ ] Cache por user com invalidation
 - [ ] `/agents` consegue exibir `(auto-skill)` com base em metadata
@@ -240,7 +241,7 @@ flowchart TD
 
 - [ ] Fake turn bem-sucedido grava transcript recente
 - [ ] `/skill save backup-cron` chama fake generator
-- [ ] writer grava arquivo privado
+- [ ] writer grava arquivo privado em `<user>/skills/backup-cron/SKILL.md`
 - [ ] provider invalida cache e carrega skill
 - [ ] `@backup-cron` roteia para user correto
 - [ ] user B não vê nem roteia a skill de user A

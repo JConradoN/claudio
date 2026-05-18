@@ -23,6 +23,7 @@ A nova direção é um **Learning Nudge escopado**: uma revisão periódica em b
 - [ ] Evitar nudges concorrentes por sessão/projeto
 - [ ] Registrar custo, duração, writes e camada alvo
 - [ ] Não interromper o fluxo principal do usuário
+- [ ] Identificar procedimentos reutilizáveis como candidatos a Auto-Skills PI-compatible, sem gravar `SKILL.md` automaticamente
 
 ## Out of Scope
 
@@ -144,11 +145,11 @@ Do **not** depend on PI internal session file paths for MVP.
 
 **Acceptance Criteria:**
 
-1. Nudge MAY identificar candidato a skill.
+1. Nudge MAY identificar candidato a skill quando detectar procedimento reutilizável.
 2. Nudge SHALL salvar apenas sugestão/resumo em memória ou output estruturado.
-3. Nudge SHALL NOT escrever em `users/<id>/skills/`.
-4. `/skill save <slug>` continua sendo o caminho explícito para criar skill.
-5. Auto-Skills MAY consumir sugestões do nudge como contexto.
+3. Nudge SHALL NOT escrever em `users/<id>/skills/` nem em `~/.pi/agent/skills`.
+4. `/skill save <slug>` continua sendo o caminho explícito para criar uma skill PI-compatible gerenciada pelo Aurelia.
+5. Auto-Skills MAY consumir sugestões do nudge como contexto para gerar `<slug>/SKILL.md` após confirmação do usuário.
 
 ---
 
@@ -175,7 +176,7 @@ Nudge prompt deve incluir:
 - transcript redigido/truncado
 - instrução para atualizar arquivos existentes, não duplicar
 - instrução para não salvar secrets/PII desnecessária
-- instrução para não criar skills automaticamente
+- instrução para não criar skills automaticamente nem escrever em diretórios de skills do Aurelia/PI
 
 ---
 

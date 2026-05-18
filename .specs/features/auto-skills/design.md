@@ -7,7 +7,7 @@
 
 ## Architecture Overview
 
-Auto-Skills cria **Aurelia skill-agents** privados por usuário. Elas são arquivos markdown compatíveis com `internal/agents`, carregados por um registry per-user. Não são PI-native skills no MVP.
+Auto-Skills cria **skills PI-compatible, mas Aurelia-managed** privadas por usuário. Elas usam o layout de skills do PI (`<slug>/SKILL.md`) para representar procedimentos reutilizáveis, mas são descobertas e roteadas pelo `AgentProvider` per-user do Aurelia no MVP. O Aurelia não instala `pi-hermes-memory`, não escreve em `~/.pi/agent/skills` e não depende do discovery global do PI para evitar vazamento entre usuários e duplicidade de fontes de memória.
 
 ```mermaid
 flowchart TD
@@ -16,8 +16,8 @@ flowchart TD
     C --> D["/skill save slug"]
     D --> E["Generator: model-only bridge call"]
     E --> F["Extract aurelia-skill block"]
-    F --> G["Validate agent markdown + redaction"]
-    G --> H["Atomic write to user skills dir"]
+    F --> G["Validate PI-compatible SKILL.md + redaction"]
+    G --> H["Atomic write to user skills dir/<slug>/SKILL.md"]
     H --> I["Invalidate AgentProvider cache for user"]
     I --> J["@slug routes through merged registry"]
 
@@ -28,11 +28,17 @@ flowchart TD
 
 Code facts guiding the design:
 
+- PI skills are self-contained capability packages with a required `SKILL.md`; only descriptions should be always visible, and full procedures load on demand.
 - `internal/agents.Load(dir)` currently loads one directory and parses `name`, `description`, `model`, `schedule`, `cwd`, `mcp_servers`, `allowed_tools`, `disallowed_tools`, `max_turns`.
+- Agent Skills/PI frontmatter uses `allowed-tools`; the Aurelia adapter must map it to the internal `allowed_tools` representation or expose a normalized capability model.
 - Unknown frontmatter fields are ignored today, so `tools` would not restrict tools.
 - `cmd/aurelia/app.go` loads the registry once from `resolver.Agents()`.
 - `bridge/index.ts` loads PI resources from `agentDir` and supports `NoUserSettings`, but no per-request user skill dir.
 - `ProcessBridgeEvents` receives tool events, including `Event.Input`, so transcript capture can be implemented in Go without bridge changes.
+
+### Why not `pi-hermes-memory` in MVP
+
+`pi-hermes-memory` has useful concepts — facts, user profile, session search, secret scanning and procedural skills — but enabling it directly would add a second memory backend with PI-global defaults. Aurelia needs Telegram-scoped `user_id/chat_id/thread_id`, project binding, approval UX and guard-rails as the source of truth. The MVP therefore reuses the **format/concept** of PI skills, not an external PI memory extension.
 
 ---
 
@@ -48,7 +54,7 @@ func (r *PathResolver) UserSkillsDir(userID int64) string {
 }
 ```
 
-Directory permissions should be private (`0700`), skill files `0600`. If the final User Isolation resolver names this differently, Auto-Skills should depend on that API instead of inventing a second path convention.
+Each skill is stored as `UserSkillsDir(userID)/<slug>/SKILL.md`. Directories should be private (`0700`), skill files `0600`. If the final User Isolation resolver names this differently, Auto-Skills should depend on that API instead of inventing a second path convention.
 
 ### 2. New package `internal/skills/`
 
@@ -59,7 +65,7 @@ Directory permissions should be private (`0700`), skill files `0600`. If the fin
 - `recent.go` — in-memory TTL store for manual capture
 - `recorder.go` — event observer for pipeline
 - `prompt.go` — `BuildSkillCapturePrompt`, `ExtractSkillBlock`
-- `validator.go` — frontmatter/body validation
+- `validator.go` — PI-compatible frontmatter/body validation + Aurelia normalization
 - `generator.go` — bridge call + retry
 - `writer.go` — atomic filesystem writes
 - `service.go` — orchestration used by Telegram/pipeline
@@ -179,12 +185,14 @@ The prompt must output a markdown file wrapped in one fenced block:
 name: backup-cron
 description: Recreate the validated backup cron workflow.
 model: kimi-k2
-allowed_tools: [Read, Bash]
-disallowed_tools: []
-created_by: auto-skill
-created_at: 2026-05-17T10:00:00Z
-kind: auto_skill
-source_hash: <hash>
+capability_profile: execute_safe
+allowed-tools: Read Bash
+metadata:
+  aurelia:
+    kind: auto_skill
+    created_by: auto-skill
+    created_at: 2026-05-17T10:00:00Z
+    source_hash: <hash>
 ---
 
 # Backup Cron
@@ -203,22 +211,23 @@ source_hash: <hash>
 ```
 ````
 
-`source_hash` is a hash of the redacted transcript, not raw chat/user identifiers. The writer can add/normalize metadata after validation, so the LLM does not need to be trusted to set all fields.
+`metadata.aurelia.source_hash` is a hash of the redacted transcript, not raw chat/user identifiers. The writer can add/normalize metadata after validation, so the LLM does not need to be trusted to set all fields. Top-level `source_hash` is not required and should be normalized into `metadata.aurelia` if generated by mistake.
 
 ### 8. Validator
 
-Validator should parse with the same YAML rules as `internal/agents`. Prefer exposing `agents.Parse(data []byte)` instead of duplicating parsing.
+Validator should parse PI-compatible `SKILL.md` frontmatter and normalize it into the internal agent model. Prefer exposing `agents.Parse(data []byte)` plus an adapter, rather than duplicating parsing. The adapter is responsible for mapping `allowed-tools` to Aurelia's internal tool representation.
 
 Validation rules:
 
 - `name` equals requested slug
 - `description` non-empty and short
-- `allowed_tools`/`disallowed_tools` only use known Aurelia tool names
+- `allowed-tools` only uses known Aurelia/PI tool names
 - `tools` is invalid; retry with explicit correction
 - `schedule`, `cwd`, `mcp_servers`, `max_turns` are not allowed in generated skills for MVP
 - body contains `Procedure`, `Pitfalls`, `Verify`
 - total content under size limit, default 24KB
 - no obvious secret remains after redaction scan
+- output path is `<slug>/SKILL.md`, not `<slug>.md`
 
 Unknown metadata should be rejected for auto-generated skills, even if global agents tolerate unknown fields.
 
@@ -235,10 +244,10 @@ func (w *Writer) Save(ctx context.Context, userID int64, slug string, content []
 Rules:
 
 - validate slug before path join
-- create user skills dir `0700`
+- create user skills dir and skill directory `0700`
 - refuse symlink overwrite
 - no overwrite unless mode is explicit overwrite after confirmation
-- write temp file in same dir with `0600`
+- write `SKILL.md` via temp file in the same skill dir with `0600`
 - `fsync` best-effort, then `os.Rename`
 - return absolute path
 - invalidate agent cache after success
@@ -257,7 +266,8 @@ type AgentProvider interface {
 Implementation:
 
 - load global agents from `resolver.Agents()`
-- load user skills from `UserSkillsDir(userID)`
+- load user skills from `UserSkillsDir(userID)/*/SKILL.md`
+- adapt PI-compatible frontmatter/body into `agents.Agent`
 - missing dirs are okay
 - if skill name collides with global agent, keep global and mark skill invalid/colliding
 - cache by `userID` with mtime or explicit invalidation after write/delete/rename
@@ -267,10 +277,10 @@ Implementation:
 ```go
 type Agent struct {
     // existing fields...
-    CreatedBy string `yaml:"created_by,omitempty"`
-    Kind      string `yaml:"kind,omitempty"`
-    Source    string `yaml:"-"`
-    Path      string `yaml:"-"`
+    CapabilityProfile string            `yaml:"capability_profile,omitempty"`
+    Metadata          map[string]any    `yaml:"metadata,omitempty"`
+    Source            string            `yaml:"-"`
+    Path              string            `yaml:"-"`
 }
 ```
 
@@ -373,12 +383,13 @@ Pipeline changes after User Isolation:
 
 | Decisão | Escolha | Justificativa |
 |---|---|---|
-| Tipo de skill MVP | Aurelia skill-agent | Compatível com `internal/agents` hoje |
-| PI-native skills | P3 | Bridge não tem skill dir per-user por request |
+| Tipo de skill MVP | Aurelia-managed, PI-compatible `SKILL.md` | Reaproveita procedimento/portabilidade do PI sem perder escopo do Aurelia |
+| Discovery PI-native | P3 opcional | Bridge não tem skill dir per-user por request; evitar `~/.pi/agent` global |
+| `pi-hermes-memory` | Fora do MVP | Evita segunda memória concorrente e escopo global por padrão |
 | Transcript | digest redigido, sem system prompt | Reduz vazamento de persona/owner/config |
 | Manual-first | Sim | Entrega valor sem spam |
 | Auto-offer default | Off | Precisa calibrar com uso real |
-| Frontmatter | `allowed_tools`/`disallowed_tools` | É o que o loader real entende |
+| Frontmatter | Agent Skills/PI `allowed-tools` + adapter Aurelia | Formato portável; adapter normaliza para guard-rails/registry |
 | Shadow global | Bloquear | Evita spoofing e regressão de roteamento |
 | Writer | atomic rename + no symlink overwrite | Evita arquivo parcial e path tricks |
 | Registry | provider immutable per-user | Evita race em singleton global |
@@ -397,8 +408,10 @@ Pipeline changes after User Isolation:
 | `TestExtractSkillBlock` | `prompt_test.go` | fenced block |
 | `TestValidator_RejectsToolsField` | `validator_test.go` | alinhamento com loader |
 | `TestValidator_RejectsScheduleAndUnknownTools` | same | segurança |
+| `TestValidator_MapsAllowedTools` | same | `allowed-tools` PI → modelo interno Aurelia |
 | `TestGenerator_NoToolsRequest` | `generator_test.go` | request model-only |
-| `TestWriter_AtomicNoOverwrite` | `writer_test.go` | atomicidade e colisão |
+| `TestWriter_AtomicNoOverwrite` | `writer_test.go` | atomicidade e colisão em `<slug>/SKILL.md` |
+| `TestWriter_DoesNotWritePiGlobalDir` | `writer_test.go` | storage privado em `~/.aurelia/users/...` |
 | `TestAgentProvider_UserSkillsIsolated` | `internal/agents/...` | user A/B |
 | `TestAgentProvider_GlobalCollisionBlocked` | same | sem shadow |
 | `TestPipeline_StoresRecentTranscript` | `internal/pipeline/...` | recorder integrado |

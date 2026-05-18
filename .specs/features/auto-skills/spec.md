@@ -5,23 +5,31 @@
 
 ## Problem Statement
 
-Aurelia já tem `internal/agents`: arquivos markdown em `~/.aurelia/agents/` com frontmatter YAML que viram agentes roteáveis por `@nome` ou classificação. Isso é suficiente para criar **Aurelia skill-agents**, mas a spec antiga misturava três conceitos que o código atual não suporta do jeito descrito:
+Aurelia já tem `internal/agents`: arquivos markdown em `~/.aurelia/agents/` com frontmatter YAML que viram agentes roteáveis por `@nome` ou classificação. Isso é uma base útil para carregar skills privadas, mas a spec antiga misturava três conceitos que o código atual não suporta do jeito descrito:
 
 - O registry atual carrega só `~/.aurelia/agents/` no startup; ele não recebe `user_id`, não sabe origem do agent e não tem overlay por usuário.
 - O bridge/PI carrega recursos nativos de `~/.pi/agent`, incluindo PI skills, mas `RequestOptions` não expõe diretório de skills por request. Escrever em `~/.aurelia/users/<id>/skills/` não cria uma PI-native skill automaticamente.
 - O formato real de agent usa `allowed_tools` e `disallowed_tools`; frontmatter `tools` não é lido por `internal/agents`.
 - O pipeline atual só guarda texto recente no `NudgeBuffer` por chat; não há transcript por usuário com tool calls, duração, modelo, agent e resultado.
 
-Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usuário**: prompts reutilizáveis gerados a partir de uma execução bem-sucedida, carregados pelo registry per-user e usados como agents normais. Exportar para PI-native skills fica fora do MVP até o bridge expor um contrato seguro por usuário/request.
+Esta spec deve entregar Auto-Skills como **skills PI-compatible, mas Aurelia-managed e privadas por usuário**: procedimentos reutilizáveis gerados a partir de uma execução bem-sucedida, armazenados em layout `SKILL.md`, carregados pelo registry per-user do Aurelia e usados como agents normais. O Aurelia não deve depender de `pi-hermes-memory` nem escrever em `~/.pi/agent` no MVP; ele reaproveita o formato/conceito de skills do PI sem entregar o controle de escopo, UX e segurança para uma extensão externa.
+
+## Architecture Decision — Option A
+
+**Escolha:** Aurelia-native, PI-compatible.
+
+O Aurelia continua sendo a fonte de verdade para `user_id`, `chat_id`, `thread_id`, project binding, permissões e UX. Procedimentos reutilizáveis são persistidos como skills no formato compatível com PI (`<slug>/SKILL.md`) para preservar portabilidade e alinhamento com o motor usado pelo bridge, mas a descoberta/roteamento no MVP é feita pelo registry per-user do Aurelia.
+
+**Não faremos no MVP:** instalar/ativar `pi-hermes-memory`, salvar diretamente em `~/.pi/agent/skills`, ou depender de discovery global do PI. Isso evita vazamento entre usuários autorizados e evita duas fontes de memória divergentes.
 
 ## Goals
 
 - [ ] Captura manual explícita (`/skill save <slug>`) a partir do último turno bem-sucedido desse `SessionKey`
 - [ ] Recorder de transcript mínimo, redigido e com TTL curto, sem armazenar system prompt completo
 - [ ] Geração via LLM dedicada, model-only, sem tools e com `NoUserSettings`
-- [ ] Validação rígida do markdown gerado antes de gravar: frontmatter permitido, slug seguro, sem `schedule`, sem `mcp_servers`, sem path/cwd perigoso
+- [ ] Validação rígida do `SKILL.md` gerado antes de gravar: frontmatter permitido, slug seguro, sem `schedule`, sem `mcp_servers`, sem path/cwd perigoso
 - [ ] Skills geradas declaram `capability_profile` compatível com guard-rails; `Bash` só via `execute_safe`
-- [ ] Storage privado em `~/.aurelia/users/<user_id>/skills/<slug>.md` ou path equivalente do resolver de User Isolation
+- [ ] Storage privado em `~/.aurelia/users/<user_id>/skills/<slug>/SKILL.md` ou path equivalente do resolver de User Isolation
 - [ ] Escrita atômica e sem overwrite sem confirmação
 - [ ] Registry per-user carrega agentes globais + skills do usuário sem permitir shadowing silencioso de agentes globais
 - [ ] `/agents` e roteamento natural consideram as skills do usuário atual
@@ -29,7 +37,8 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 ## Out of Scope
 
-- PI-native skill creation/export no MVP.
+- Escrita/discovery direta em `~/.pi/agent/skills` no MVP.
+- Uso de `pi-hermes-memory` como backend de memória no MVP.
 - Auto-improvement/versioning automático de skills.
 - Skill sharing entre usuários.
 - Skills geradas automaticamente sem confirmação.
@@ -55,7 +64,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 5. WHEN transcript contém padrões de segredo (`token`, `password`, `secret`, chaves API, valores env-like) THEN Aurelia SHALL redigir deterministicamente antes de enviar ao generator.
 6. WHEN user roda `/forget-me` na spec de User Isolation THEN skills privadas e transcripts pendentes do usuário SHALL ser removidos.
 
-**Independent Test:** Dois usuários no mesmo chat salvam skills com mesmo slug; arquivos ficam em diretórios diferentes e `/skills` lista somente o próprio usuário.
+**Independent Test:** Dois usuários no mesmo chat salvam skills com mesmo slug; arquivos ficam em diretórios privados diferentes (`<user>/skills/<slug>/SKILL.md`) e `/skills` lista somente o próprio usuário.
 
 ---
 
@@ -100,7 +109,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 ### P1: Geração LLM validada ⭐ MVP
 
-**User Story:** Como sistema, quero transformar transcript em um agent markdown pequeno, executável e seguro.
+**User Story:** Como sistema, quero transformar transcript em um `SKILL.md` pequeno, executável pelo registry do Aurelia e compatível com o formato de skills do PI.
 
 **Why P1:** A LLM sabe resumir intenção e armadilhas, mas o arquivo persistido precisa obedecer ao formato real do loader.
 
@@ -108,26 +117,27 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 1. WHEN geração inicia THEN Aurelia SHALL chamar bridge com prompt dedicado (`BuildSkillCapturePrompt`), transcript redigido, `NoUserSettings=true` e sem tools.
 2. WHEN resposta volta THEN Aurelia SHALL extrair um bloco fenced `aurelia-skill`.
-3. O frontmatter SHALL usar campos compatíveis com `internal/agents`:
+3. O frontmatter SHALL usar campos compatíveis com Agent Skills/PI e mapeáveis pelo adapter do Aurelia:
    ```yaml
    name: <slug>
    description: <short description>
    model: <optional model>
    capability_profile: read_only | edit_project | execute_safe
-   allowed_tools: [Read, Bash]
-   disallowed_tools: []
-   created_by: auto-skill
-   created_at: <timestamp ISO>
-   kind: auto_skill
+   allowed-tools: Read Bash
+   metadata:
+     aurelia:
+       kind: auto_skill
+       created_by: auto-skill
+       created_at: <timestamp ISO>
    ```
 4. O body SHALL conter seções `Procedure`, `Pitfalls` e `Verify`.
 5. WHEN frontmatter contém campos proibidos (`schedule`, `cwd`, `mcp_servers`, path absoluto, shell secreto) THEN validator SHALL rejeitar ou remover conforme regra documentada.
-6. WHEN `allowed_tools` inclui tool desconhecida THEN validator SHALL rejeitar.
+6. WHEN `allowed-tools` inclui tool desconhecida THEN validator SHALL rejeitar.
 7. WHEN skill inclui `Bash` THEN `capability_profile` SHALL ser `execute_safe`; `Bash` com `read_only` ou `edit_project` SHALL ser rejeitado.
 8. WHEN skill pede `privileged` THEN validator SHALL rejeitar no MVP.
-7. WHEN conteúdo ainda contém segredo detectável THEN writer SHALL recusar salvar e informar que a skill precisa ser regenerada/editada.
+9. WHEN conteúdo ainda contém segredo detectável THEN writer SHALL recusar salvar e informar que a skill precisa ser regenerada/editada.
 
-**Independent Test:** Fake bridge retorna skill com `tools` em vez de `allowed_tools`; validator rejeita e retry pede correção.
+**Independent Test:** Fake bridge retorna skill com `tools` em vez de `allowed-tools`; validator rejeita e retry pede correção.
 
 ---
 
@@ -139,7 +149,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 **Acceptance Criteria:**
 
-1. WHEN registry é resolvido para um turno THEN SHALL combinar agentes globais com skills do `user_id`.
+1. WHEN registry é resolvido para um turno THEN SHALL combinar agentes globais com skills PI-compatible do `user_id` via adapter Aurelia.
 2. WHEN diretório de skills do usuário não existe THEN SHALL tratar como lista vazia, não erro.
 3. WHEN skill e agente global têm mesmo nome THEN registry SHALL preservar o global e reportar colisão; writer já deve bloquear essa criação.
 4. WHEN user manda `/agents` THEN SHALL ver agentes globais e suas skills com indicador `(auto-skill)`.
@@ -192,7 +202,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 **Acceptance Criteria:**
 
-1. WHEN bridge expõe skill dirs/enabled skills por request THEN spec futura SHALL permitir export controlado.
+1. WHEN bridge expõe skill dirs/enabled skills por request THEN spec futura MAY permitir discovery PI-native controlado por user/request.
 2. WHEN skill é usada muitas vezes com correções manuais THEN improvement loop SHALL propor update, nunca escrever sem confirmação.
 
 ---
@@ -201,7 +211,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 
 - WHEN generator tenta usar tools THEN request deve estar sem tools; se o bridge não suportar `NoTools`, usar denylist total como fallback.
 - WHEN skill gerada tem `schedule` THEN rejeitar no MVP.
-- WHEN skill gerada tem `tools` em vez de `allowed_tools` THEN retry com erro estruturado.
+- WHEN skill gerada tem `tools` em vez de `allowed-tools` THEN retry com erro estruturado.
 - WHEN skill gerada omite `capability_profile` THEN validator SHALL defaultar para `read_only` se não houver write/bash, ou pedir correção estruturada se houver tools perigosas.
 - WHEN transcript contém caminho absoluto sensível fora do cwd THEN redigir ou resumir.
 - WHEN dois `/skill save` simultâneos usam mesmo slug do mesmo user THEN writer SHALL usar lock/atomic create para evitar corrida.
@@ -218,6 +228,7 @@ Esta spec deve entregar Auto-Skills como **Aurelia skill-agents privados por usu
 - [ ] Transcript não guarda system prompt completo e redige segredos antes do generator
 - [ ] Validator rejeita frontmatter incompatível (`tools`, `schedule`, tool desconhecida, profile/tool incompatível)
 - [ ] Registry per-user isola skills entre usuários e não shadowa global silenciosamente
+- [ ] Skills são salvas em layout PI-compatible (`<slug>/SKILL.md`) sem escrever em `~/.pi/agent`
 - [ ] Auto-offer P2 é configurável e default-off
 - [ ] Testes cobrem isolamento, colisão, retry, atomic write, registry e comandos
 - [ ] `go build ./... && go vet ./... && go test ./...` limpo quando implementado

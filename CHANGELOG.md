@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.10] - 2026-05-19
+
+### Alterado
+- Auto-Skills: specs revisadas para arquitetura PI-compatible (`<slug>/SKILL.md`), sem dependência de `pi-hermes-memory` ou escrita em `~/.pi/agent`.
+- Learning Nudge: spec atualizada para detectar candidatos a skill sem escrever automaticamente.
+
+### Adicionado
+- Agent Comms: spec, design e tasks para comunicação entre agentes.
+- Security Guard Rails: spec inicial com regras de segurança.
+
 ## [0.7.9] - 2026-05-18
 
 ### Corrigido
