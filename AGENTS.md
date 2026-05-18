@@ -33,8 +33,32 @@ cp bundle.js ../internal/bridge/bundle.js
 3. **Execute** — One atomic task at a time, test-first
 4. **Validate** — Run tests, verify completion criteria
 5. **Commit** — Conventional Commits: `type(scope): description`
+6. **Build & Restart daemon** — Rebuild binary and restart the daemon (see below)
+7. **Test live** — Send a test message in Telegram, verify the change works end-to-end
 
 For trivial tasks, implement directly and validate.
+
+### Step 6: Build & Restart (mandatory after every commit)
+
+After every commit that changes Go or Bridge code, the binary **must** be rebuilt and the daemon restarted before considering the work done. This prevents testing with a stale binary.
+
+```bash
+# 1. Build binary to the daemon's expected location
+go build -o ~/.aurelia/bin/aurelia .
+
+# 2. Kill the running daemon gracefully
+kill $(pgrep -f "aurelia" | head -1)
+sleep 2
+
+# 3. Restart
+nohup ~/.aurelia/bin/aurelia &
+sleep 3
+
+# 4. Confirm it's running
+pgrep -f "aurelia"
+```
+
+**Failure to rebuild + restart will produce false negatives during testing.** Treat this as part of "done".
 
 ## Rules
 
