@@ -57,7 +57,7 @@ func (r *PathResolver) DBPath(name string) string { return filepath.Join(r.Data(
 
 // SanitizeCwd converts an absolute path to a Claude Code-style sanitized key.
 // Slashes become dashes, drive prefixes are stripped.
-// Example: /media/rafael/projetos/app → -media-rafael-projetos-app
+// Example: /home/user/code/my-project → -home-user-code-my-project
 func SanitizeCwd(cwd string) string {
 	if strings.TrimSpace(cwd) == "" {
 		return ""

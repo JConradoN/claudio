@@ -12,14 +12,14 @@ import (
 func TestBuildUserTemplate_UsesTelegramName(t *testing.T) {
 	user := &telebot.User{
 		ID:        42,
-		FirstName: "Igor",
-		LastName:  "Maneschy",
-		Username:  "igor",
+		FirstName: "Ana",
+		LastName:  "Silva",
+		Username:  "ana",
 	}
 
 	got := buildUserTemplate(user)
 
-	if !strings.Contains(got, "Nome: Igor Maneschy") {
+	if !strings.Contains(got, "Nome: Ana Silva") {
 		t.Fatalf("expected full name in user template, got %q", got)
 	}
 	if strings.Contains(got, "Usuario 42") {
@@ -41,20 +41,20 @@ func TestBuildUserTemplate_FallsBackWithoutInventingIdentity(t *testing.T) {
 }
 
 func TestBuildUserTemplateFromProfile_UsesConversationProfile(t *testing.T) {
-	got := buildUserTemplateFromProfile("Me chamo Igor e quero respostas diretas, sem floreios.", "rafa")
+	got := buildUserTemplateFromProfile("Me chamo Ana e quero respostas diretas, sem floreios.", "ana")
 
-	if !strings.Contains(got, "Nome: Igor") {
+	if !strings.Contains(got, "Nome: Ana") {
 		t.Fatalf("expected extracted name, got %q", got)
 	}
-	if !strings.Contains(got, "Preferencias: Me chamo Igor e quero respostas diretas, sem floreios.") {
+	if !strings.Contains(got, "Preferencias: Me chamo Ana e quero respostas diretas, sem floreios.") {
 		t.Fatalf("expected full profile text, got %q", got)
 	}
 }
 
 func TestBuildUserTemplateFromProfile_FallsBackToTelegramName(t *testing.T) {
-	got := buildUserTemplateFromProfile("Quero respostas diretas, sem floreios.", "rafa")
+	got := buildUserTemplateFromProfile("Quero respostas diretas, sem floreios.", "ana")
 
-	if !strings.Contains(got, "Nome: rafa") {
+	if !strings.Contains(got, "Nome: ana") {
 		t.Fatalf("expected telegram fallback name, got %q", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestBuildUserTemplateFromProfile_FallsBackToTelegramName(t *testing.T) {
 func TestExtractNameFromProfile(t *testing.T) {
 	cases := map[string]string{
 		"Me chamo Igor e quero respostas diretas.": "Igor",
-		"Meu nome e Igor Maneschy.":                "Igor Maneschy",
+		"Meu nome e Ana Silva.":                "Ana Silva",
 		"Sou Igor.":                                "Igor",
 		"Quero respostas diretas.":                 "",
 	}

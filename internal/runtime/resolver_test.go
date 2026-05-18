@@ -80,8 +80,8 @@ func TestSanitizeCwd(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"/media/rafael/projetos/app", "-media-rafael-projetos-app"},
-		{"/media/rafael/projetos/app/", "-media-rafael-projetos-app"},
+		{"/home/user/code", "-home-user-code"},
+		{"/home/user/code/", "-home-user-code"},
 		{"/home/user/code", "-home-user-code"},
 		{"/", "-"},
 		{"", ""},

@@ -87,7 +87,7 @@ IDENTITY_BODY`
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(soulPath, []byte("SOUL_BODY"), 0644)
-	_ = os.WriteFile(userPath, []byte("# User\nNome: Igor\nFuso horario: America/Sao_Paulo"), 0644)
+	_ = os.WriteFile(userPath, []byte("# User\nNome: Ana\nFuso horario: America/Sao_Paulo"), 0644)
 
 	persona, err := LoadPersona(identityPath, soulPath, userPath)
 	if err != nil {
@@ -100,7 +100,7 @@ IDENTITY_BODY`
 	if !strings.Contains(persona.SystemPrompt, "Nome canonico do agente: Lex") {
 		t.Fatalf("expected canonical agent name, got %q", persona.SystemPrompt)
 	}
-	if !strings.Contains(persona.SystemPrompt, "Nome canonico do usuario: Igor") {
+	if !strings.Contains(persona.SystemPrompt, "Nome canonico do usuario: Ana") {
 		t.Fatalf("expected canonical user name, got %q", persona.SystemPrompt)
 	}
 }
