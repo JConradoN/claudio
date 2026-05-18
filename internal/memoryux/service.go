@@ -24,6 +24,7 @@ type Status struct {
 	CWD             string
 	CheckpointLayer string
 	Layers          []LayerInfo
+	LatestReceipt   *Receipt
 }
 
 // CheckpointResult describes what was written or updated.
@@ -94,10 +95,14 @@ func (s *Service) Status(chatID int64, threadID int, cwd string) (Status, error)
 
 	layer, _ := s.checkpointTarget(cwd, chatID, threadID)
 
+	// Load latest receipt (non-fatal; missing/corrupt file is tolerable)
+	latestReceipt, _ := LatestReceipt(s.MemoryDir)
+
 	return Status{
 		CWD:             cwd,
 		CheckpointLayer: layer,
 		Layers:          layers,
+		LatestReceipt:   latestReceipt,
 	}, nil
 }
 

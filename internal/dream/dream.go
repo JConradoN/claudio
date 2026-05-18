@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/memoryux"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
@@ -170,25 +171,37 @@ func (d *Dreamer) run() {
 	ev, err := d.bridge.ExecuteSync(ctx, req)
 	if err != nil {
 		log.Printf("[dream] failed: %v", err)
+		d.recordDreamReceipt(start, nil, 0, 0, "error", err.Error())
 		return
 	}
 	if ev.Type == "error" {
 		log.Printf("[dream] bridge error: %s", ev.Message)
+		d.recordDreamReceipt(start, ev, 0, 0, "error", ev.Message)
 		return
 	}
 
 	// Parse JSON consolidation actions
+	var applied, total int
+	var receiptStatus, receiptErr string
 	ext := parseConsolidationJSON(ev.Text)
 	if ext == nil {
 		log.Printf("[dream] no valid consolidation actions from model output")
-		// Still mark completion — no work to do is valid
+		receiptStatus = "invalid"
 	} else {
+		total = len(ext.Actions)
 		writer, err := newSafeMemoryWriter(d.memoryDir, d)
 		if err != nil {
 			log.Printf("[dream] failed to create writer: %v", err)
+			receiptStatus = "error"
+			receiptErr = err.Error()
 		} else {
-			applied := applyConsolidationActions(writer, ext.Actions, 0, 0, "")
-			log.Printf("[dream] applied %d/%d consolidation actions", applied, len(ext.Actions))
+			applied = applyConsolidationActions(writer, ext.Actions, 0, 0, "")
+			log.Printf("[dream] applied %d/%d consolidation actions", applied, total)
+			if applied > 0 {
+				receiptStatus = "applied"
+			} else {
+				receiptStatus = "noop"
+			}
 		}
 	}
 
@@ -207,8 +220,32 @@ func (d *Dreamer) run() {
 
 	touchLock(d.memoryDir)
 
+	d.recordDreamReceipt(start, ev, applied, total, receiptStatus, receiptErr)
+
 	log.Printf("[dream] completed in %s — cost=$%.4f turns=%d",
 		time.Since(start).Round(time.Second), ev.CostUSD, ev.NumTurns)
+}
+
+// recordDreamReceipt writes a receipt for a dream consolidation run.
+// ChatID/ThreadID/CWD are zero/empty because dream is global.
+// Logs but does not propagate errors.
+func (d *Dreamer) recordDreamReceipt(start time.Time, ev *bridge.Event, applied, total int, status, errMsg string) {
+	r := memoryux.Receipt{
+		Time:     time.Now().UTC(),
+		Source:   "dream",
+		Duration: time.Since(start).Round(time.Second).String(),
+		Applied:  applied,
+		Total:    total,
+		Status:   status,
+		Error:    memoryux.SanitizeReceiptError(errMsg),
+	}
+	if ev != nil {
+		r.CostUSD = ev.CostUSD
+		r.Turns = ev.NumTurns
+	}
+	if err := memoryux.AppendReceipt(d.memoryDir, r); err != nil {
+		log.Printf("[dream] receipt error: %v", err)
+	}
 }
 
 // tryStartNudge acquires the nudge guard for a specific session key.

@@ -514,6 +514,106 @@ func TestCheckpoint_GlobalScopeExplicit(t *testing.T) {
 	}
 }
 
+// --- Receipt integration ---
+
+func TestStatus_IncludesLatestReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AURELIA_HOME", home)
+
+	resolver, err := aureliaruntime.New()
+	if err != nil {
+		t.Fatalf("runtime.New(): %v", err)
+	}
+
+	svc := New(resolver.Memory(), resolver)
+
+	// No receipt yet
+	status, err := svc.Status(42, 0, "")
+	if err != nil {
+		t.Fatalf("Status(): %v", err)
+	}
+	if status.LatestReceipt != nil {
+		t.Fatalf("expected nil receipt when file does not exist, got %+v", status.LatestReceipt)
+	}
+
+	// Write a receipt
+	r := Receipt{
+		Source: "nudge", Applied: 2, Total: 3, Status: "applied",
+	}
+	if err := AppendReceipt(svc.MemoryDir, r); err != nil {
+		t.Fatalf("AppendReceipt(): %v", err)
+	}
+
+	// Now status should include it
+	status, err = svc.Status(42, 0, "")
+	if err != nil {
+		t.Fatalf("Status(): %v", err)
+	}
+	if status.LatestReceipt == nil {
+		t.Fatal("expected non-nil receipt after append")
+	}
+	if status.LatestReceipt.Source != "nudge" || status.LatestReceipt.Applied != 2 || status.LatestReceipt.Status != "applied" {
+		t.Fatalf("unexpected receipt: %+v", status.LatestReceipt)
+	}
+}
+
+func TestFormatStatus_WithReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AURELIA_HOME", home)
+
+	resolver, err := aureliaruntime.New()
+	if err != nil {
+		t.Fatalf("runtime.New(): %v", err)
+	}
+
+	svc := New(resolver.Memory(), resolver)
+
+	r := Receipt{
+		Source: "dream", Applied: 3, Total: 5, Status: "applied",
+	}
+	if err := AppendReceipt(svc.MemoryDir, r); err != nil {
+		t.Fatalf("AppendReceipt(): %v", err)
+	}
+
+	status, err := svc.Status(42, 0, "")
+	if err != nil {
+		t.Fatalf("Status(): %v", err)
+	}
+
+	output := FormatStatus(status)
+	if !fileContains(output, "Last Memory Activity") {
+		t.Fatal("FormatStatus should include 'Last Memory Activity' section")
+	}
+	if !fileContains(output, "dream") {
+		t.Fatal("FormatStatus should include source 'dream'")
+	}
+	if !fileContains(output, "applied") {
+		t.Fatal("FormatStatus should include 'applied'")
+	}
+}
+
+func TestFormatStatus_NoReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AURELIA_HOME", home)
+
+	resolver, err := aureliaruntime.New()
+	if err != nil {
+		t.Fatalf("runtime.New(): %v", err)
+	}
+
+	svc := New(resolver.Memory(), resolver)
+
+	status, err := svc.Status(42, 0, "")
+	if err != nil {
+		t.Fatalf("Status(): %v", err)
+	}
+
+	output := FormatStatus(status)
+	if !fileContains(output, "No memory activity recorded yet") {
+		t.Fatal("FormatStatus should show 'No memory activity recorded yet' when no receipt")
+	}
+}
+
 // --- helpers ---
 
 func fileContains(s, sub string) bool {

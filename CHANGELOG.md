@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.8] - 2026-05-18
+
+### Adicionado
+- Registro de receipts de atividade de memória em `memory_receipts.jsonl` para execuções de nudge e dream.
+- `/memory status` agora mostra a última atividade de memória, incluindo fonte, status, itens aplicados, duração e custo quando disponíveis.
+
+### Segurança
+- Receipts armazenam apenas metadados sanitizados, sem transcripts, prompts, facts ou saída bruta do modelo.
+
 ## [0.7.7] - 2026-05-18
 
 ### Adicionado

@@ -37,6 +37,38 @@ func FormatStatus(s Status) string {
 	}
 	fmt.Fprintf(&b, "📝 Checkpoint target: **%s**\n", layerName)
 
+	if s.LatestReceipt != nil {
+		r := s.LatestReceipt
+		b.WriteString("\n**Last Memory Activity:**\n")
+
+		statusEmoji := map[string]string{
+			"applied": "✅",
+			"noop":    "⏭️",
+			"invalid": "⚠️",
+			"error":   "❌",
+		}
+		emoji := statusEmoji[r.Status]
+		if emoji == "" {
+			emoji = "❓"
+		}
+
+		summary := fmt.Sprintf("%s • %s: %s %d/%d",
+			emoji, r.Source, r.Status, r.Applied, r.Total)
+		if r.Duration != "" {
+			summary += fmt.Sprintf(", duration %s", r.Duration)
+		}
+		if r.CostUSD > 0 {
+			summary += fmt.Sprintf(", cost $%.4f", r.CostUSD)
+		}
+		if r.Turns > 0 {
+			summary += fmt.Sprintf(", turns %d", r.Turns)
+		}
+		b.WriteString(summary)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n**Last Memory Activity:**\nNo memory activity recorded yet.\n")
+	}
+
 	b.WriteString("\n💡 Use `/memory checkpoint [note]` to write a task checkpoint.")
 	return b.String()
 }
