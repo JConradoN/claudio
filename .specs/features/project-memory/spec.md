@@ -22,6 +22,7 @@ A nova direção é separar claramente:
 3. **User × Project private** — memória pessoal daquele usuário naquele projeto.
 4. **Project team memory** — convenções e decisões compartilháveis do projeto, opcionalmente versionáveis no futuro.
 5. **Conversation/topic memory** — contexto compartilhado por tópico Telegram autorizado.
+6. **Procedural memory** — procedimentos reutilizáveis não ficam em arquivos genéricos de memória; viram Auto-Skills privadas em layout PI-compatible (`users/<id>/skills/<slug>/SKILL.md`) quando o usuário confirma.
 
 ## Goals
 
@@ -73,7 +74,9 @@ A nova direção é separar claramente:
 │       │           ├── MEMORY.md        # índice pessoal neste projeto
 │       │           ├── notes.md
 │       │           └── work_log.md
-│       └── skills/                      # Auto-Skills privadas
+│       └── skills/                      # Auto-Skills privadas, PI-compatible
+│           └── <slug>/
+│               └── SKILL.md
 │
 ├── projects/
 │   └── <project_slug>/
@@ -97,6 +100,7 @@ A nova direção é separar claramente:
 | User project private | `~/.aurelia/users/<id>/projects/<slug>/memory/` | user × project | work log, notas pessoais |
 | Project team | `~/.aurelia/projects/<slug>/team/` | project shared | stack, padrões, ADRs resumidos |
 | Topic memory | `~/.aurelia/topics/chat_<id>/thread_<id>/` | conversation shared | decisões do tópico, contexto temporário |
+| Procedural skills | `~/.aurelia/users/<id>/skills/<slug>/SKILL.md` | user private | procedimentos reutilizáveis, workflows, runbooks |
 
 ---
 
@@ -197,6 +201,20 @@ A nova direção é separar claramente:
 
 ---
 
+### P2: Memory UX e checkpoints
+
+**User Story:** Como usuário em fluxos longos, quero entender qual memória está ativa e quando Aurelia salvou/atualizou contexto, para reduzir sensação de degradação ou improviso.
+
+**Acceptance Criteria:**
+
+1. `/memory status` MAY mostrar camadas ativas: user, project-private, team, topic e último checkpoint.
+2. `/memory checkpoint` MAY materializar um resumo curto do trabalho atual: objetivo, status, decisões, próximos passos e arquivos relevantes.
+3. Nudge/dream SHOULD registrar um receipt resumido: quantidade de writes, layers tocadas e sugestões de Auto-Skill.
+4. Checkpoints SHALL ficar no escopo correto (`topic` ou user project private) e nunca em team memory sem classificação explícita.
+5. Procedimentos reutilizáveis detectados em checkpoints SHALL virar apenas sugestão para Auto-Skills; criação de `SKILL.md` continua exigindo confirmação.
+
+---
+
 ## Extraction Classification Guide
 
 | Informação | Camada |
@@ -208,6 +226,7 @@ A nova direção é separar claramente:
 | Stack, versões, comandos de validação | Project team |
 | Convenções de arquitetura/testes | Project team |
 | Decisão tomada no tópico atual | Topic memory ou Project team, conforme escopo |
+| Workflow reutilizável aprendido | Auto-Skill PI-compatible após confirmação |
 | PII, segredo, dado privado | User private ou descartar; nunca team |
 
 ---
@@ -221,6 +240,7 @@ A nova direção é separar claramente:
 | `internal/pipeline/` | Prompt assembly com `TurnContext` e camadas corretas |
 | `internal/dream/` | Extrator/nudge com targets escopados |
 | `internal/session/` | Separar `SessionKey` de `ConversationKey` |
+| `internal/skills/` | Auto-Skills privadas em layout PI-compatible, fora das camadas de fatos |
 | `cmd/aurelia/` | Comando de migração explícito |
 
 ---

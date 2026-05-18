@@ -14,6 +14,7 @@ import (
 	"gopkg.in/telebot.v3"
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
+	memoryuxpkg "github.com/igormaneschy/aurelia/internal/memoryux"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
@@ -30,6 +31,8 @@ const (
 	CmdListAgents
 	CmdListModels
 	CmdSetModel
+	CmdMemoryStatus
+	CmdMemoryCheckpoint
 )
 
 // MatchedCommand represents a message that was identified as a system command.
@@ -101,6 +104,16 @@ var commandRules = []commandRule{
 		"muda modelo", "mudar modelo", "troca modelo", "trocar modelo",
 		"escolhe modelo", "seleciona modelo",
 		"/model ",
+	}, false},
+	// memory_status
+	{CmdMemoryStatus, []string{
+		"memory status",
+		"status memoria", "status da memoria",
+	}, true},
+	// memory_checkpoint
+	{CmdMemoryCheckpoint, []string{
+		"memory checkpoint",
+		"checkpoint memoria", "checkpoint de memoria",
 	}, false},
 }
 
@@ -209,6 +222,10 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 		reply, err = bc.cmdListModels()
 	case CmdSetModel:
 		reply, err = bc.cmdSetModel(c, cmd.Text)
+	case CmdMemoryStatus:
+		reply, err = bc.cmdMemoryStatus(c.Chat().ID, c.Message().ThreadID)
+	case CmdMemoryCheckpoint:
+		reply, err = bc.cmdMemoryCheckpoint(c.Chat().ID, c.Message().ThreadID, cmd.Text)
 	default:
 		return fmt.Errorf("unknown command type: %d", cmd.Type)
 	}
@@ -758,6 +775,43 @@ func extractModelName(text string) string {
 	}
 
 	return ""
+}
+
+func (bc *BotController) cmdMemoryStatus(chatID int64, threadID int) (string, error) {
+	svc := memoryuxpkg.New(bc.memoryDir, bc.resolver)
+	cwd := bc.currentCwd(chatID, threadID)
+	status, err := svc.Status(chatID, threadID, cwd)
+	if err != nil {
+		return "", fmt.Errorf("memory status: %w", err)
+	}
+	return memoryuxpkg.FormatStatus(status), nil
+}
+
+func (bc *BotController) cmdMemoryCheckpoint(chatID int64, threadID int, text string) (string, error) {
+	// Extract note after the command phrase
+	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed)
+
+	prefixes := []string{
+		"memory checkpoint",
+		"checkpoint memoria",
+		"checkpoint de memoria",
+	}
+	note := ""
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			note = strings.TrimSpace(trimmed[len(prefix):])
+			break
+		}
+	}
+
+	svc := memoryuxpkg.New(bc.memoryDir, bc.resolver)
+	cwd := bc.currentCwd(chatID, threadID)
+	result, err := svc.WriteCheckpoint(chatID, threadID, cwd, note)
+	if err != nil {
+		return "", fmt.Errorf("memory checkpoint: %w", err)
+	}
+	return memoryuxpkg.FormatCheckpoint(result), nil
 }
 
 // saveDefaultModel persists the default provider and model to the config file.

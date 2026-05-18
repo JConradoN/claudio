@@ -58,6 +58,17 @@ func TestMatch(t *testing.T) {
 		{name: "lista modelos", text: "lista modelos", want: cmdPtr(CmdListModels)},
 		{name: "lista provedores", text: "lista provedores", want: cmdPtr(CmdListModels)},
 
+		// --- memory_status ---
+		{name: "memory status", text: "memory status", want: cmdPtr(CmdMemoryStatus)},
+		{name: "status da memoria exact", text: "status da memoria", want: cmdPtr(CmdMemoryStatus)},
+		{name: "status memoria exact", text: "status memoria", want: cmdPtr(CmdMemoryStatus)},
+		{name: "status memoria with punct", text: "status da memoria?", want: cmdPtr(CmdMemoryStatus)},
+
+		// --- memory_checkpoint ---
+		{name: "memory checkpoint", text: "memory checkpoint trabalhando em X", want: cmdPtr(CmdMemoryCheckpoint)},
+		{name: "checkpoint memoria", text: "checkpoint memoria revisar PR", want: cmdPtr(CmdMemoryCheckpoint)},
+		{name: "checkpoint de memoria", text: "checkpoint de memoria", want: cmdPtr(CmdMemoryCheckpoint)},
+
 		// --- NO match: normal conversation ---
 		{name: "greeting", text: "bom dia", want: nil},
 		{name: "question", text: "como funciona o bridge?", want: nil},

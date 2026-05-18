@@ -108,6 +108,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 - project team memory por repositório/cwd;
 - topic memory por `ConversationKey`;
 - prompt assembly com camadas corretas;
+- UX mínima de memória/checkpoints para fluxos longos;
 - migration explícita do layout single-user.
 
 **Por que antes do nudge:** nudge precisa saber onde salvar cada memória.
@@ -205,17 +206,19 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 **Status:** Revised after code review + roadmap updates  
 **Depende de:** User Isolation + Security Guard-Rails; ganha valor com Nudge, Plan Mode, Orchestration e Agent Comms
 
-**Problem:** tarefas bem-sucedidas viram conhecimento perdido; Auto-Skills transforma procedimentos úteis em skill-agents privados.
+**Problem:** tarefas bem-sucedidas viram conhecimento perdido; Auto-Skills transforma procedimentos úteis em skills privadas, PI-compatible (`SKILL.md`), mas gerenciadas pelo Aurelia.
 
 **Scope:**
 
 - recorder de último turno bem-sucedido;
 - `/skill save <slug>` explícito;
 - geração via LLM sem tools;
-- validação rígida de frontmatter;
-- storage privado por user;
+- validação rígida de frontmatter Agent Skills/PI + adapter Aurelia;
+- storage privado por user em layout `<slug>/SKILL.md`;
 - `capability_profile` obrigatório/validado;
 - registry per-user.
+
+**Decisão:** seguir a Opção A — Aurelia-native, PI-compatible. Não usar `pi-hermes-memory` nem escrever em `~/.pi/agent` no MVP; o Aurelia mantém escopo, segurança e UX, reaproveitando apenas o formato/conceito de skills do PI.
 
 **Por que por último:** depende de isolamento e segurança; fica muito mais valioso quando pode aprender com nudge/orchestration/agent-comms.
 

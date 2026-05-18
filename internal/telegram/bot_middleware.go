@@ -12,6 +12,7 @@ import (
 	"gopkg.in/telebot.v3"
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
+	memoryuxpkg "github.com/igormaneschy/aurelia/internal/memoryux"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
@@ -59,6 +60,7 @@ func (bc *BotController) registerContentRoutes() {
 	bc.bot.Handle("/status", bc.handleStatusCommand)
 	bc.bot.Handle("/cron", bc.handleCronCommand)
 	bc.bot.Handle("/agents", bc.handleAgentsCommand)
+	bc.bot.Handle("/memory", bc.handleMemoryCommand)
 	bc.bot.Handle("/model", bc.handleModelCommand)
 	bc.bot.Handle(telebot.OnCallback, bc.handleModelCallback)
 	bc.bot.Handle(telebot.OnText, bc.handleText)
@@ -76,6 +78,7 @@ func (bc *BotController) registerSlashMenu() {
 		{Text: "cwd", Description: "Definir diretório de trabalho"},
 		{Text: "cron", Description: "Gerenciar agendamentos"},
 		{Text: "agents", Description: "Listar agentes disponíveis"},
+		{Text: "memory", Description: "Ver status da memória e criar checkpoints"},
 		{Text: "model", Description: "Ver/trocar modelo ativo"},
 		{Text: "help", Description: "Mostrar comandos disponíveis"},
 	}
@@ -97,6 +100,7 @@ func helpMessage() string {
 		"/cwd <path> — Definir diretório de trabalho (tópicos herdam do grupo)\n" +
 		"/cron — Gerenciar agendamentos\n" +
 		"/agents — Listar agentes disponíveis (também roteáveis com @nome)\n" +
+		"/memory — Ver status da memória e criar checkpoints\n" +
 		"/model — Ver/trocar modelo ativo\n" +
 		"/help — Mostrar esta mensagem\n\n" +
 		"---\n\n" +
@@ -499,6 +503,46 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 	}
 
 	return c.Edit(fmt.Sprintf("✅ Modelo alterado para **%s**\nProvedor: **%s**\n\n%s", modelID, provider, resetMsg))
+}
+
+func (bc *BotController) handleMemoryCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
+	chatID := c.Chat().ID
+	threadID := c.Message().ThreadID
+	payload := strings.TrimSpace(c.Message().Payload)
+
+	svc := memoryuxpkg.New(bc.memoryDir, bc.resolver)
+	cwd := bc.currentCwd(chatID, threadID)
+
+	parts := strings.Fields(payload)
+	var cmd string
+	var args string
+	if len(parts) > 0 {
+		cmd = strings.ToLower(parts[0])
+		if len(parts) > 1 {
+			args = strings.Join(parts[1:], " ")
+		}
+	}
+
+	switch cmd {
+	case "", "status":
+		status, err := svc.Status(chatID, threadID, cwd)
+		if err != nil {
+			return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
+		}
+		return SendTextWithThread(bc.bot, c.Chat(), memoryuxpkg.FormatStatus(status), threadID)
+	case "checkpoint":
+		result, err := svc.WriteCheckpoint(chatID, threadID, cwd, args)
+		if err != nil {
+			return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
+		}
+		return SendTextWithThread(bc.bot, c.Chat(), memoryuxpkg.FormatCheckpoint(result), threadID)
+	default:
+		msg := "🧠 **Memory Commands**\n\n" +
+			"`/memory` or `/memory status` — Show active memory layers\n" +
+			"`/memory checkpoint [note]` — Write/update a task checkpoint"
+		return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
+	}
 }
 
 func callbackThreadID(c telebot.Context) int {

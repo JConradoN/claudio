@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.7] - 2026-05-18
+
+### Adicionado
+- Comando `/memory status` para visualizar camadas de memória ativas, diretórios, arquivos Markdown e alvo de checkpoint.
+- Comando `/memory checkpoint [nota]` para salvar `current_task.md` no melhor escopo disponível: project-private, topic ou global fallback.
+- Matches naturais em português para status/checkpoint de memória.
+
+### Segurança
+- Checkpoints usam escrita atômica, diretórios `0700`, arquivos `0600` e proteção contra symlink escape.
+
 ## [0.7.6] - 2026-05-18
 
 ### Corrigido
