@@ -395,6 +395,61 @@ func TestSafeWriter_TopicLayerWritesFiles(t *testing.T) {
 	}
 }
 
+func TestSafeWriter_TopicLayerRejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	topicDir := filepath.Join(dir, "topics", "chat_1", "thread_2")
+
+	// Create a symlink in the topic dir pointing outside the memory root
+	outsideFile := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outsideFile, []byte("escape"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(topicDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	escapeLink := filepath.Join(topicDir, "escape.md")
+	if err := os.Symlink(outsideFile, escapeLink); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := &testResolver{memoryDir: dir, topicDir: topicDir}
+	w, err := newSafeMemoryWriter(dir, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "topic", Filename: "escape.md", Facts: []string{"should fail"}},
+	}, 1, 2, "")
+	if applied != 0 {
+		t.Fatal("expected topic layer symlink escape to be rejected")
+	}
+}
+
+func TestSafeWriter_TopicLayerRejectsPersonas(t *testing.T) {
+	dir := t.TempDir()
+	topicDir := filepath.Join(dir, "topics", "chat_1", "thread_2")
+	personasTopicDir := filepath.Join(topicDir, "personas")
+	if err := os.MkdirAll(personasTopicDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := &testResolver{memoryDir: dir, topicDir: topicDir}
+	w, err := newSafeMemoryWriter(dir, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write to personas subdirectory within topic (should be rejected because
+	// topic layer inherits global persona blocking via root=memoryDir)
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "topic", Filename: "../topic/personas/evil.md", Facts: []string{"should fail"}},
+	}, 1, 2, "")
+	if applied != 0 {
+		t.Fatal("expected topic layer personas write to be rejected")
+	}
+}
+
 func TestSafeWriter_ProjectLayerWritesFiles(t *testing.T) {
 	dir := t.TempDir()
 	projectDir := filepath.Join(dir, "projects", "my-project", "conversations", "chat_1", "thread_1")
@@ -445,9 +500,117 @@ func TestSafeWriter_TeamLayerWritesFiles(t *testing.T) {
 	}
 }
 
-func TestSafeWriter_IndexFailureCountsAsApplied(t *testing.T) {
-	// Index failure should cause applyOne to return error,
-	// meaning the update is NOT counted as applied.
+// Regression: project layer writes succeed when project dir is outside global memory root.
+func TestSafeWriter_ProjectLayerOutsideGlobalRoot(t *testing.T) {
+	memoryDir := t.TempDir()
+	projectDir := t.TempDir() // unrelated temp dir, NOT under memoryDir
+	resolver := &testResolver{memoryDir: memoryDir, projectDir: projectDir}
+	w, err := newSafeMemoryWriter(memoryDir, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "project", Filename: "outside_root.md", Title: "Outside", Facts: []string{"project outside global root"}},
+	}, 42, 7, "/some/project")
+	if applied != 1 {
+		t.Fatalf("expected 1 applied update, got %d", applied)
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectDir, "outside_root.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "- project outside global root") {
+		t.Fatal("missing project fact in outside-root project dir")
+	}
+}
+
+// Regression: team layer writes succeed when team dir is outside global memory root.
+func TestSafeWriter_TeamLayerOutsideGlobalRoot(t *testing.T) {
+	memoryDir := t.TempDir()
+	teamDir := t.TempDir() // unrelated temp dir, NOT under memoryDir
+	resolver := &testResolver{memoryDir: memoryDir, teamDir: teamDir}
+	w, err := newSafeMemoryWriter(memoryDir, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "team", Filename: "team_notes.md", Title: "Team", Facts: []string{"team fact outside global root"}},
+	}, 42, 7, "/some/project")
+	if applied != 1 {
+		t.Fatalf("expected 1 applied update, got %d", applied)
+	}
+
+	data, err := os.ReadFile(filepath.Join(teamDir, "team_notes.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "- team fact outside global root") {
+		t.Fatal("missing team fact in outside-root team dir")
+	}
+}
+
+// Security: project layer rejects symlink escaping its layer root.
+func TestSafeWriter_ProjectLayerRejectsSymlinkEscape(t *testing.T) {
+	memoryDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	// Create a symlink inside projectDir that points outside
+	outsideFile := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outsideFile, []byte("escape"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	escapeLink := filepath.Join(projectDir, "escape.md")
+	if err := os.Symlink(outsideFile, escapeLink); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := &testResolver{memoryDir: memoryDir, projectDir: projectDir}
+	w, err := newSafeMemoryWriter(memoryDir, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "project", Filename: "escape.md", Facts: []string{"should fail"}},
+	}, 42, 7, "/some/project")
+	if applied != 0 {
+		t.Fatal("expected project layer symlink escape to be rejected")
+	}
+}
+
+// Security: team layer rejects symlink escaping its layer root.
+func TestSafeWriter_TeamLayerRejectsSymlinkEscape(t *testing.T) {
+	memoryDir := t.TempDir()
+	teamDir := t.TempDir()
+
+	outsideFile := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outsideFile, []byte("escape"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	escapeLink := filepath.Join(teamDir, "escape.md")
+	if err := os.Symlink(outsideFile, escapeLink); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := &testResolver{memoryDir: memoryDir, teamDir: teamDir}
+	w, err := newSafeMemoryWriter(memoryDir, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "team", Filename: "escape.md", Facts: []string{"should fail"}},
+	}, 42, 7, "/some/project")
+	if applied != 0 {
+		t.Fatal("expected team layer symlink escape to be rejected")
+	}
+}
+
+// Permission: new memory files use private permissions (0600) on Unix.
+func TestSafeWriter_PrivatePermissions(t *testing.T) {
 	dir := t.TempDir()
 	resolver := &testResolver{memoryDir: dir}
 	w, err := newSafeMemoryWriter(dir, resolver)
@@ -455,22 +618,43 @@ func TestSafeWriter_IndexFailureCountsAsApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Remove write permission from dir to force index write failure
-	// after fact write succeeds (but before index update).
-	// Note: this test may behave differently on different systems.
-	// Focus is on behavior when updateMemoryIndex returns error.
-
-	// Write to a valid path, but with an unwritable MEMORY.md target
-	// by making the dir read-only after the fact file is created
-	updates := []memoryUpdate{
-		{Layer: "global", Filename: "test.md", Facts: []string{"fact"}},
-	}
-	// We can't easily test index failure without file permission tricks,
-	// but the code path is tested indirectly via updateMemoryIndex tests.
-	applied := w.applyUpdates(updates, 0, 0, "")
-	// The update should be applied (index succeeds with writable dir)
+	applied := w.applyUpdates([]memoryUpdate{
+		{Layer: "global", Filename: "perms.md", Facts: []string{"permission check"}},
+	}, 0, 0, "")
 	if applied != 1 {
-		t.Fatalf("expected 1 applied update in normal conditions, got %d", applied)
+		t.Fatalf("expected 1 applied update, got %d", applied)
+	}
+
+	// Check file permission — files must be owner-only (0600)
+	fileInfo, err := os.Stat(filepath.Join(dir, "perms.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileInfo.Mode().Perm()&0077 != 0 {
+		t.Errorf("memory file should be private (mode&0077 == 0), got %o", fileInfo.Mode().Perm())
+	}
+}
+
+// TestUpdateMemoryIndex_FailsOnReadOnlyDir verifies that updateMemoryIndex
+// returns an error when it cannot write to the target directory.
+func TestUpdateMemoryIndex_FailsOnUnwritableDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create MEMORY.md successfully first
+	if err := updateMemoryIndex(dir, "existing.md", "Existing"); err != nil {
+		t.Fatalf("expected first MEMORY.md write to succeed: %v", err)
+	}
+
+	// Make the directory read-only (permission 0500 = r-x------)
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Skipf("cannot chmod temp dir: %v", err)
+	}
+	defer os.Chmod(dir, 0700) // restore for cleanup
+
+	// Attempting to write another entry should fail
+	err := updateMemoryIndex(dir, "new_file.md", "New")
+	if err == nil {
+		t.Fatal("expected updateMemoryIndex to fail on read-only directory")
 	}
 }
 
@@ -697,6 +881,16 @@ func TestUpdateMemoryIndex_RejectsSymlinkMEMORY(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when MEMORY.md is symlink to personas")
 	}
+}
+
+// isPersonasDirLexical checks if a relative path starts with "personas/".
+// Test-only helper — production uses isPersonasRelPath.
+func isPersonasDirLexical(memoryDir, path string) bool {
+	rel, err := filepath.Rel(memoryDir, path)
+	if err != nil {
+		return true
+	}
+	return strings.HasPrefix(rel, "personas") && (len(rel) == 8 || rel[8] == filepath.Separator)
 }
 
 func TestUpdateMemoryIndex_AcceptsNormalFile(t *testing.T) {

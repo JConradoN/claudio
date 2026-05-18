@@ -50,7 +50,7 @@ func acquireLock() (release func(), err error) {
 	}
 
 	// 2. Open (or create) the lock file with RDWR so we can flock it.
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("instance lock: open: %w", err)
 	}

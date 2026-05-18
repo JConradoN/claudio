@@ -150,6 +150,131 @@ func TestLoadMemoryForConsolidation_ReadsFiles(t *testing.T) {
 	}
 }
 
+func TestConsolidationMerge_WritesFactsAndIndex(t *testing.T) {
+	dir := t.TempDir()
+	w, err := newSafeMemoryWriter(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create source files
+	if err := os.WriteFile(filepath.Join(dir, "src1.md"), []byte("- old fact 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src2.md"), []byte("- old fact 2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	applied := applyConsolidationActions(w, []consolidationAction{
+		{
+			MergeFiles: &mergeOp{
+				SourceFiles: []string{"src1.md", "src2.md"},
+				IntoFile:    "merged.md",
+				Title:       "Merged Notes",
+				Facts:       []string{"merged fact 1", "merged fact 2"},
+			},
+		},
+	}, 0, 0, "")
+	if applied != 1 {
+		t.Fatalf("expected 1 applied action, got %d", applied)
+	}
+
+	// Verify target file has merged facts
+	data, err := os.ReadFile(filepath.Join(dir, "merged.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "- merged fact 1") {
+		t.Fatal("missing merged fact 1")
+	}
+	if !strings.Contains(content, "- merged fact 2") {
+		t.Fatal("missing merged fact 2")
+	}
+
+	// Verify source files are removed
+	if _, err := os.Stat(filepath.Join(dir, "src1.md")); !os.IsNotExist(err) {
+		t.Fatal("expected src1.md to be removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src2.md")); !os.IsNotExist(err) {
+		t.Fatal("expected src2.md to be removed")
+	}
+
+	// Verify MEMORY.md has entry
+	memIndex, err := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(memIndex), "[Merged Notes](merged.md)") {
+		t.Fatalf("MEMORY.md missing entry: %s", memIndex)
+	}
+}
+
+func TestConsolidationMerge_RejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a file outside the memory root
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.md")
+	if err := os.WriteFile(outsideFile, []byte("escape"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a symlink inside the memory root pointing outside
+	escapeLink := filepath.Join(dir, "merged.md")
+	if err := os.Symlink(outsideFile, escapeLink); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := newSafeMemoryWriter(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := applyConsolidationActions(w, []consolidationAction{
+		{
+			MergeFiles: &mergeOp{
+				SourceFiles: []string{},
+				IntoFile:    "merged.md", // exists as symlink -> outside
+				Facts:       []string{"should be rejected"},
+			},
+		},
+	}, 0, 0, "")
+	if applied != 0 {
+		t.Fatal("expected merge to be rejected for symlink escape")
+	}
+}
+
+func TestConsolidationMerge_PrivatePermissions(t *testing.T) {
+	dir := t.TempDir()
+	w, err := newSafeMemoryWriter(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied := applyConsolidationActions(w, []consolidationAction{
+		{
+			MergeFiles: &mergeOp{
+				SourceFiles: []string{},
+				IntoFile:    "merged.md",
+				Facts:       []string{"private fact"},
+			},
+		},
+	}, 0, 0, "")
+	if applied != 1 {
+		t.Fatalf("expected 1 applied action, got %d", applied)
+	}
+
+	// Check file permissions — files must be owner-only (0600)
+	fileInfo, err := os.Stat(filepath.Join(dir, "merged.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileInfo.Mode().Perm()&0077 != 0 {
+		t.Errorf("merged file should be private (mode&0077 == 0), got %o", fileInfo.Mode().Perm())
+	}
+}
+
 func TestLoadMemoryForConsolidation_ExcludesPersonas(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "safe.md"), []byte("safe"), 0644); err != nil {

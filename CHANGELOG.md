@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.6] - 2026-05-18
+
+### Corrigido
+- Lock file de instância agora usa permissão `0600` (owner-only) em vez de `0644`, reduzindo superfície de leitura por outros usuários do sistema.
+- Removida função morta `isPersonasDirLexical` do código de produção (só usada em testes; substituída por helper em teste).
+
+### Adicionado
+- Testes de consolidação `applyMerge`: verificação de escrita de facts, atualização de `MEMORY.md`, remoção de source files, rejeição de symlink escape e permissões privadas em arquivos merged.
+
 ## [0.7.5] - 2026-05-18
 
 ### Corrigido

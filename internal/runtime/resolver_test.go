@@ -294,9 +294,26 @@ func TestResolveProjectCwd_RejectsEmptyAndWhitespace(t *testing.T) {
 	}
 }
 
-func TestResolveProjectCwd_RejectsNonProjectDirectory(t *testing.T) {
-	if _, err := ResolveProjectCwd(t.TempDir()); err == nil {
-		t.Fatal("expected non-project directory to be rejected")
+func TestResolveProjectCwd_AllowsPlainDirectory(t *testing.T) {
+	dir := t.TempDir()
+	got, err := ResolveProjectCwd(dir)
+	if err != nil {
+		t.Fatalf("ResolveProjectCwd(%q) unexpected error: %v", dir, err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Clean(want) {
+		t.Errorf("ResolveProjectCwd(%q) = %q, want %q", dir, got, want)
+	}
+}
+
+func TestResolveProjectCwd_RejectsNonExistentDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nonexistent")
+	_, err := ResolveProjectCwd(dir)
+	if err == nil {
+		t.Fatal("expected non-existent directory to be rejected")
 	}
 }
 

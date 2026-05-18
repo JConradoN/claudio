@@ -128,9 +128,13 @@ func applyMerge(w *safeMemoryWriter, op *mergeOp, chatID int64, threadID int, cw
 	if err := validateFilename(op.IntoFile); err != nil {
 		return fmt.Errorf("merge target: %w", err)
 	}
-	// Use resolvedDir for all operations (handles macOS /var → /private/var symlinks)
+	// Use resolvedDir for all operations (handles macOS /var → /private/var symlinks).
+	// This is consistent with applyOne for global layer: resolveLayerTarget("global")
+	// returns w.memoryDir which resolves to the same path after EvalSymlinks in step 7.
+	// Here we use the pre-resolved path directly, which is equivalent.
 	base := w.resolvedDir
 	target := filepath.Join(base, op.IntoFile)
+	lt := layerTarget{base: base, root: base, blocksPersonas: true}
 
 	// Verify containment
 	if !isSubDirLexical(base, target) {
@@ -138,7 +142,7 @@ func applyMerge(w *safeMemoryWriter, op *mergeOp, chatID int64, threadID int, cw
 	}
 
 	// Create directory if needed
-	if err := os.MkdirAll(base, 0755); err != nil {
+	if err := os.MkdirAll(base, 0700); err != nil {
 		return fmt.Errorf("create merge dir: %w", err)
 	}
 
@@ -156,7 +160,7 @@ func applyMerge(w *safeMemoryWriter, op *mergeOp, chatID int64, threadID int, cw
 	mergedFacts = dedupeStrings(mergedFacts)
 
 	// Check target file symlink before writing (H-01 residual)
-	if err := w.checkTargetSymlink(target); err != nil {
+	if err := w.checkTargetSymlink(lt, base, target); err != nil {
 		return fmt.Errorf("merge target symlink: %w", err)
 	}
 	if err := appendUniqueFacts(target, mergedFacts); err != nil {
@@ -198,6 +202,11 @@ func applyDelete(w *safeMemoryWriter, filename string, chatID int64, threadID in
 	target := filepath.Join(w.resolvedDir, filename)
 	if !isSubDirLexical(w.resolvedDir, target) {
 		return errPathTraversal
+	}
+	// Resolve and check for symlink escape before deletion (consistency with applyOne).
+	lt := layerTarget{base: w.resolvedDir, root: w.resolvedDir, blocksPersonas: true}
+	if err := w.checkTargetSymlink(lt, w.resolvedDir, target); err != nil {
+		return fmt.Errorf("delete symlink: %w", err)
 	}
 	if err := os.Remove(target); err != nil {
 		return fmt.Errorf("delete file: %w", err)
@@ -244,5 +253,5 @@ func removeMemoryIndexEntry(dir, filename string) error {
 		}
 		filtered = append(filtered, line)
 	}
-	return os.WriteFile(indexPath, []byte(strings.Join(filtered, "\n")), 0644)
+	return os.WriteFile(indexPath, []byte(strings.Join(filtered, "\n")), 0600)
 }

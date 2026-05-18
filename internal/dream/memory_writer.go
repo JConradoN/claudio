@@ -49,40 +49,55 @@ func newSafeMemoryWriter(memoryDir string, resolver memoryDirResolver) (*safeMem
 	return &safeMemoryWriter{memoryDir: memoryDir, resolvedDir: resolvedDir, resolver: resolver}, nil
 }
 
-// layerDir resolves the base directory for a given layer.
-func (w *safeMemoryWriter) layerDir(layer string, chatID int64, threadID int, cwd string) (string, error) {
+// layerTarget describes a resolved layer's base directory and containment root.
+type layerTarget struct {
+	base           string // where files are created
+	root           string // containment boundary (symlink-resolved at use)
+	blocksPersonas bool   // whether to reject paths relative to root/personas/
+}
+
+// resolveLayerTarget resolves the base directory and containment root for a layer.
+func (w *safeMemoryWriter) resolveLayerTarget(layer string, chatID int64, threadID int, cwd string) (layerTarget, error) {
 	switch layer {
 	case "global":
-		return w.memoryDir, nil
+		return layerTarget{base: w.memoryDir, root: w.memoryDir, blocksPersonas: true}, nil
 	case "topic":
 		if threadID <= 0 {
-			return "", fmt.Errorf("topic layer requires threadID > 0")
+			return layerTarget{}, fmt.Errorf("topic layer requires threadID > 0")
 		}
 		dir := w.resolver.TopicMemoryDir(chatID, threadID)
 		if dir == "" {
-			return "", fmt.Errorf("topic memory directory not available")
+			return layerTarget{}, fmt.Errorf("topic memory directory not available")
 		}
-		return dir, nil
+		return layerTarget{base: dir, root: w.memoryDir, blocksPersonas: true}, nil
 	case "project":
 		if cwd == "" || w.resolver == nil {
-			return "", fmt.Errorf("project layer requires cwd")
+			return layerTarget{}, fmt.Errorf("project layer requires cwd")
 		}
 		dir := w.resolver.ProjectMemoryDir(cwd, chatID, threadID)
 		if dir == "" {
-			return "", fmt.Errorf("project memory directory not available (no project context)")
+			return layerTarget{}, fmt.Errorf("project memory directory not available (no project context)")
 		}
-		return dir, nil
+		// blocksPersonas=false because project dirs live under
+		// ~/.aurelia/projects/... which is completely separate from
+		// ~/.aurelia/memory/personas/. The containment root (= dir)
+		// is the project dir itself, so a personas/ subdir cannot
+		// exist there under normal operation.
+		return layerTarget{base: dir, root: dir, blocksPersonas: false}, nil
 	case "team":
 		if cwd == "" || w.resolver == nil {
-			return "", fmt.Errorf("team layer requires cwd")
+			return layerTarget{}, fmt.Errorf("team layer requires cwd")
 		}
 		dir := w.resolver.TeamMemoryDir(cwd)
 		if dir == "" {
-			return "", fmt.Errorf("team memory directory not available (no project context)")
+			return layerTarget{}, fmt.Errorf("team memory directory not available (no project context)")
 		}
-		return dir, nil
+		// blocksPersonas=false: same rationale as project layer.
+		// Team dirs live under ~/.aurelia/projects/.../team/, separate
+		// from global ~/.aurelia/memory/personas/.
+		return layerTarget{base: dir, root: dir, blocksPersonas: false}, nil
 	default:
-		return "", errInvalidLayer
+		return layerTarget{}, errInvalidLayer
 	}
 }
 
@@ -155,31 +170,35 @@ func (w *safeMemoryWriter) applyOne(u memoryUpdate, chatID int64, threadID int, 
 		return err
 	}
 
-	// 3. Resolve layer base directory (does not create anything)
-	base, err := w.layerDir(u.Layer, chatID, threadID, cwd)
+	// 3. Resolve layer target: base + containment root + persona policy
+	lt, err := w.resolveLayerTarget(u.Layer, chatID, threadID, cwd)
 	if err != nil {
 		return err
 	}
 
 	// 4. Build target path
-	target := filepath.Join(base, u.Filename)
+	target := filepath.Join(lt.base, u.Filename)
 
-	// 5. Lexical containment: ensure base is relative to memoryDir.
+	// 5. Lexical containment: ensure base is relative to layer root.
 	// This catches obvious escapes before any I/O.
-	if !isSubDirLexical(w.memoryDir, base) {
+	if !isSubDirLexical(lt.root, lt.base) {
 		return errPathTraversal
 	}
 
-	// 6. Create the base directory. MkdirAll safely creates regular directories.
+	// 6. Create the base directory with private permissions.
 	// If a malicious symlink already exists at this path, MkdirAll follows it
 	// (no-op if target exists). The symlink escape is detected in step 7.
-	if err := os.MkdirAll(base, 0755); err != nil {
+	if err := os.MkdirAll(lt.base, 0700); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
-	// 7. Symlink-resolved containment: resolve base's symlinks and check
-	// that it (and the target parent) stay inside the resolved memoryDir.
-	baseResolved, err := filepath.EvalSymlinks(base)
+	// 7. Symlink-resolved containment: resolve layer root and base symlinks,
+	// then check that base and target parent stay inside the resolved root.
+	rootResolved, err := filepath.EvalSymlinks(lt.root)
+	if err != nil {
+		return fmt.Errorf("resolve layer root symlinks: %w", err)
+	}
+	baseResolved, err := filepath.EvalSymlinks(lt.base)
 	if err != nil {
 		return fmt.Errorf("resolve base symlinks: %w", err)
 	}
@@ -188,27 +207,29 @@ func (w *safeMemoryWriter) applyOne(u memoryUpdate, chatID int64, threadID int, 
 		return fmt.Errorf("resolve target dir symlinks: %w", err)
 	}
 
-	if !isSubDirLexical(w.resolvedDir, baseResolved) {
+	if !isSubDirLexical(rootResolved, baseResolved) {
 		return errPathTraversal
 	}
-	if !isSubDirLexical(w.resolvedDir, targetParentResolved) {
+	if !isSubDirLexical(rootResolved, targetParentResolved) {
 		return errPathTraversal
 	}
 
-	// 8. Personas exclusion: use resolved paths to prevent symlink-based escape.
-	rel, err := filepath.Rel(w.resolvedDir, baseResolved)
-	if err != nil || isPersonasRelPath(rel) {
-		return errPersonasPath
-	}
-	rel, err = filepath.Rel(w.resolvedDir, targetParentResolved)
-	if err != nil || isPersonasRelPath(rel) {
-		return errPersonasPath
+	// 8. Personas exclusion (only for layers that block personas).
+	if lt.blocksPersonas {
+		rel, err := filepath.Rel(rootResolved, baseResolved)
+		if err != nil || isPersonasRelPath(rel) {
+			return errPersonasPath
+		}
+		rel, err = filepath.Rel(rootResolved, targetParentResolved)
+		if err != nil || isPersonasRelPath(rel) {
+			return errPersonasPath
+		}
 	}
 
 	// 9. Resolve existing target symlink (H-01 residual): if the target file
 	// already exists and is a symlink, EvalSymlinks reveals where it actually
-	// points. Reject if it escapes the resolved directory or targets personas.
-	if err := w.checkTargetSymlink(target); err != nil {
+	// points. Reject if it escapes the resolved root or targets personas.
+	if err := w.checkTargetSymlink(lt, rootResolved, target); err != nil {
 		return err
 	}
 
@@ -219,7 +240,7 @@ func (w *safeMemoryWriter) applyOne(u memoryUpdate, chatID int64, threadID int, 
 
 	// 11. Update MEMORY.md index — use resolved base path so that
 	// updateMemoryIndex's internal symlink resolution matches correctly.
-	if err := w.checkTargetSymlink(filepath.Join(baseResolved, "MEMORY.md")); err != nil {
+	if err := w.checkTargetSymlink(lt, rootResolved, filepath.Join(baseResolved, "MEMORY.md")); err != nil {
 		return fmt.Errorf("MEMORY.md symlink: %w", err)
 	}
 	if err := updateMemoryIndex(baseResolved, u.Filename, u.Title); err != nil {
@@ -230,20 +251,22 @@ func (w *safeMemoryWriter) applyOne(u memoryUpdate, chatID int64, threadID int, 
 }
 
 // checkTargetSymlink resolves an existing file via EvalSymlinks and rejects it
-// if the resolved path escapes the allowed directory or targets personas/.
+// if the resolved path escapes the layer's containment root or targets personas/.
 // If the file does not exist (new file), no check is needed.
-func (w *safeMemoryWriter) checkTargetSymlink(target string) error {
+func (w *safeMemoryWriter) checkTargetSymlink(lt layerTarget, rootResolved string, target string) error {
 	resolved, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		// File doesn't exist — new file, no symlink to check
 		return nil
 	}
-	if !isSubDirLexical(w.resolvedDir, resolved) {
+	if !isSubDirLexical(rootResolved, resolved) {
 		return errPathTraversal
 	}
-	rel, err := filepath.Rel(w.resolvedDir, resolved)
-	if err != nil || isPersonasRelPath(rel) {
-		return errPersonasPath
+	if lt.blocksPersonas {
+		rel, err := filepath.Rel(rootResolved, resolved)
+		if err != nil || isPersonasRelPath(rel) {
+			return errPersonasPath
+		}
 	}
 	return nil
 }
@@ -273,7 +296,7 @@ func appendUniqueFacts(path string, facts []string) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -354,7 +377,7 @@ func updateMemoryIndex(dir, filename, title string) error {
 	if err != nil {
 		// Create new MEMORY.md
 		header := "# Memory Index\n\n"
-		return os.WriteFile(indexPath, []byte(header+entryLine+"\n"), 0644)
+		return os.WriteFile(indexPath, []byte(header+entryLine+"\n"), 0600)
 	}
 
 	// Check line by line if entry already exists
@@ -370,7 +393,7 @@ func updateMemoryIndex(dir, filename, title string) error {
 		content += "\n"
 	}
 	content += entryLine + "\n"
-	return os.WriteFile(indexPath, []byte(content), 0644)
+	return os.WriteFile(indexPath, []byte(content), 0600)
 }
 
 // isSubDirLexical checks containment via clean + relative path comparison.
@@ -389,12 +412,3 @@ func isSubDirLexical(parent, sub string) bool {
 	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
 }
 
-// isPersonasDirLexical checks if a relative path starts with "personas/".
-// Only for use in tests — production uses isPersonasDirResolved.
-func isPersonasDirLexical(memoryDir, path string) bool {
-	rel, err := filepath.Rel(memoryDir, path)
-	if err != nil {
-		return true
-	}
-	return strings.HasPrefix(rel, "personas") && (len(rel) == 8 || rel[8] == filepath.Separator)
-}

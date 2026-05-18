@@ -105,7 +105,11 @@ func normalizeProjectCwdInput(raw string) (string, error) {
 	return s, nil
 }
 
-// ResolveProjectCwd validates and canonicalizes a user-provided project path.
+// ResolveProjectCwd validates and canonicalizes a user-provided working-directory path.
+// The path must exist, be a directory, and not be a sensitive or disallowed location
+// (root, home, ~/.ssh, ~/.config, ~/.aurelia). Unlike earlier versions, it does NOT
+// require project markers (.git, go.mod, etc.) — plain workspace directories are valid.
+//
 // Project bindings use this so equivalent paths such as /repo/app and
 // /repo/app/ map to the same persisted cwd and project memory slug.
 func ResolveProjectCwd(path string) (string, error) {
@@ -132,23 +136,7 @@ func ResolveProjectCwd(path string) (string, error) {
 	if err := rejectSensitiveProjectCwd(resolved); err != nil {
 		return "", err
 	}
-	if !looksLikeProjectDir(resolved) {
-		return "", fmt.Errorf("cwd %q is not recognized as a project directory", resolved)
-	}
 	return filepath.Clean(resolved), nil
-}
-
-func looksLikeProjectDir(dir string) bool {
-	markers := []string{
-		".git", "go.mod", "package.json", "pyproject.toml", "Cargo.toml",
-		"pom.xml", "build.gradle", "Makefile", "AGENTS.md", "CLAUDE.md", "README.md",
-	}
-	for _, marker := range markers {
-		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 func rejectSensitiveProjectCwd(cwd string) error {

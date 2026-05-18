@@ -138,6 +138,7 @@ func (d *Dreamer) run() {
 		log.Printf("[dream] skipped: %v", err)
 		return
 	}
+	defer releaseLock(d.memoryDir)
 
 	// Load memory contents in Go (safe, size-capped, personas excluded)
 	memoryContent := loadMemoryForConsolidation(d.memoryDir)
