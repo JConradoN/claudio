@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.5] - 2026-05-18
+
+### Corrigido
+- `/cwd` voltou a aceitar diretórios de trabalho existentes mesmo sem marcadores de projeto como `.git`, `README.md` ou `go.mod`, preservando bloqueios para caminhos sensíveis.
+
 ## [0.7.4] - 2026-05-18
 
 ### Corrigido
