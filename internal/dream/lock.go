@@ -50,11 +50,6 @@ func acquireLock(memoryDir string) error {
 	return nil
 }
 
-// releaseLock removes the lock file.
-func releaseLock(memoryDir string) {
-	_ = os.Remove(lockPath(memoryDir))
-}
-
 // touchLock updates the lock file mtime to now, recording when
 // the last dream completed.
 func touchLock(memoryDir string) {

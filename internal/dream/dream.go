@@ -127,7 +127,6 @@ func (d *Dreamer) run() {
 		log.Printf("[dream] skipped: %v", err)
 		return
 	}
-	defer releaseLock(d.memoryDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
+	"github.com/igormaneschy/aurelia/internal/projectbinding"
 )
 
 const (
@@ -96,6 +98,17 @@ func (bc *Service) effectiveCwd(agent *agents.Agent, chatID int64, threadID int)
 	if agent != nil && agent.Cwd != "" {
 		return agent.Cwd
 	}
+	if bc.bindings != nil {
+		resolved, err := bc.bindings.Resolve(context.Background(), projectbinding.ConversationKey{ChatID: chatID, ThreadID: threadID})
+		if err != nil {
+			log.Printf("cwd: failed to resolve project binding chat=%d thread=%d: %v", chatID, threadID, err)
+			return ""
+		}
+		if resolved != nil && resolved.Binding != nil {
+			_ = bc.bindings.Touch(context.Background(), resolved.SourceKey)
+			return resolved.Binding.CWD
+		}
+	}
 	return bc.sessions.GetCwd(chatID, threadID)
 }
 
@@ -171,7 +184,7 @@ IMPORTANT: Unlike standard coding agents, you DO have persistent memory across c
 	topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID)
 
 	if hasProject {
-		projectDir := bc.resolver.ProjectMemoryDir(cwd)
+		projectDir := bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID)
 		teamDir := bc.resolver.ProjectTeamMemoryDir(cwd)
 		projectName := filepath.Base(cwd)
 
@@ -198,16 +211,14 @@ IMPORTANT: Unlike standard coding agents, you DO have persistent memory across c
 		}
 
 		sb.WriteString("\n\n### Saving memory" + topicSuffix + "\n")
-		sb.WriteString("When something meaningful happens (project work, decisions, personal facts, preferences), save it using the Write tool:\n")
-		sb.WriteString("1. Write/update a topic file in " + dirList + "/\n")
-		sb.WriteString("2. Update MEMORY.md index: one line per file as - [Title](file.md) — summary\n\n")
-		sb.WriteString("Do NOT just promise to save — actually call Write before your response ends.")
+		sb.WriteString("No project is bound for this conversation, so file tools are disabled in chat mode. Do not call Write/Edit/Bash/Read/Glob/Grep/LS directly.\n")
+		sb.WriteString("Meaningful personal or topic facts may be saved later by the background memory review into " + dirList + ".")
 	}
 
 	sb.WriteString(`
 
 ### Forgetting/removing memories
-If the user asks to forget or remove something, delete the file with Bash (rm) and remove its entry from MEMORY.md. Do NOT just say you removed it — actually delete the file.
+If the user asks to forget or remove something while a project cwd is active, delete the file with Bash (rm) and remove its entry from MEMORY.md. In chat mode without cwd, explain that file tools are disabled and ask the user to bind a project or run a maintenance command.
 
 ### Project configuration files
 Never mention internal project files (CLAUDE.md, AGENTS.md) in casual conversation. Only reference them when a working directory is set AND the user asks about project configuration.`)
@@ -259,7 +270,7 @@ func (bc *Service) loadMemoryContents(chatID int64, threadID int, agent *agents.
 		projectName := filepath.Base(cwd)
 
 		header := fmt.Sprintf("\n\n#### Project: %s (private)\n\n", projectName)
-		appendLayer(header, bc.loadMemoryDir(bc.resolver.ProjectMemoryDir(cwd)))
+		appendLayer(header, bc.loadMemoryDir(bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID)))
 
 		header = fmt.Sprintf("\n\n#### Project: %s (team)\n\n", projectName)
 		appendLayer(header, bc.loadMemoryDir(bc.resolver.ProjectTeamMemoryDir(cwd)))
@@ -346,13 +357,7 @@ func truncateToBudget(content string, budget int) string {
 
 // buildProjectDocsSection reads CLAUDE.md and AGENTS.md from the active cwd.
 func (bc *Service) buildProjectDocsSection(chatID int64, agent *agents.Agent, threadID int) string {
-	cwd := ""
-	if agent != nil && agent.Cwd != "" {
-		cwd = agent.Cwd
-	}
-	if cwd == "" {
-		cwd = bc.sessions.GetCwd(chatID, threadID)
-	}
+	cwd := bc.effectiveCwd(agent, chatID, threadID)
 	if cwd == "" {
 		return ""
 	}

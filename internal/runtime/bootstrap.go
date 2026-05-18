@@ -60,3 +60,28 @@ func BootstrapProjectMemory(r *PathResolver, cwd string) error {
 	}
 	return nil
 }
+
+// BootstrapConversationProjectMemory ensures conversation-private project
+// memory exists alongside shared team memory for the bound project.
+func BootstrapConversationProjectMemory(r *PathResolver, cwd string, chatID int64, threadID int) error {
+	if strings.TrimSpace(cwd) == "" {
+		return nil
+	}
+
+	dirs := []string{
+		r.ConversationProjectMemoryDir(cwd, chatID, threadID),
+		r.ProjectTeamMemoryDir(cwd),
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return fmt.Errorf("runtime: bootstrap conversation project memory %q: %w", dir, err)
+		}
+		indexPath := filepath.Join(dir, "MEMORY.md")
+		if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+			if err := os.WriteFile(indexPath, nil, 0600); err != nil {
+				return fmt.Errorf("runtime: create memory index %q: %w", indexPath, err)
+			}
+		}
+	}
+	return nil
+}

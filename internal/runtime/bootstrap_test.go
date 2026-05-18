@@ -119,6 +119,34 @@ func TestBootstrapProjectMemory_EmptyCwd(t *testing.T) {
 	}
 }
 
+func TestBootstrapConversationProjectMemory_CreatesPrivateAndTeamIndexes(t *testing.T) {
+	root := t.TempDir()
+	r := &PathResolver{root: root}
+	cwd := "/home/user/myproject"
+
+	if err := BootstrapConversationProjectMemory(r, cwd, 42, 99); err != nil {
+		t.Fatalf("BootstrapConversationProjectMemory() error: %v", err)
+	}
+
+	dirs := []string{
+		r.ConversationProjectMemoryDir(cwd, 42, 99),
+		r.ProjectTeamMemoryDir(cwd),
+	}
+	for _, dir := range dirs {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("directory not created: %s err=%v", dir, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "MEMORY.md")); err != nil {
+			t.Fatalf("MEMORY.md not created in %s: %v", dir, err)
+		}
+	}
+
+	legacyPrivate := r.ProjectMemoryDir(cwd)
+	if _, err := os.Stat(filepath.Join(legacyPrivate, "MEMORY.md")); err == nil {
+		t.Fatalf("legacy project-private index should not be created at %s", legacyPrivate)
+	}
+}
+
 func TestBootstrap_PermissionsUnix(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits are no-op on Windows (ACL-based)")
@@ -148,5 +176,3 @@ func TestBootstrap_PermissionsUnix(t *testing.T) {
 		}
 	}
 }
-
-

@@ -81,6 +81,7 @@ func TestSanitizeCwd(t *testing.T) {
 		want  string
 	}{
 		{"/media/rafael/projetos/app", "-media-rafael-projetos-app"},
+		{"/media/rafael/projetos/app/", "-media-rafael-projetos-app"},
 		{"/home/user/code", "-home-user-code"},
 		{"/", "-"},
 		{"", ""},
@@ -89,6 +90,40 @@ func TestSanitizeCwd(t *testing.T) {
 		if got := SanitizeCwd(c.input); got != c.want {
 			t.Errorf("SanitizeCwd(%q) = %q, want %q", c.input, got, c.want)
 		}
+	}
+}
+
+func TestResolveProjectCwd_CleansEquivalentPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveProjectCwd(filepath.Join(dir, "."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Clean(want) {
+		t.Fatalf("ResolveProjectCwd() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveProjectCwd_RejectsNonProjectDirectory(t *testing.T) {
+	if _, err := ResolveProjectCwd(t.TempDir()); err == nil {
+		t.Fatal("expected non-project directory to be rejected")
+	}
+}
+
+func TestResolveProjectCwd_RejectsHomeDirectory(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("home directory unavailable")
+	}
+	if _, err := ResolveProjectCwd(home); err == nil {
+		t.Fatal("expected home directory to be rejected as project cwd")
 	}
 }
 
@@ -107,6 +142,10 @@ func TestProjectMemoryDirs(t *testing.T) {
 	if gotTeam != wantTeam {
 		t.Errorf("ProjectTeamMemoryDir() = %q, want %q", gotTeam, wantTeam)
 	}
+
+	gotConversation := r.ConversationProjectMemoryDir(cwd, 42, 99)
+	wantConversation := filepath.Join(wantPrivate, "conversations", "chat_42", "thread_99")
+	if gotConversation != wantConversation {
+		t.Errorf("ConversationProjectMemoryDir() = %q, want %q", gotConversation, wantConversation)
+	}
 }
-
-

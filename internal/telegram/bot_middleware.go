@@ -142,9 +142,9 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		// Show full CWD hierarchy
 		topicCwd := ""
 		if threadID > 0 {
-			topicCwd = bc.sessions.GetCwd(chatID, threadID)
+			topicCwd = bc.currentCwd(chatID, threadID)
 		}
-		groupCwd := bc.sessions.GetCwd(chatID, 0)
+		groupCwd := bc.currentCwd(chatID, 0)
 		defaultCwd := bc.botCwd
 
 		// Determine agent cwd if an agent is active
@@ -162,7 +162,7 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 
 		// Base: bot default
 		fmt.Fprintf(&b, "1. ⚙️ Bot default: `%s`\n", defaultCwd)
-		b.WriteString("   (bridge working directory — fallback when nothing else is set)\n\n")
+		b.WriteString("   (operational cwd only; not a project binding)\n\n")
 
 		// Then: group
 		if groupCwd != "" {
@@ -189,25 +189,46 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		}
 
 		if groupCwd == "" && agentCwd == "" {
-			b.WriteString("💡 Set a directory with: `/cwd C:\\path\\to\\project`\n")
+			b.WriteString("💡 Set a persistent project binding with: `/cwd /path/to/project`\n")
 		}
 
 		return SendTextWithThread(bc.bot, c.Chat(), b.String(), threadID)
 	}
 
-	// Set CWD for current thread/topic
-	bc.sessions.SetCwd(chatID, threadID, args)
+	if clearThreadID, clear, err := cwdClearThread(args, threadID); err != nil {
+		return SendTextWithThread(bc.bot, c.Chat(), "❌ "+err.Error(), threadID)
+	} else if clear {
+		if err := bc.clearCurrentCwd(chatID, clearThreadID); err != nil {
+			return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
+		}
+		msg := "✅ Binding de projeto removido deste tópico."
+		if clearThreadID == 0 {
+			msg = "✅ Binding de projeto removido do grupo."
+		}
+		return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
+	}
+
+	// Set persistent CWD for current thread/topic.
+	userID := int64(0)
+	if c.Sender() != nil {
+		userID = c.Sender().ID
+	}
+	cwd, err := bc.setCurrentCwd(chatID, threadID, userID, args)
+	if err != nil {
+		log.Printf("cwd: rejected binding chat=%d thread=%d", chatID, threadID)
+		return SendTextWithThread(bc.bot, c.Chat(), "❌ Diretório inválido, inexistente ou não permitido.", threadID)
+	}
 	if bc.resolver != nil {
-		if err := runtime.BootstrapProjectMemory(bc.resolver, args); err != nil {
-			log.Printf("cwd: failed to bootstrap project memory for %s: %v", args, err)
+		if err := runtime.BootstrapConversationProjectMemory(bc.resolver, cwd, chatID, threadID); err != nil {
+			log.Printf("cwd: failed to bootstrap project memory for %s: %v", cwd, err)
 		}
 	}
 	// Invalidate memory cache — project changed, memory files may differ
-	bc.invalidateMemoryDirs(chatID, threadID, args)
+	bc.invalidateMemoryDirs(chatID, threadID, cwd)
 
-	msg := fmt.Sprintf("✅ Diretório configurado para este tópico: `%s`", args)
+	msg := fmt.Sprintf("✅ Projeto fixado para este tópico: `%s`\n\nEssa configuração é persistente até você trocar ou limpar com `/cwd clear`.", cwd)
 	if threadID == 0 {
-		msg = fmt.Sprintf("✅ Diretório configurado para o grupo: `%s`\n\nOutros tópicos herdarão este caminho automaticamente.", args)
+		msg = fmt.Sprintf("✅ Projeto fixado para o grupo: `%s`\n\nOutros tópicos herdarão este caminho automaticamente. Essa configuração é persistente.", cwd)
 	}
 	return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 }

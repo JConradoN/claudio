@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-05-18
+
+### Corrigido
+- O lock do Dream agora preserva o timestamp da última consolidação entre conclusões (internal/dream/lock.go)
+- As chaves do NudgeBuffer agora incluem chatID e threadID para evitar vazamento entre grupos (internal/session/nudge_buffer.go)
+- A memória privada do projeto agora está isolada por conversa/thread, impedindo que anotações de um grupo/tópico do Telegram vazem para outra conversa vinculada ao mesmo repositório (internal/runtime/*, internal/pipeline/*, internal/telegram/bot_middleware.go)
+
+### Adicionado
+- Testes para preservação de timestamp do lock do Dream, isolamento do NudgeBuffer e memória de projeto escopo por conversa (internal/*_test.go)
+
 ## [v0.7.0] - 2026-05-17
 
 ### Added

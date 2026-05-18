@@ -8,45 +8,47 @@ type NudgeMessage struct {
 	Content string
 }
 
-// NudgeBuffer accumulates conversation turns per chat for periodic nudge review.
+// NudgeBuffer accumulates conversation turns per chat thread for periodic nudge review.
 type NudgeBuffer struct {
 	mu       sync.Mutex
-	messages map[int64][]NudgeMessage
-	turns    map[int64]int
+	messages map[SessionKey][]NudgeMessage
+	turns    map[SessionKey]int
 }
 
 // NewNudgeBuffer creates a new buffer.
 func NewNudgeBuffer() *NudgeBuffer {
 	return &NudgeBuffer{
-		messages: make(map[int64][]NudgeMessage),
-		turns:    make(map[int64]int),
+		messages: make(map[SessionKey][]NudgeMessage),
+		turns:    make(map[SessionKey]int),
 	}
 }
 
 // AddTurn records a user+assistant exchange for the given chat.
-func (b *NudgeBuffer) AddTurn(chatID int64, userMsg, assistantMsg string) {
+func (b *NudgeBuffer) AddTurn(chatID int64, threadID int, userMsg, assistantMsg string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.messages[chatID] = append(b.messages[chatID],
+	key := SessionKeyFor(chatID, threadID)
+	b.messages[key] = append(b.messages[key],
 		NudgeMessage{Role: "user", Content: userMsg},
 		NudgeMessage{Role: "assistant", Content: assistantMsg},
 	)
-	b.turns[chatID]++
+	b.turns[key]++
 }
 
 // TurnCount returns how many turns have been buffered for the chat.
-func (b *NudgeBuffer) TurnCount(chatID int64) int {
+func (b *NudgeBuffer) TurnCount(chatID int64, threadID int) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.turns[chatID]
+	return b.turns[SessionKeyFor(chatID, threadID)]
 }
 
 // GetAndReset returns all buffered messages for the chat and resets the buffer.
-func (b *NudgeBuffer) GetAndReset(chatID int64) []NudgeMessage {
+func (b *NudgeBuffer) GetAndReset(chatID int64, threadID int) []NudgeMessage {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	msgs := b.messages[chatID]
-	delete(b.messages, chatID)
-	delete(b.turns, chatID)
+	key := SessionKeyFor(chatID, threadID)
+	msgs := b.messages[key]
+	delete(b.messages, key)
+	delete(b.turns, key)
 	return msgs
 }

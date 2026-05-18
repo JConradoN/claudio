@@ -11,7 +11,6 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
-	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
 const (
@@ -163,14 +162,7 @@ func (s *Service) autoDetectProject(chatID int64, threadID int, userText string)
 		return
 	}
 
-	s.sessions.SetCwd(chatID, threadID, detected)
-	log.Printf("cwd: auto-detected %s for chat=%d thread=%d", detected, chatID, threadID)
-	if s.resolver == nil {
-		return
-	}
-	if err := runtime.BootstrapProjectMemory(s.resolver, detected); err != nil {
-		log.Printf("cwd: failed to bootstrap project memory for %s: %v", detected, err)
-	}
+	log.Printf("cwd: auto-detected %s for chat=%d thread=%d; not persisted, use /cwd %s to bind", detected, chatID, threadID, detected)
 }
 
 func (s *Service) applyVisionFallback(req *bridge.Request, images []bridge.ImageAttachment) {
@@ -276,9 +268,27 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 		req.Options.Cwd = cwd
 	} else {
 		req.Options.Cwd = s.botCwd
+		req.Options.DisallowedTools = appendUniqueTools(req.Options.DisallowedTools, chatModeDisallowedTools...)
 	}
 
 	return req
+}
+
+var chatModeDisallowedTools = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "LS", "List"}
+
+func appendUniqueTools(existing []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	for _, tool := range existing {
+		seen[tool] = struct{}{}
+	}
+	for _, tool := range additions {
+		if _, ok := seen[tool]; ok {
+			continue
+		}
+		existing = append(existing, tool)
+		seen[tool] = struct{}{}
+	}
+	return existing
 }
 
 // executeAsync runs bridge execution with typing/progress reporting.
@@ -523,7 +533,7 @@ func (s *Service) flushDreamer(chatID int64, threadID int) {
 	if s.dreamer == nil {
 		return
 	}
-	cwd := s.sessions.GetCwd(chatID, threadID)
+	cwd := s.effectiveCwd(nil, chatID, threadID)
 	s.dreamer.FlushNudge(chatID, threadID, cwd, s.nudgeBuffer)
 	s.InvalidateMemoryDirs(chatID, threadID, cwd)
 }
@@ -549,8 +559,8 @@ func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText strin
 		return
 	}
 	s.dreamer.AfterTurn()
-	cwd := s.sessions.GetCwd(chatID, threadID)
-	s.nudgeBuffer.AddTurn(chatID, userText, finalText)
+	cwd := s.effectiveCwd(nil, chatID, threadID)
+	s.nudgeBuffer.AddTurn(chatID, threadID, userText, finalText)
 	s.dreamer.AfterTurnNudge(chatID, threadID, cwd, s.nudgeBuffer)
 	s.InvalidateMemoryDirs(chatID, threadID, cwd)
 }

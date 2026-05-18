@@ -153,7 +153,7 @@ func (bc *Service) InvalidateMemoryDirs(chatID int64, threadID int, cwd string) 
 	}
 
 	if cwd != "" && bc.resolver != nil {
-		if projectDir := bc.resolver.ProjectMemoryDir(cwd); projectDir != "" {
+		if projectDir := bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID); projectDir != "" {
 			bc.memoryCache.invalidate(projectDir)
 		}
 		if teamDir := bc.resolver.ProjectTeamMemoryDir(cwd); teamDir != "" {

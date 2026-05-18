@@ -32,7 +32,7 @@ func (d *Dreamer) AfterTurnNudge(chatID int64, threadID int, cwd string, buffer 
 		return
 	}
 
-	if buffer.TurnCount(chatID) < d.config.NudgeTurns {
+	if buffer.TurnCount(chatID, threadID) < d.config.NudgeTurns {
 		return
 	}
 
@@ -46,7 +46,7 @@ func (d *Dreamer) FlushNudge(chatID int64, threadID int, cwd string, buffer *ses
 	if !d.config.NudgeEnabled || buffer == nil {
 		return
 	}
-	if buffer.TurnCount(chatID) == 0 {
+	if buffer.TurnCount(chatID, threadID) == 0 {
 		return
 	}
 	d.flushNudgeBuffer(chatID, threadID, cwd, buffer)
@@ -58,7 +58,7 @@ func (d *Dreamer) flushNudgeBuffer(chatID int64, threadID int, cwd string, buffe
 		return
 	}
 
-	messages := buffer.GetAndReset(chatID)
+	messages := buffer.GetAndReset(chatID, threadID)
 	if len(messages) == 0 {
 		d.nudgeRunning.Store(false)
 		return
@@ -155,7 +155,7 @@ func (d *Dreamer) buildNudgePrompt(cwd string, chatID int64, threadID int) strin
 	}
 
 	// Project context
-	data.ProjectDir = d.resolver.ProjectMemoryDir(cwd)
+	data.ProjectDir = d.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID)
 	data.TeamDir = d.resolver.ProjectTeamMemoryDir(cwd)
 
 	tmpl := template.Must(template.New("nudge_project").ParseFS(nudgeTemplateFS, "prompts/nudge_project.tmpl"))
