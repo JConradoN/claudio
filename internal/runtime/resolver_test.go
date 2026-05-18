@@ -75,6 +75,150 @@ func TestProjectHelpers(t *testing.T) {
 	}
 }
 
+func TestNormalizeProjectCwdInput_BacktickWrapped(t *testing.T) {
+	input := "`/Volumes/Dados/Workspaces/AutoTradersOMQS`"
+	got, err := normalizeProjectCwdInput(input)
+	if err != nil {
+		t.Fatalf("normalizeProjectCwdInput(%q) unexpected error: %v", input, err)
+	}
+	want := "/Volumes/Dados/Workspaces/AutoTradersOMQS"
+	if got != want {
+		t.Errorf("normalizeProjectCwdInput(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestNormalizeProjectCwdInput_SingleQuoteWrapped(t *testing.T) {
+	input := "'/Volumes/Dados/Workspaces/AutoTradersOMQS'"
+	got, err := normalizeProjectCwdInput(input)
+	if err != nil {
+		t.Fatalf("normalizeProjectCwdInput(%q) unexpected error: %v", input, err)
+	}
+	want := "/Volumes/Dados/Workspaces/AutoTradersOMQS"
+	if got != want {
+		t.Errorf("normalizeProjectCwdInput(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestNormalizeProjectCwdInput_DoubleQuoteWrapped(t *testing.T) {
+	input := "\"/Volumes/Dados/Workspaces/AutoTradersOMQS\""
+	got, err := normalizeProjectCwdInput(input)
+	if err != nil {
+		t.Fatalf("normalizeProjectCwdInput(%q) unexpected error: %v", input, err)
+	}
+	want := "/Volumes/Dados/Workspaces/AutoTradersOMQS"
+	if got != want {
+		t.Errorf("normalizeProjectCwdInput(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestNormalizeProjectCwdInput_EmptyRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"empty string", ""},
+		{"whitespace only", "   "},
+		{"backticks around whitespace", "`   `"},
+		{"quotes around whitespace", `'   '`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := normalizeProjectCwdInput(c.input)
+			if err == nil {
+				t.Errorf("normalizeProjectCwdInput(%q) expected error", c.input)
+			}
+		})
+	}
+}
+
+func TestNormalizeProjectCwdInput_WrappedEmptyRejected(t *testing.T) {
+	_, err := normalizeProjectCwdInput("``")
+	if err == nil {
+		t.Fatal("expected error for wrapped empty input")
+	}
+}
+
+func TestNormalizeProjectCwdInput_TildeExpansion(t *testing.T) {
+	// Use a temp home directory to avoid polluting real home
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	// os.UserHomeDir may respect $HOME on darwin; skip if it doesn't match
+	home, err := os.UserHomeDir()
+	if err != nil || home != tmpHome {
+		t.Skip("cannot override HOME reliably on this platform")
+	}
+
+	t.Run("tilde alone", func(t *testing.T) {
+		got, err := normalizeProjectCwdInput("~")
+		if err != nil {
+			t.Fatalf("normalizeProjectCwdInput(~) unexpected error: %v", err)
+		}
+		if got != tmpHome {
+			t.Errorf("normalizeProjectCwdInput(~) = %q, want %q", got, tmpHome)
+		}
+	})
+
+	t.Run("tilde with subpath", func(t *testing.T) {
+		got, err := normalizeProjectCwdInput("~/myproject")
+		if err != nil {
+			t.Fatalf("normalizeProjectCwdInput(~/myproject) unexpected error: %v", err)
+		}
+		want := filepath.Join(tmpHome, "myproject")
+		if got != want {
+			t.Errorf("normalizeProjectCwdInput(~/myproject) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("tilde with nested subpath", func(t *testing.T) {
+		got, err := normalizeProjectCwdInput("~/code/go/app")
+		if err != nil {
+			t.Fatalf("normalizeProjectCwdInput(~/code/go/app) unexpected error: %v", err)
+		}
+		want := filepath.Join(tmpHome, "code/go/app")
+		if got != want {
+			t.Errorf("normalizeProjectCwdInput(~/code/go/app) = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestNormalizeProjectCwdInput_TildeOtherUserRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"with subpath", "~otheruser/project"},
+		{"alone", "~otheruser"},
+		{"nested", "~someone/foo/bar"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := normalizeProjectCwdInput(c.input)
+			if err == nil {
+				t.Errorf("normalizeProjectCwdInput(%q) expected error", c.input)
+			}
+		})
+	}
+}
+
+func TestNormalizeProjectCwdInput_QuoteThenTilde(t *testing.T) {
+	// Wrapping backticks stripped, then ~ expanded
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	home, err := os.UserHomeDir()
+	if err != nil || home != tmpHome {
+		t.Skip("cannot override HOME reliably on this platform")
+	}
+
+	got, err := normalizeProjectCwdInput("`~/project`")
+	if err != nil {
+		t.Fatalf("normalizeProjectCwdInput(`~/project`) unexpected error: %v", err)
+	}
+	want := filepath.Join(tmpHome, "project")
+	if got != want {
+		t.Errorf("normalizeProjectCwdInput(`~/project`) = %q, want %q", got, want)
+	}
+}
+
 func TestSanitizeCwd(t *testing.T) {
 	cases := []struct {
 		input string
@@ -108,6 +252,45 @@ func TestResolveProjectCwd_CleansEquivalentPaths(t *testing.T) {
 	}
 	if got != filepath.Clean(want) {
 		t.Fatalf("ResolveProjectCwd() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveProjectCwd_BacktickWrapped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveProjectCwd("`" + dir + "`")
+	if err != nil {
+		t.Fatalf("ResolveProjectCwd(backtick-wrapped) unexpected error: %v", err)
+	}
+	if got != filepath.Clean(want) {
+		t.Errorf("ResolveProjectCwd(backtick-wrapped) = %q, want %q", got, want)
+	}
+}
+
+func TestResolveProjectCwd_RejectsEmptyAndWhitespace(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"whitespace", "   "},
+		{"backtick only", "``"},
+		{"quoted whitespace", "`   `"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ResolveProjectCwd(c.input)
+			if err == nil {
+				t.Errorf("ResolveProjectCwd(%q) expected error", c.input)
+			}
+		})
 	}
 }
 

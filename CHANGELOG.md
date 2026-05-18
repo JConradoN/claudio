@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.3] - 2026-05-18
+
+### Corrigido
+- `/cwd` agora aceita caminhos com wrappers comuns de chat, como crases e aspas, e expande `~`/`~/...` antes da validação.
+- Erros de `/cwd` agora incluem detalhe no log e na resposta do Telegram, facilitando diagnóstico em grupos e tópicos.
+
 ## [0.7.2] - 2026-05-18
 
 ### Corrigido

@@ -215,8 +215,9 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 	}
 	cwd, err := bc.setCurrentCwd(chatID, threadID, userID, args)
 	if err != nil {
-		log.Printf("cwd: rejected binding chat=%d thread=%d", chatID, threadID)
-		return SendTextWithThread(bc.bot, c.Chat(), "❌ Diretório inválido, inexistente ou não permitido.", threadID)
+		log.Printf("cwd: rejected binding chat=%d thread=%d err=%v", chatID, threadID, err)
+		msg := fmt.Sprintf("❌ Diretório inválido, inexistente ou não permitido. Detalhe: %s", err.Error())
+		return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 	}
 	if bc.resolver != nil {
 		if err := runtime.BootstrapConversationProjectMemory(bc.resolver, cwd, chatID, threadID); err != nil {

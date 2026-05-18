@@ -65,15 +65,55 @@ func SanitizeCwd(cwd string) string {
 	return strings.ReplaceAll(filepath.ToSlash(filepath.Clean(cwd)), "/", "-")
 }
 
+// normalizeProjectCwdInput normalizes a raw user-supplied path before resolution.
+// It removes common Telegram/Markdown wrappers and expands ~.
+func normalizeProjectCwdInput(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("empty cwd")
+	}
+
+	// Strip one balanced pair of wrapping backticks, single quotes, or double quotes.
+	for _, quote := range []string{"`", "'", "\""} {
+		if len(s) >= 2 && strings.HasPrefix(s, quote) && strings.HasSuffix(s, quote) {
+			s = s[len(quote) : len(s)-len(quote)]
+			s = strings.TrimSpace(s)
+			break
+		}
+	}
+	if s == "" {
+		return "", fmt.Errorf("empty cwd after stripping surrounding quotes")
+	}
+
+	// Expand ~ and ~/ to home directory. Reject ~otheruser.
+	if strings.HasPrefix(s, "~") {
+		if len(s) == 1 || s[1] == '/' {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("expand ~: cannot determine home directory: %w", err)
+			}
+			if len(s) == 1 {
+				s = home
+			} else {
+				s = filepath.Join(home, s[2:])
+			}
+		} else {
+			return "", fmt.Errorf("expand ~user (%q) is not supported; use an absolute path or ~/...", s)
+		}
+	}
+
+	return s, nil
+}
+
 // ResolveProjectCwd validates and canonicalizes a user-provided project path.
 // Project bindings use this so equivalent paths such as /repo/app and
 // /repo/app/ map to the same persisted cwd and project memory slug.
 func ResolveProjectCwd(path string) (string, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return "", fmt.Errorf("empty cwd")
+	normalized, err := normalizeProjectCwdInput(path)
+	if err != nil {
+		return "", err
 	}
-	abs, err := filepath.Abs(trimmed)
+	abs, err := filepath.Abs(normalized)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute cwd %q: %w", path, err)
 	}
