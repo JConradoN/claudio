@@ -74,6 +74,7 @@ func (bc *BotController) ensurePipeline() *pipelinepkg.Service {
 		Orchestrator: bc.orchestrator,
 		Dreamer:      bc.dreamer,
 		ProjectIndex: bc.projectIndex,
+		Bindings:     bc.bindings,
 	})
 	bc.nudgeBuffer = bc.pipeline.NudgeBuffer()
 	return bc.pipeline

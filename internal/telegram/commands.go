@@ -234,7 +234,7 @@ func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalid
 		usage = bc.tracker.Get(chatID)
 	}
 	if bc.dreamer != nil && bc.sessions != nil {
-		cwd := bc.sessions.GetCwd(chatID, threadID)
+		cwd := bc.currentCwd(chatID, threadID)
 		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
 		if invalidate {
 			bc.invalidateMemoryDirs(chatID, threadID, cwd)
@@ -516,8 +516,8 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 
 	// Cron jobs
 	if bc.cronHandler != nil {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		jobs, err := bc.cronHandler.service.ListJobs(ctx, chatID)
 		if err == nil {
 			active := 0
@@ -536,7 +536,7 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 	}
 
 	if bc.sessions != nil {
-		if cwd := bc.sessions.GetCwd(chatID, threadID); cwd != "" {
+		if cwd := bc.currentCwd(chatID, threadID); cwd != "" {
 			lines = append(lines, fmt.Sprintf("📂 Diretório: `%s`", cwd))
 		}
 	}

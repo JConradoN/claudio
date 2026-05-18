@@ -99,15 +99,18 @@ func (bc *Service) effectiveCwd(agent *agents.Agent, chatID int64, threadID int)
 		return agent.Cwd
 	}
 	if bc.bindings != nil {
-		resolved, err := bc.bindings.Resolve(context.Background(), projectbinding.ConversationKey{ChatID: chatID, ThreadID: threadID})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resolved, err := bc.bindings.Resolve(ctx, projectbinding.ConversationKey{ChatID: chatID, ThreadID: threadID})
 		if err != nil {
-			log.Printf("cwd: failed to resolve project binding chat=%d thread=%d: %v", chatID, threadID, err)
-			return ""
-		}
-		if resolved != nil && resolved.Binding != nil {
-			_ = bc.bindings.Touch(context.Background(), resolved.SourceKey)
+			log.Printf("cwd: failed to resolve project binding chat=%d thread=%d: %v (falling back to session)", chatID, threadID, err)
+		} else if resolved != nil && resolved.Binding != nil {
+			_ = bc.bindings.Touch(ctx, resolved.SourceKey)
 			return resolved.Binding.CWD
 		}
+	}
+	if bc.sessions == nil {
+		return ""
 	}
 	return bc.sessions.GetCwd(chatID, threadID)
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
 	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
+	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 	"github.com/igormaneschy/aurelia/internal/version"
@@ -57,6 +58,7 @@ type BotController struct {
 	allowedUsers       map[int64]struct{}
 	allowedGroups      map[int64]struct{}
 	projectIndex       *runtime.ProjectIndex
+	bindings           projectbinding.Store
 	pipeline           *pipelinepkg.Service
 }
 
@@ -100,6 +102,7 @@ func NewBotController(
 	sessions *session.Store,
 	tracker *session.Tracker,
 	resolver *runtime.PathResolver,
+	bindings projectbinding.Store,
 ) (*BotController, error) {
 
 	pref := telebot.Settings{
@@ -145,6 +148,7 @@ func NewBotController(
 		albums:           newAlbumBuffer(),
 		allowedUsers:     allowedUsers,
 		allowedGroups:    allowedGroups,
+		bindings:         bindings,
 	}
 	bc.pipeline = pipelinepkg.NewService(pipelinepkg.Config{
 		AppConfig: bc.config,
@@ -158,6 +162,7 @@ func NewBotController(
 		ExePath:   bc.exePath,
 		BotCwd:    bc.botCwd,
 		Output:    telegramPipelineOutput{bc: bc},
+		Bindings:  bc.bindings,
 	})
 	// nudgeBuffer is owned by the pipeline service; bot accesses via this alias
 	// so command handlers can flush it on reset/cancel.

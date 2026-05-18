@@ -18,6 +18,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/dream"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
+	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 	"github.com/igormaneschy/aurelia/internal/telegram"
@@ -30,6 +31,7 @@ type app struct {
 	bridge     *bridge.Bridge
 	agents     *agents.Registry
 	cronStore  *cron.SQLiteCronStore
+	bindings   projectbinding.Store
 	bot        *telegram.BotController
 	sessions   *session.Store
 	scheduler  *cron.Scheduler
@@ -104,9 +106,19 @@ func bootstrapApp() (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize cron store: %w", err)
 	}
+	bindings, err := projectbinding.NewSQLiteStore(resolver.DBPath("project_bindings.db"))
+	if err != nil {
+		if closeErr := cronStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close cron store: %v", closeErr)
+		}
+		return nil, fmt.Errorf("initialize project binding store: %w", err)
+	}
 
 	transcriber, err := buildTranscriber(cfg)
 	if err != nil {
+		if closeErr := bindings.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close project binding store: %v", closeErr)
+		}
 		if closeErr := cronStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close cron store: %v", closeErr)
 		}
@@ -129,9 +141,12 @@ func bootstrapApp() (*app, error) {
 
 	bot, err := telegram.NewBotController(
 		cfg, br, agentReg, personaSvc, transcriber,
-		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker, resolver,
+		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker, resolver, bindings,
 	)
 	if err != nil {
+		if closeErr := bindings.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close project binding store: %v", closeErr)
+		}
 		if closeErr := cronStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close cron store: %v", closeErr)
 		}
@@ -141,6 +156,12 @@ func bootstrapApp() (*app, error) {
 	// Wire orchestrator — enables autonomous agent orchestration
 	cwd, err := os.Getwd()
 	if err != nil {
+		if closeErr := bindings.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close project binding store: %v", closeErr)
+		}
+		if closeErr := cronStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close cron store: %v", closeErr)
+		}
 		return nil, fmt.Errorf("get current working directory: %w", err)
 	}
 	orch := orchestrator.NewOrchestrator(br, orchestrator.OrchestratorConfig{
@@ -212,6 +233,9 @@ func bootstrapApp() (*app, error) {
 
 	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider, exePath)
 	if err != nil {
+		if closeErr := bindings.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close project binding store: %v", closeErr)
+		}
 		if closeErr := cronStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close cron store: %v", closeErr)
 		}
@@ -226,6 +250,7 @@ func bootstrapApp() (*app, error) {
 		bridge:     br,
 		agents:     agentReg,
 		cronStore:  cronStore,
+		bindings:   bindings,
 		bot:        bot,
 		sessions:   sessions,
 		scheduler:  scheduler,
@@ -393,6 +418,11 @@ func (a *app) close() {
 	if a.cronStore != nil {
 		if err := a.cronStore.Close(); err != nil {
 			log.Printf("Warning: failed to close cron store: %v", err)
+		}
+	}
+	if a.bindings != nil {
+		if err := a.bindings.Close(); err != nil {
+			log.Printf("Warning: failed to close project binding store: %v", err)
 		}
 	}
 }

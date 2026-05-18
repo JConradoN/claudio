@@ -174,3 +174,11 @@ func (s *Store) SetCwd(chatID int64, threadID int, cwd string) {
 	s.cwds[key] = cwd
 	s.cwdSeen[key] = time.Now()
 }
+
+func (s *Store) ClearCwd(chatID int64, threadID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKeyFor(chatID, threadID)
+	delete(s.cwds, key)
+	delete(s.cwdSeen, key)
+}

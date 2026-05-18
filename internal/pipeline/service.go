@@ -6,6 +6,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/config"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
+	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
@@ -51,6 +52,7 @@ type Config struct {
 	Orchestrator *orchestrator.Orchestrator
 	Dreamer      Dreamer
 	ProjectIndex *runtime.ProjectIndex
+	Bindings     projectbinding.Store
 }
 
 // Service owns the LLM/message pipeline independent from Telegram routing.
@@ -72,6 +74,7 @@ type Service struct {
 	nudgeBuffer    *session.NudgeBuffer
 	memoryCache    *memoryCache
 	projectIndex   *runtime.ProjectIndex
+	bindings       projectbinding.Store
 	bridgeFailures FailureTracker
 	runs           *runSupervisor
 }
@@ -95,6 +98,7 @@ func NewService(cfg Config) *Service {
 		nudgeBuffer:  session.NewNudgeBuffer(),
 		memoryCache:  newMemoryCache(),
 		projectIndex: cfg.ProjectIndex,
+		bindings:     cfg.Bindings,
 		runs:         newRunSupervisor(),
 	}
 
