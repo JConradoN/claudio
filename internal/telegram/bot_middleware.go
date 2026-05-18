@@ -170,7 +170,7 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		} else {
 			b.WriteString("2. 👥 Group: *(not set)*\n")
 		}
-		b.WriteString("   (configure with /cwd <path> in the general topic)\n\n")
+		b.WriteString("   (configure with /cwd --group <path> ou /cwd <path> no tópico geral)\n\n")
 
 		// Then: topic (if applicable)
 		if threadID > 0 {
@@ -189,7 +189,8 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		}
 
 		if groupCwd == "" && agentCwd == "" {
-			b.WriteString("💡 Set a persistent project binding with: `/cwd /path/to/project`\n")
+			b.WriteString("💡 Set a group-wide binding with: `/cwd --group /caminho/do/projeto`\n")
+			b.WriteString("   Set a topic-specific binding with: `/cwd /caminho/do/projeto`\n")
 		}
 
 		return SendTextWithThread(bc.bot, c.Chat(), b.String(), threadID)
@@ -208,28 +209,43 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 	}
 
-	// Set persistent CWD for current thread/topic.
+	// Parse scope flag before setting
+	target, err := parseCwdSetTarget(args, threadID)
+	if err != nil {
+		return SendTextWithThread(bc.bot, c.Chat(), "❌ "+err.Error(), threadID)
+	}
+
 	userID := int64(0)
 	if c.Sender() != nil {
 		userID = c.Sender().ID
 	}
-	cwd, err := bc.setCurrentCwd(chatID, threadID, userID, args)
+	cwd, err := bc.setCurrentCwd(chatID, target.ThreadID, userID, target.Path)
 	if err != nil {
-		log.Printf("cwd: rejected binding chat=%d thread=%d err=%v", chatID, threadID, err)
+		log.Printf("cwd: rejected binding chat=%d thread=%d err=%v", chatID, target.ThreadID, err)
 		msg := fmt.Sprintf("❌ Diretório inválido, inexistente ou não permitido. Detalhe: %s", err.Error())
 		return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 	}
 	if bc.resolver != nil {
-		if err := runtime.BootstrapConversationProjectMemory(bc.resolver, cwd, chatID, threadID); err != nil {
+		if err := runtime.BootstrapConversationProjectMemory(bc.resolver, cwd, chatID, target.ThreadID); err != nil {
 			log.Printf("cwd: failed to bootstrap project memory for %s: %v", cwd, err)
 		}
 	}
 	// Invalidate memory cache — project changed, memory files may differ
-	bc.invalidateMemoryDirs(chatID, threadID, cwd)
+	bc.invalidateMemoryDirs(chatID, target.ThreadID, cwd)
+	// If setting group-level from a topic, also invalidate the topic cache
+	if target.ThreadID == 0 && threadID != 0 {
+		bc.invalidateMemoryDirs(chatID, threadID, cwd)
+	}
 
-	msg := fmt.Sprintf("✅ Projeto fixado para este tópico: `%s`\n\nEssa configuração é persistente até você trocar ou limpar com `/cwd clear`.", cwd)
-	if threadID == 0 {
+	var msg string
+	switch target.Scope {
+	case "group":
 		msg = fmt.Sprintf("✅ Projeto fixado para o grupo: `%s`\n\nOutros tópicos herdarão este caminho automaticamente. Essa configuração é persistente.", cwd)
+	default:
+		msg = fmt.Sprintf("✅ Projeto fixado para este tópico: `%s`\n\nEssa configuração é persistente até você trocar ou limpar com `/cwd clear`.", cwd)
+		if !target.Explicit && threadID > 0 {
+			msg += "\n\n💡 Para aplicar ao grupo todo, use `/cwd --group <caminho>`."
+		}
 	}
 	return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 }

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.4] - 2026-05-18
+
+### Corrigido
+- `/cwd` agora aceita `--group` e `--topic` para definir explicitamente se o projeto será persistido no grupo inteiro ou apenas no tópico atual.
+- Ao definir `/cwd --group` dentro de um tópico, os caches de memória do grupo e do tópico atual são invalidados para refletir a nova herança.
+
 ## [0.7.3] - 2026-05-18
 
 ### Corrigido

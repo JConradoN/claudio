@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
@@ -66,6 +67,59 @@ func (bc *BotController) clearCurrentCwd(chatID int64, threadID int) error {
 		bc.sessions.ClearCwd(chatID, threadID)
 	}
 	return nil
+}
+
+// cwdSetTarget holds the parsed result of /cwd [--group|--topic] <path>.
+type cwdSetTarget struct {
+	ThreadID int
+	Path     string
+	Scope    string // "group" or "topic" for response message wording
+	Explicit bool   // true if --group or --topic was explicitly provided
+}
+
+// parseCwdSetTarget parses scope flags from the beginning of args:
+//
+//	--group <path>  → ThreadID=0, Scope="group", Explicit=true
+//	--topic <path>  → ThreadID=currentThreadID, Scope="topic", Explicit=true
+//	<path>          → ThreadID=currentThreadID, Scope determined by currentThreadID, Explicit=false
+//
+// Flags after path are not supported; the whole rest after the flag is treated as path.
+func parseCwdSetTarget(args string, currentThreadID int) (cwdSetTarget, error) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return cwdSetTarget{}, fmt.Errorf("uso: /cwd [--group|--topic] <path>")
+	}
+
+	// Check for --group flag
+	if rest, ok := strings.CutPrefix(args, "--group "); ok {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return cwdSetTarget{}, fmt.Errorf("uso: /cwd --group <path>")
+		}
+		return cwdSetTarget{ThreadID: 0, Path: rest, Scope: "group", Explicit: true}, nil
+	}
+	if args == "--group" {
+		return cwdSetTarget{}, fmt.Errorf("uso: /cwd --group <path>")
+	}
+
+	// Check for --topic flag
+	if rest, ok := strings.CutPrefix(args, "--topic "); ok {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return cwdSetTarget{}, fmt.Errorf("uso: /cwd --topic <path>")
+		}
+		return cwdSetTarget{ThreadID: currentThreadID, Path: rest, Scope: "topic", Explicit: true}, nil
+	}
+	if args == "--topic" {
+		return cwdSetTarget{}, fmt.Errorf("uso: /cwd --topic <path>")
+	}
+
+	// No flag: default to current thread
+	scope := "topic"
+	if currentThreadID == 0 {
+		scope = "group"
+	}
+	return cwdSetTarget{ThreadID: currentThreadID, Path: args, Scope: scope, Explicit: false}, nil
 }
 
 func cwdClearThread(args string, threadID int) (int, bool, error) {
