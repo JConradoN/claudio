@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.9] - 2026-05-18
+
+### Corrigido
+- Corrigido comando de rebuild do daemon em `AGENTS.md` para compilar `./cmd/aurelia/`, que contém o entrypoint real.
+
 ## [0.7.8] - 2026-05-18
 
 ### Adicionado

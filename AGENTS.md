@@ -44,7 +44,7 @@ After every commit that changes Go or Bridge code, the binary **must** be rebuil
 
 ```bash
 # 1. Build binary to the daemon's expected location
-go build -o ~/.aurelia/bin/aurelia .
+go build -o ~/.aurelia/bin/aurelia ./cmd/aurelia/
 
 # 2. Kill the running daemon gracefully
 kill $(pgrep -f "aurelia" | head -1)
