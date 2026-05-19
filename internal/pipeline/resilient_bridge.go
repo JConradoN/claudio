@@ -110,7 +110,7 @@ func (rb *ResilientBridge) Execute(
 	cat := ClassifyError(result.Err.Error())
 	if cat.IsRetryable() {
 		// User already saw retry messages if onNotify was used inside executeWithRetry.
-		log.Printf("resilience: primary %s failed after retries (%v), attempting fallback", provider, result.Err)
+		log.Printf("resilience: primary %s failed after retries (%v), attempting fallback", provider, redactSecrets(result.Err.Error()))
 	} else {
 		te := TranslateError(provider, model, result.Err.Error())
 		if onNotify != nil {

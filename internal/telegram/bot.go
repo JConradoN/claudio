@@ -18,6 +18,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/persona"
 	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 	"github.com/igormaneschy/aurelia/internal/version"
@@ -59,6 +60,7 @@ type BotController struct {
 	allowedGroups      map[int64]struct{}
 	projectIndex       *runtime.ProjectIndex
 	bindings           projectbinding.Store
+	runLog             runlog.Store
 	pipeline           *pipelinepkg.Service
 }
 
@@ -163,6 +165,7 @@ func NewBotController(
 		BotCwd:    bc.botCwd,
 		Output:    telegramPipelineOutput{bc: bc},
 		Bindings:  bc.bindings,
+		RunLog:    bc.runLog,
 	})
 	// nudgeBuffer is owned by the pipeline service; bot accesses via this alias
 	// so command handlers can flush it on reset/cancel.
@@ -185,6 +188,12 @@ func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 // them up on the next query.
 func (bc *BotController) SetProviderEnvRefresher(f func()) {
 	bc.refreshProviderEnv = f
+}
+
+// SetRunLog injects the run log store after construction.
+func (bc *BotController) SetRunLog(rl runlog.Store) {
+	bc.runLog = rl
+	bc.ensurePipeline().SetRunLog(rl)
 }
 
 // SetProjectIndex injects a cached project name index for fast lookup.

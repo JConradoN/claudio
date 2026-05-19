@@ -90,6 +90,52 @@ function log(msg: string): void {
   process.stderr.write(`[bridge] ${msg}\n`);
 }
 
+// Redact common credential patterns from log/error messages to prevent leaking
+// sensitive content (API keys, tokens, auth headers, private keys) through logs.
+function redactSDKError(msg: string): string {
+  return msg
+    // API keys: sk-*, pk-*, sk-ant-*, sk-proj-*
+    .replace(/\bsk-[A-Za-z0-9]{20,}/g, "[API_KEY_REDACTED]")
+    .replace(/\bpk-[A-Za-z0-9]{20,}/g, "[API_KEY_REDACTED]")
+    .replace(/\bsk-ant-[A-Za-z0-9]{20,}/g, "[API_KEY_REDACTED]")
+    .replace(/\bsk-proj-[A-Za-z0-9]{20,}/g, "[API_KEY_REDACTED]")
+    // Stripe keys
+    .replace(/\bsk_live_[A-Za-z0-9]+/g, "[STRIPE_KEY_REDACTED]")
+    .replace(/\bsk_test_[A-Za-z0-9]+/g, "[STRIPE_KEY_REDACTED]")
+    // AWS keys
+    .replace(/\bAKIA[A-Z0-9]{16}/g, "[AWS_KEY_REDACTED]")
+    // GCP keys
+    .replace(/\bAIza[0-9A-Za-z_-]{35}/g, "[GCP_KEY_REDACTED]")
+    // GitHub tokens
+    .replace(/\bghp_[A-Za-z0-9]{36}/g, "[GH_TOKEN_REDACTED]")
+    .replace(/\bgho_[A-Za-z0-9]{36}/g, "[GH_TOKEN_REDACTED]")
+    .replace(/\bghu_[A-Za-z0-9]{36}/g, "[GH_TOKEN_REDACTED]")
+    .replace(/\bghs_[A-Za-z0-9]{36}/g, "[GH_TOKEN_REDACTED]")
+    .replace(/\bghr_[A-Za-z0-9]{36}/g, "[GH_TOKEN_REDACTED]")
+    .replace(/\bgithub_pat_[0-9A-Za-z_-]+/g, "[GH_PAT_REDACTED]")
+    // JWT tokens
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g, "[JWT_REDACTED]")
+    // Private key blocks (multiline)
+    .replace(/-----BEGIN (OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----[\s\S]*?-----END (OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----/g, "[PRIVATE_KEY_BLOCK_REDACTED]")
+    // Bearer/Basic auth tokens in headers
+    .replace(/(Authorization:\s*(?:Bearer|Basic)\s+)\S+/gi, "$1[REDACTED]")
+    // XAI keys
+    .replace(/\bxai-[A-Za-z0-9]{20,}/g, "[XAI_KEY_REDACTED]")
+    // GitLab tokens
+    .replace(/\bglpat-[A-Za-z0-9_-]{20,}/g, "[GL_TOKEN_REDACTED]")
+    // HuggingFace tokens
+    .replace(/\bhf_[A-Za-z0-9]{20,}/g, "[HF_TOKEN_REDACTED]")
+    // NPM tokens
+    .replace(/\bnpm_[A-Za-z0-9]{36}/g, "[NPM_TOKEN_REDACTED]")
+    // Slack tokens
+    .replace(/\bxox[bpasa]-[A-Za-z0-9-]{20,}/g, "[SLACK_TOKEN_REDACTED]")
+    .replace(/\bxapp-[A-Za-z0-9-]{20,}/g, "[SLACK_TOKEN_REDACTED]");
+}
+
+function redactedLog(msg: string): void {
+  log(redactSDKError(msg));
+}
+
 function piAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 }
@@ -252,7 +298,7 @@ async function resolveSessionManager(opts: RequestOptions | undefined): Promise<
       return SessionManager.open(match.path, undefined, cwd);
     }
 
-    log(`session not found for resume=${target}; starting a new session`);
+    redactedLog(`session not found for resume=${redactSDKError(target)}; starting a new session`);
   }
 
   return SessionManager.create(cwd);
@@ -272,7 +318,7 @@ async function createPiSession(opts: RequestOptions | undefined) {
   const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
   const model = resolveModelFromRegistry(modelRegistry, opts?.provider, opts?.model);
   if (opts?.model && !model) {
-    log(`model not found in PI registry: provider=${opts.provider ?? ""} model=${opts.model}`);
+    redactedLog(`model not found in PI registry: provider=${opts.provider ?? ""} model=${opts.model}`);
   }
 
   const resourceLoader = new DefaultResourceLoader({
@@ -309,7 +355,7 @@ async function handleQuery(req: Request): Promise<void> {
   const opts = req.options;
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
-  log(
+  redactedLog(
     `query start — rid=${reqId} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
   );
 
@@ -324,16 +370,16 @@ async function handleQuery(req: Request): Promise<void> {
   const emitTerminalError = (message: string): void => {
     if (terminalEmitted) return;
     terminalEmitted = true;
-    emitReq({ event: "error", message });
+    emitReq({ event: "error", message: redactSDKError(message) });
   };
 
   const cancelActive = (reason: string): void => {
     canceled = true;
-    log(`query cancel — rid=${reqId} reason=${reason}`);
+    redactedLog(`query cancel — rid=${reqId} reason=${reason}`);
     try {
       session?.dispose();
     } catch (disposeErr) {
-      log(`session cancel dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+      redactedLog(`session cancel dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
     }
     emitTerminalError(reason);
     activeRequests.delete(reqId);
@@ -341,7 +387,7 @@ async function handleQuery(req: Request): Promise<void> {
 
   activeRequests.set(reqId, { cancel: cancelActive });
   timeout = setTimeout(() => {
-    log(`query timeout — rid=${reqId} no result after 10 minutes`);
+    redactedLog(`query timeout — rid=${reqId} no result after 10 minutes`);
     cancelActive("query timeout: no result after 10 minutes");
   }, timeoutMs);
 
@@ -432,7 +478,7 @@ async function handleQuery(req: Request): Promise<void> {
   } catch (err: unknown) {
     if (!terminalEmitted) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log(`query error: rid=${reqId} ${errMsg}`);
+      redactedLog(`query error: rid=${reqId} ${errMsg}`);
       emitTerminalError(errMsg);
     }
   } finally {
@@ -442,7 +488,7 @@ async function handleQuery(req: Request): Promise<void> {
       try {
         session.dispose();
       } catch (disposeErr) {
-        log(`session dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
+        redactedLog(`session dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
       }
     }
   }
@@ -456,7 +502,7 @@ async function handleRequest(line: string): Promise<void> {
   try {
     req = JSON.parse(line) as Request;
   } catch {
-    emit({ event: "error", message: `invalid JSON: ${line.slice(0, 200)}` });
+    emit({ event: "error", message: `invalid JSON: ${redactSDKError(line.slice(0, 200))}` });
     return;
   }
 
@@ -516,8 +562,8 @@ async function handleRequest(line: string): Promise<void> {
         emitReq({ event: "result", content: JSON.stringify(summary) });
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        log(`list-models error: ${errMsg}`);
-        emitReq({ event: "error", message: `list-models failed: ${errMsg}` });
+        redactedLog(`list-models error: ${errMsg}`);
+        emitReq({ event: "error", message: `list-models failed: ${redactSDKError(errMsg)}` });
       }
       break;
     }
@@ -544,8 +590,8 @@ function main(): void {
 
     handleRequest(trimmed).catch((err: unknown) => {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log(`unhandled error in request processing: ${errMsg}`);
-      emit({ event: "error", message: `internal bridge error: ${errMsg}` });
+      redactedLog(`unhandled error in request processing: ${errMsg}`);
+      emit({ event: "error", message: `internal bridge error: ${redactSDKError(errMsg)}` });
     });
   });
 
@@ -556,13 +602,13 @@ function main(): void {
 
   process.on("unhandledRejection", (reason: unknown) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
-    log(`unhandled rejection: ${msg}`);
-    emit({ event: "error", message: `unhandled rejection: ${msg}` });
+    redactedLog(`unhandled rejection: ${msg}`);
+    emit({ event: "error", message: `unhandled rejection: ${redactSDKError(msg)}` });
   });
 
   process.on("uncaughtException", (err: Error) => {
-    log(`uncaught exception: ${err.message}`);
-    emit({ event: "error", message: `uncaught exception: ${err.message}` });
+    redactedLog(`uncaught exception: ${err.message}`);
+    emit({ event: "error", message: `uncaught exception: ${redactSDKError(err.message)}` });
     process.exit(1);
   });
 }

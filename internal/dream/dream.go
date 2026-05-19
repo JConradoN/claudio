@@ -183,9 +183,9 @@ func (d *Dreamer) run() {
 	// Parse JSON consolidation actions
 	var applied, total int
 	var receiptStatus, receiptErr string
-	ext, parseErr := parseConsolidationJSONWithError(ev.Text)
+	ext, parseErr := parseConsolidationJSONWithError(bridge.EventContent(*ev))
 	if ext == nil {
-		diag := memoryux.ModelOutputDiagnostic(ev.Text, parseErr)
+		diag := memoryux.ModelOutputDiagnostic(bridge.EventContent(*ev), parseErr)
 		log.Printf("[dream] no valid consolidation actions from model output (%s)", diag)
 		receiptStatus = "invalid"
 		receiptErr = diag

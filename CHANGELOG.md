@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.12] - 2026-05-19
+
+### Adicionado
+- Run journal persistente para registrar progresso, status, checkpoints e resumo de ferramentas em tarefas longas.
+- Detecção leve de tarefas longas com orientação para quebrar execução em etapas menores.
+- `/status` agora inclui o último run persistido quando disponível.
+
+### Corrigido
+- Timeouts agora desativam a sessão corrente para evitar continuar sessões PI suspeitas.
+- Nudge e dream agora parseiam respostas vindas em `text` ou `content`.
+- Bridge embutido sincronizado com o source TypeScript atual.
+
+### Segurança
+- Redação reforçada de secrets em prompts, checkpoints, erros, logs e eventos do Bridge.
+- Run journal usa permissões restritas para banco SQLite e sidecars.
+
 ## [0.7.11] - 2026-05-19
 
 ### Corrigido

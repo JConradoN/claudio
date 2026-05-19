@@ -15,6 +15,7 @@ import (
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	memoryuxpkg "github.com/igormaneschy/aurelia/internal/memoryux"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
@@ -567,7 +568,48 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 		}
 	}
 
+	// Run log — latest persisted run status
+	if bc.runLog != nil {
+		if runLine := statusRunLogLine(bc.runLog, chatID, threadID); runLine != "" {
+			lines = append(lines, runLine)
+		}
+	}
+
 	return strings.Join(lines, "\n"), nil
+}
+
+func statusRunLogLine(rl runlog.Store, chatID int64, threadID int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	record, err := rl.Latest(ctx, chatID, threadID)
+	if err != nil || record == nil {
+		return ""
+	}
+
+	emoji := "⬜"
+	switch record.Status {
+	case runlog.RunRunning:
+		emoji = "🟡"
+	case runlog.RunCompleted:
+		emoji = "✅"
+	case runlog.RunTimedOut:
+		emoji = "⏰"
+	case runlog.RunCanceled:
+		emoji = "🛑"
+	case runlog.RunFailed:
+		emoji = "❌"
+	}
+
+	when := "agora"
+	if !record.StartedAt.IsZero() {
+		ago := time.Since(record.StartedAt).Round(time.Second)
+		if ago > 0 {
+			when = ago.String() + " atrás"
+		}
+	}
+
+	return fmt.Sprintf("%s Última execução: **%s** (%s)", emoji, record.Status, when)
 }
 
 func (bc *BotController) currentWorkStatus(chatID int64, threadID int) (string, int) {

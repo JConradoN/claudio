@@ -122,6 +122,18 @@ func (s *Store) DeactivateAll() {
 	}
 }
 
+// Deactivate marks a single session as inactive (cold). Used when a run times
+// out — the session ID is kept for cold resume, but Continue must not be used
+// since the session state may be inconsistent.
+func (s *Store) Deactivate(chatID int64, threadID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKeyFor(chatID, threadID)
+	if e, ok := s.sessions[key]; ok {
+		e.active = false
+	}
+}
+
 // GC removes sessions and cwds that have not been seen since maxAge ago.
 func (s *Store) GC(maxAge time.Duration) {
 	s.mu.Lock()

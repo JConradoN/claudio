@@ -5,13 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 )
+
+// runLogState tracks per-run state for the run journal.
+// mu serializes summary mutations independently of the runLogState map lock,
+// preventing data races between recordToolUse/recordToolResult and completeRunLog.
+type runLogState struct {
+	mu           sync.Mutex
+	runID        string
+	summary      strings.Builder
+	summaryCount int
+}
 
 const (
 	classifyTimeout        = 5 * time.Second
@@ -119,7 +133,7 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 	}
 	systemPrompt, err := s.buildSystemPrompt(userText, agent, input.chatID, input.messageID, input.threadID)
 	if err != nil {
-		log.Printf("Failed to build system prompt: %v", err)
+		log.Printf("Failed to build system prompt: %s", redactSecrets(err.Error()))
 		_ = s.output.SendError(input.chatID, input.threadID, "Falha ao montar o prompt de sistema.")
 		s.output.ConfirmMessage(input.chatID, input.messageID)
 		return
@@ -304,6 +318,10 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	cancelDone := s.cancelBridgeOnContextDone(ctx, req.RequestID)
 	defer cancelDone()
 
+	// Start runlog entry
+	cwd := s.effectiveCwd(nil, chatID, threadID)
+	runLogStarted := s.startRunLog(chatID, threadID, req.RequestID, cwd, userText)
+
 	var ch <-chan bridge.Event
 	var err error
 
@@ -327,11 +345,15 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 			outcome = OutcomeProcessDeath
 		} else if errors.Is(err, context.Canceled) {
 			log.Printf("pipeline: run canceled by user chat=%d thread=%d", chatID, threadID)
+			if runLogStarted {
+				s.completeRunLog(chatID, threadID, runlog.RunCanceled, "", "cancelado pelo usuário")
+			}
 			return
 		} else {
-			log.Printf("Bridge execute error: %v", err)
-			// Only send generic error when resilient bridge is not in use
-			// (it already sends specific messages via onNotify).
+			log.Printf("Bridge execute error: %s", redactSecrets(err.Error()))
+			if runLogStarted {
+				s.completeRunLog(chatID, threadID, runlog.RunFailed, "", redactSecrets(err.Error()))
+			}
 			if s.resilient == nil {
 				if err := s.output.SendError(chatID, threadID, bridgeConnectErrorMessage); err != nil {
 					log.Printf("Failed to send error to chat %d: %v", chatID, err)
@@ -351,12 +373,19 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 			return
 		}
 		if outcome != OutcomeProcessDeath {
+			if runLogStarted {
+				s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "")
+			}
 			return
 		}
 	}
 
 	s.bridgeFailures.record()
 	log.Printf("bridge: process died mid-request, retrying for chat=%d thread=%d", chatID, threadID)
+
+	if runLogStarted {
+		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "process death, retrying")
+	}
 
 	if s.bridgeFailures.inCooldown() {
 		remaining := s.bridgeFailures.cooldownRemaining()
@@ -379,7 +408,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	ch, err = s.bridge.Execute(ctx, retryReq)
 	s.output.DeleteMessage(reconnectMsg)
 	if err != nil {
-		log.Printf("bridge: retry failed for chat=%d: %v", chatID, err)
+		log.Printf("bridge: retry failed for chat=%d: %s", chatID, redactSecrets(err.Error()))
 		_ = s.output.SendError(chatID, threadID, bridgeRetryFailedMessage)
 		s.output.ConfirmMessage(chatID, messageID)
 		return
@@ -401,7 +430,7 @@ func (s *Service) cancelBridgeOnContextDone(ctx context.Context, requestID strin
 			cancelCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			if err := s.bridge.CancelRequest(cancelCtx, requestID); err != nil {
-				log.Printf("bridge: cancel request %s failed: %v", requestID, err)
+				log.Printf("bridge: cancel request %s failed: %s", requestID, redactSecrets(err.Error()))
 			}
 		case <-done:
 		}
@@ -412,10 +441,15 @@ func (s *Service) cancelBridgeOnContextDone(ctx context.Context, requestID strin
 func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Context, chatID int64, threadID int) bool {
 	if parentCtx.Err() != nil {
 		log.Printf("pipeline: run canceled chat=%d thread=%d", chatID, threadID)
+		s.completeRunLog(chatID, threadID, runlog.RunCanceled, "", "cancelado pelo usuário")
 		return true
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		log.Printf("pipeline: run timeout chat=%d thread=%d", chatID, threadID)
+		s.completeRunLog(chatID, threadID, runlog.RunTimedOut, "", "timeout")
+		if s.sessions != nil {
+			s.sessions.Deactivate(chatID, threadID)
+		}
 		_ = s.output.SendError(chatID, threadID, bridgeTimeoutMessage)
 		return true
 	}
@@ -448,12 +482,26 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 		switch ev.Type {
 		case "system":
 			s.handleSystemEvent(chatID, threadID, ev)
+			if ev.SessionID != "" {
+				s.updateRunLogSession(chatID, threadID, ev.SessionID)
+			}
 		case "tool_use":
 			toolName := ev.Name
 			if toolName == "" {
 				toolName = "tool"
 			}
 			progress.ReportTool(toolName)
+			s.recordToolUse(chatID, threadID, toolName)
+		case "tool_result":
+			// Append a truncated, redacted summary to the tool tracking state.
+			if s.runLog != nil {
+				summary := summarizeToolResult(eventContent(ev))
+				if summary != "" {
+					s.recordToolResult(chatID, threadID, summary)
+				}
+			} else {
+				log.Printf("Bridge event (ignored): tool_result")
+			}
 		case "assistant":
 			assistantText.WriteString(eventContent(ev))
 		case "result":
@@ -477,10 +525,7 @@ func (s *Service) handleSystemEvent(chatID int64, threadID int, ev bridge.Event)
 }
 
 func eventContent(ev bridge.Event) string {
-	if ev.Text != "" {
-		return ev.Text
-	}
-	return ev.Content
+	return bridge.EventContent(ev)
 }
 
 func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, ev bridge.Event, assistantText *strings.Builder, userText string) Outcome {
@@ -499,12 +544,15 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	if finalText == "" {
 		log.Printf("bridge: empty result chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d content_len=0",
 			chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
+		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
 		if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
 			log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
 		}
 		s.output.ConfirmMessage(chatID, messageID)
 		return OutcomeLLMError
 	}
+
+	s.completeRunLog(chatID, threadID, runlog.RunCompleted, finalText, "")
 
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		s.output.ConfirmMessage(chatID, messageID)
@@ -582,10 +630,338 @@ func (s *Service) handleErrorEvent(chatID int64, threadID int, messageID int, ev
 	if errMsg == "" {
 		errMsg = "Erro desconhecido no processador."
 	}
-	log.Printf("Bridge error: %s", errMsg)
-	if err := s.output.SendError(chatID, threadID, errMsg); err != nil {
+	redacted := redactSecrets(errMsg)
+	log.Printf("Bridge error: %s", redacted)
+	s.completeRunLog(chatID, threadID, runlog.RunFailed, "", redacted)
+	if err := s.output.SendError(chatID, threadID, redacted); err != nil {
 		log.Printf("Failed to send error to chat %d: %v", chatID, err)
 	}
 	s.output.ConfirmMessage(chatID, messageID)
 	return OutcomeLLMError
+}
+
+// --- Run log lifecycle ---
+
+func runLogKey(chatID int64, threadID int) string {
+	return fmt.Sprintf("%d:%d", chatID, threadID)
+}
+
+// startRunLog creates a new runlog entry and stores the per-run state.
+// RunID is set to a uuid for durable unique identification across restarts.
+// Returns true if the runlog was started.
+func (s *Service) startRunLog(chatID int64, threadID int, requestID string, cwd string, prompt string) bool {
+	if s.runLog == nil || requestID == "" {
+		return false
+	}
+	key := runLogKey(chatID, threadID)
+
+	s.runLogMu.Lock()
+	defer s.runLogMu.Unlock()
+
+	runID := uuid.NewString()
+	now := time.Now()
+	err := s.runLog.Start(context.Background(), runlog.RunRecord{
+		RunID:     runID,
+		ChatID:    chatID,
+		ThreadID:  threadID,
+		RequestID: requestID,
+		CWD:       cwd,
+		Prompt:    redactSecrets(truncatePrompt(prompt)),
+		StartedAt: now,
+	})
+	if err != nil {
+		log.Printf("runlog: failed to start %s: %v", requestID, err)
+		return false
+	}
+	s.runLogStates[key] = &runLogState{runID: runID}
+	return true
+}
+
+// updateRunLogSession updates the session ID for an active runlog entry.
+func (s *Service) updateRunLogSession(chatID int64, threadID int, sessionID string) {
+	if s.runLog == nil || sessionID == "" {
+		return
+	}
+	key := runLogKey(chatID, threadID)
+
+	s.runLogMu.Lock()
+	state, ok := s.runLogStates[key]
+	s.runLogMu.Unlock()
+	if !ok || state == nil {
+		return
+	}
+
+	if err := s.runLog.Update(context.Background(), runlog.RunUpdate{
+		RunID:     state.runID,
+		SessionID: &sessionID,
+	}); err != nil {
+		log.Printf("runlog: failed to update session for %s: %v", state.runID, err)
+	}
+}
+
+// recordToolUse appends a tool name to the in-memory tool summary for a run.
+func (s *Service) recordToolUse(chatID int64, threadID int, toolName string) {
+	if s.runLog == nil || toolName == "" {
+		return
+	}
+	key := runLogKey(chatID, threadID)
+
+	s.runLogMu.Lock()
+	state, ok := s.runLogStates[key]
+	s.runLogMu.Unlock()
+	if !ok || state == nil {
+		return
+	}
+
+	state.mu.Lock()
+	needsUpdate := false
+	var toolSummary string
+	if state.summary.Len() > 0 {
+		state.summary.WriteString(", ")
+	}
+	state.summary.WriteString(toolName)
+
+	// Persist summary every 5 tools to avoid loss on crash
+	state.summaryCount++
+	if state.summaryCount%5 == 0 {
+		toolSummary = state.summary.String()
+		needsUpdate = true
+	}
+	state.mu.Unlock()
+
+	if needsUpdate {
+		if err := s.runLog.Update(context.Background(), runlog.RunUpdate{
+			RunID:       state.runID,
+			ToolSummary: &toolSummary,
+		}); err != nil {
+			log.Printf("runlog: failed to persist tool summary for %s: %v", state.runID, err)
+		}
+	}
+}
+
+// recordToolResult appends a summarized tool result to the tool summary.
+func (s *Service) recordToolResult(chatID int64, threadID int, summary string) {
+	if s.runLog == nil || summary == "" {
+		return
+	}
+	key := runLogKey(chatID, threadID)
+
+	s.runLogMu.Lock()
+	state, ok := s.runLogStates[key]
+	s.runLogMu.Unlock()
+	if !ok || state == nil {
+		return
+	}
+
+	state.mu.Lock()
+	state.summary.WriteString(" → [")
+	state.summary.WriteString(summary)
+	state.summary.WriteString("]")
+	state.mu.Unlock()
+}
+
+// completeRunLog marks the runlog entry with a terminal status and checkpoint.
+// All persisted data is redacted before storage to prevent credential leakage.
+func (s *Service) completeRunLog(chatID int64, threadID int, status runlog.RunStatus, checkpoint, errMsg string) {
+	key := runLogKey(chatID, threadID)
+
+	s.runLogMu.Lock()
+	state, ok := s.runLogStates[key]
+	delete(s.runLogStates, key)
+	s.runLogMu.Unlock()
+
+	if !ok || state == nil || s.runLog == nil {
+		return
+	}
+
+	// Capture final tool summary under the per-state lock to serialize
+	// with concurrent recordToolUse / recordToolResult mutations.
+	state.mu.Lock()
+	summary := state.summary.String()
+	state.mu.Unlock()
+
+	// Defensive redaction: assistant output may contain credentials.
+	summary = redactSecrets(summary)
+	checkpoint = redactSecrets(checkpoint)
+	errMsg = redactSecrets(errMsg)
+
+	// Build checkpoint
+	if checkpoint == "" {
+		checkpoint = buildCheckpoint(status, "", summary, errMsg)
+	} else {
+		checkpoint = buildCheckpoint(status, checkpoint, summary, errMsg)
+	}
+
+	if err := s.runLog.Complete(context.Background(), state.runID, status, checkpoint, errMsg); err != nil {
+		log.Printf("runlog: failed to complete %s (status=%s): %v", state.runID, status, err)
+	}
+
+	// Flush session update with final summary
+	if summary != "" {
+		if err := s.runLog.Update(context.Background(), runlog.RunUpdate{
+			RunID:       state.runID,
+			ToolSummary: &summary,
+		}); err != nil {
+			log.Printf("runlog: failed to update summary for %s: %v", state.runID, err)
+		}
+	}
+}
+
+// buildCheckpoint formats a textual checkpoint from run status and context.
+func buildCheckpoint(status runlog.RunStatus, checkpoint, toolSummary, errMsg string) string {
+	var sb strings.Builder
+	sb.WriteString("Status: ")
+	sb.WriteString(string(status))
+	if toolSummary != "" {
+		sb.WriteString("\nFerramentas: ")
+		sb.WriteString(toolSummary)
+	}
+	if checkpoint != "" {
+		sb.WriteString("\nResposta/último resumo: ")
+		sb.WriteString(truncateCheckpoint(checkpoint))
+	}
+	if errMsg != "" {
+		sb.WriteString("\nErro: ")
+		sb.WriteString(errMsg)
+	}
+	if status == runlog.RunTimedOut {
+		sb.WriteString("\nPróximo passo: continue a partir deste checkpoint")
+	}
+	return sb.String()
+}
+
+func truncatePrompt(prompt string) string {
+	const maxPromptBytes = 500
+	if len(prompt) > maxPromptBytes {
+		// Use rune-aware truncation to avoid splitting multi-byte characters.
+		trimmed := prompt
+		for len(trimmed) > maxPromptBytes {
+			trimmed = trimmed[:len(trimmed)-1]
+		}
+		// Ensure valid UTF-8 at the boundary.
+		for i := 0; i < 4 && len(trimmed) > 0; i++ {
+			if trimmed[len(trimmed)-1]&0xC0 != 0x80 {
+				break
+			}
+			trimmed = trimmed[:len(trimmed)-1]
+		}
+		return trimmed + "..."
+	}
+	return prompt
+}
+
+func truncateCheckpoint(s string) string {
+	if len(s) > 2000 {
+		return s[:2000] + "..."
+	}
+	return s
+}
+
+// summarizeToolResult produces a truncated, redacted summary of a tool result.
+func summarizeToolResult(content string) string {
+	if content == "" {
+		return ""
+	}
+	// Redact common secret patterns (API keys, tokens, etc.)
+	redacted := redactSecrets(content)
+	// Take first 1KB
+	truncated := strings.TrimSpace(redacted)
+	if len(truncated) > 1024 {
+		truncated = truncated[:1024]
+	}
+	return truncated
+}
+
+// Pre-compiled redaction regexes to avoid re-parsing on every call.
+var (
+	prefixREs    []*regexp.Regexp
+	prefixLabels []string
+	privateKeyRE *regexp.Regexp
+	authRE       *regexp.Regexp
+	lineRE       *regexp.Regexp
+	jsonSecretRE *regexp.Regexp
+)
+
+func init() {
+	type pattern struct {
+		repl  string
+		label string
+	}
+	prefixPatterns := []pattern{
+		// API keys
+		{`\bsk-[A-Za-z0-9]{20,}`, "[API_KEY_REDACTED]"},
+		{`\bpk-[A-Za-z0-9]{20,}`, "[API_KEY_REDACTED]"},
+		{`\bsk-ant-[A-Za-z0-9]{20,}`, "[API_KEY_REDACTED]"},
+		{`\bsk-proj-[A-Za-z0-9]{20,}`, "[API_KEY_REDACTED]"},
+		{`\bsk_live_[A-Za-z0-9]+`, "[STRIPE_KEY_REDACTED]"},
+		{`\bsk_test_[A-Za-z0-9]+`, "[STRIPE_KEY_REDACTED]"},
+		// Cloud provider keys
+		{`\bAKIA[A-Z0-9]{16}`, "[AWS_KEY_REDACTED]"},
+		{`\bAIza[0-9A-Za-z_-]{35}`, "[GCP_KEY_REDACTED]"},
+		// GitHub tokens
+		{`\bghp_[A-Za-z0-9]{36}`, "[GH_TOKEN_REDACTED]"},
+		{`\bgho_[A-Za-z0-9]{36}`, "[GH_TOKEN_REDACTED]"},
+		{`\bghu_[A-Za-z0-9]{36}`, "[GH_TOKEN_REDACTED]"},
+		{`\bghs_[A-Za-z0-9]{36}`, "[GH_TOKEN_REDACTED]"},
+		{`\bghr_[A-Za-z0-9]{36}`, "[GH_TOKEN_REDACTED]"},
+		{`\bgithub_pat_[0-9A-Za-z_-]+`, "[GH_PAT_REDACTED]"},
+		// Other tokens
+		{`\bglpat-[A-Za-z0-9_-]{20,}`, "[GL_TOKEN_REDACTED]"},
+		{`\bhf_[A-Za-z0-9]{20,}`, "[HF_TOKEN_REDACTED]"},
+		{`\bnpm_[A-Za-z0-9]{36}`, "[NPM_TOKEN_REDACTED]"},
+		{`\bxox[bpasa]-[A-Za-z0-9-]{20,}`, "[SLACK_TOKEN_REDACTED]"},
+		{`\bxapp-[A-Za-z0-9-]{20,}`, "[SLACK_TOKEN_REDACTED]"},
+		// Base64-encoded JSON (JWT-like)
+		{`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+`, "[JWT_REDACTED]"},
+		// AI provider keys
+		{`\bxai-[A-Za-z0-9]{20,}`, "[XAI_KEY_REDACTED]"},
+	}
+
+	prefixREs = make([]*regexp.Regexp, len(prefixPatterns))
+	prefixLabels = make([]string, len(prefixPatterns))
+	for i, p := range prefixPatterns {
+		prefixREs[i] = regexp.MustCompile(p.repl)
+		prefixLabels[i] = p.label
+	}
+
+	privateKeyRE = regexp.MustCompile(`(?s)-----BEGIN (?:OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----.*?-----END (?:OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----`)
+	authRE = regexp.MustCompile(`(?i)(Authorization:\s*(?:Bearer|Basic)\s+)\S+`)
+	lineRE       = regexp.MustCompile(`(password|secret|api_key|api-key|api\.key|apikey|clientsecret|client_secret|access_token|refresh_token|token)\s*[=:]\s*\S+`)
+	jsonSecretRE = regexp.MustCompile(`"(?:apiKey|api_key|api-key|api\.key|clientSecret|client_secret|client-secret|client\.secret|accessToken|access_token|access-token|access\.token|refreshToken|refresh_token|refresh-token|refresh\.token|token)"\s*:\s*"[^"]{4,}"`)
+}
+
+// redactSecrets replaces common credential patterns with [REDACTED].
+// All regexes are pre-compiled at init for performance.
+func redactSecrets(s string) string {
+	result := s
+	for i, re := range prefixREs {
+		result = re.ReplaceAllString(result, prefixLabels[i])
+	}
+
+	// Multi-line block redaction (must run before line splitting)
+	result = privateKeyRE.ReplaceAllString(result, "[PRIVATE_KEY_BLOCK_REDACTED]")
+
+	// Header-based auth: Authorization: Bearer xxx, Authorization: Basic xxx
+	result = authRE.ReplaceAllString(result, "$1[REDACTED]")
+
+	// Line-based redaction for structured data with known keys
+	lines := strings.Split(result, "\n")
+	var filtered []string
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		// Match key=value, key:value, key = value, and key: value patterns
+		// Patterns cover: password, secret, api_key, api-key, api.key, apikey,
+		// clientsecret, access_token, refresh_token, and generic token.
+		if lineRE.MatchString(lower) {
+			filtered = append(filtered, "[CREDENTIAL_REDACTED]")
+			continue
+		}
+		// JSON-style embedded secrets: "apiKey":"xxx", "clientSecret":"xxx"
+		if jsonSecretRE.MatchString(line) {
+			filtered = append(filtered, "[CREDENTIAL_REDACTED]")
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
 }

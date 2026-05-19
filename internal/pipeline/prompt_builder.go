@@ -81,6 +81,11 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	memorySection := bc.buildMemoryInstructions(chatID, threadID, agent)
 	sections = append(sections, memorySection)
 
+	// Long-task guidance — prompt the model to checkpoint when the task looks complex
+	if looksLikeLongTask(userText, bc.effectiveCwd(agent, chatID, threadID) != "") {
+		sections = append(sections, "# Long Task Guidance\n\n"+longTaskGuidance())
+	}
+
 	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
 	if projectSection := bc.buildProjectDocsSection(chatID, agent, threadID); projectSection != "" {
 		sections = append(sections, projectSection)

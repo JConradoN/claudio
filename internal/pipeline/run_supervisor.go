@@ -119,7 +119,11 @@ func (rs *runSupervisor) status(key runKey) (string, int) {
 	if _, ok := rs.queued[key]; ok {
 		queueSize = 1
 	}
-	return rs.active[key].description(), queueSize
+	run := rs.active[key]
+	if run == nil {
+		return "", queueSize
+	}
+	return run.description(), queueSize
 }
 
 func (rs *runSupervisor) finish(run *activeRun) (*activeRun, *pipelineInput) {

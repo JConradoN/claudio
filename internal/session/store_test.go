@@ -97,6 +97,38 @@ func TestStore_DeactivateAll_Empty(t *testing.T) {
 	s.DeactivateAll() // should not panic
 }
 
+func TestStore_Deactivate(t *testing.T) {
+	s := NewStore()
+	s.Set(1, 0, "sess-active")
+	s.Set(1, 42, "sess-topic")
+
+	// Deactivate only the specific session
+	s.Deactivate(1, 0)
+
+	// Verify chat 1, thread 0 is now inactive
+	sid, active := s.GetWithState(1, 0)
+	if sid != "sess-active" {
+		t.Fatalf("session ID should be preserved, got %q", sid)
+	}
+	if active {
+		t.Fatal("session should be inactive after Deactivate")
+	}
+
+	// Verify other sessions are unaffected
+	sid, active = s.GetWithState(1, 42)
+	if sid != "sess-topic" {
+		t.Fatalf("session ID for thread 42 should be preserved, got %q", sid)
+	}
+	if !active {
+		t.Fatal("other session should remain active")
+	}
+}
+
+func TestStore_Deactivate_NonExistent(t *testing.T) {
+	s := NewStore()
+	s.Deactivate(999, 0) // should not panic
+}
+
 func TestStore_Cwd(t *testing.T) {
 	s := NewStore()
 	s.SetCwd(1, 0, "/home/user")

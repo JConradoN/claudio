@@ -1,12 +1,15 @@
 package pipeline
 
 import (
+	"sync"
+
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
@@ -53,6 +56,7 @@ type Config struct {
 	Dreamer      Dreamer
 	ProjectIndex *runtime.ProjectIndex
 	Bindings     projectbinding.Store
+	RunLog       runlog.Store
 }
 
 // Service owns the LLM/message pipeline independent from Telegram routing.
@@ -77,6 +81,9 @@ type Service struct {
 	bindings       projectbinding.Store
 	bridgeFailures FailureTracker
 	runs           *runSupervisor
+	runLog         runlog.Store
+	runLogMu       sync.Mutex
+	runLogStates   map[string]*runLogState
 }
 
 // NewService builds a pipeline service with explicit dependencies.
@@ -97,9 +104,11 @@ func NewService(cfg Config) *Service {
 		dreamer:      cfg.Dreamer,
 		nudgeBuffer:  session.NewNudgeBuffer(),
 		memoryCache:  newMemoryCache(),
-		projectIndex: cfg.ProjectIndex,
-		bindings:     cfg.Bindings,
-		runs:         newRunSupervisor(),
+		projectIndex:  cfg.ProjectIndex,
+		bindings:      cfg.Bindings,
+		runs:          newRunSupervisor(),
+		runLog:        cfg.RunLog,
+		runLogStates:  make(map[string]*runLogState),
 	}
 
 	if cfg.Bridge != nil {
@@ -142,6 +151,11 @@ func (s *Service) SetProjectIndex(pi *runtime.ProjectIndex) {
 // SetDreamer injects the dream system after construction.
 func (s *Service) SetDreamer(d Dreamer) {
 	s.dreamer = d
+}
+
+// SetRunLog injects the run log store after construction (optional).
+func (s *Service) SetRunLog(rl runlog.Store) {
+	s.runLog = rl
 }
 
 // NudgeBuffer returns the per-service nudge buffer for command-triggered flushes.

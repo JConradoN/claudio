@@ -113,6 +113,22 @@ func TestRunSupervisorCancelStopsActiveAndDropsQueue(t *testing.T) {
 	}
 }
 
+func TestRunSupervisorStatusNoActive(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 999, threadID: 0}
+
+	// No active run for this key — status should not panic and return empty.
+	desc, size := rs.status(key)
+	if desc != "" {
+		t.Fatalf("expected empty description, got %q", desc)
+	}
+	if size != 0 {
+		t.Fatalf("expected queue size 0, got %d", size)
+	}
+}
+
 func TestRunSupervisorSupersedeCancelsAndReplacesQueue(t *testing.T) {
 	t.Parallel()
 
