@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -52,6 +53,10 @@ func (o *Orchestrator) ExecuteTask(
 	var content string
 	var costUSD float64
 	var numTurns int
+	// gotResult prevents false success when the bridge closes without returning
+	// a "result" event. Channel ordering guarantees happens-before: a result
+	// event is always observable on the channel before the channel is closed.
+	var gotResult bool
 
 	for ev := range ch {
 		switch ev.Type {
@@ -62,6 +67,7 @@ func (o *Orchestrator) ExecuteTask(
 				content = ev.Text
 			}
 		case "result":
+			gotResult = true
 			if ev.Content != "" {
 				content = ev.Content
 			}
@@ -85,6 +91,18 @@ func (o *Orchestrator) ExecuteTask(
 	}
 
 	duration := time.Since(start).Milliseconds()
+	if !gotResult {
+		onEvent(WorkerEvent{TaskID: task.ID, Type: "error", Message: "bridge closed without result"})
+		return TaskResult{
+			TaskID:     task.ID,
+			Success:    false,
+			Content:    content,
+			Error:      "bridge closed without result",
+			DurationMs: duration,
+			CostUSD:    costUSD,
+		}
+	}
+
 	onEvent(WorkerEvent{TaskID: task.ID, Type: "done", Message: fmt.Sprintf("Completed in %dms (%d turns)", duration, numTurns)})
 
 	return TaskResult{
@@ -143,8 +161,10 @@ func (o *Orchestrator) ExecutePlan(
 					wt, wtErr = o.worktree.Create(t.ID, currentBranch(o.config.RepoRoot))
 					if wtErr == nil {
 						cwd = wt.Path
+					} else {
+						slog.Warn("orchestrator: worktree creation failed, falling back to repo root", "task", t.ID, "error", wtErr)
+						onEvent(WorkerEvent{TaskID: t.ID, Type: "warning", Message: "worktree unavailable, running in repo root"})
 					}
-					// If worktree fails, fall back to repo root
 				}
 
 				prompt := systemPromptBuilder(t, cfg)

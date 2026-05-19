@@ -50,7 +50,7 @@ func TestStoreAndFlushAlbumPhotos(t *testing.T) {
 		t.Fatal("expected subsequent photo not to become owner")
 	}
 
-	fa, ok := ab.flush("album-1")
+	fa, ok := ab.flush(0, "album-1")
 	if !ok {
 		t.Fatal("expected album flush to succeed")
 	}
@@ -63,7 +63,7 @@ func TestStoreAndFlushAlbumPhotos(t *testing.T) {
 	if fa.photos[0].messageID != 10 || fa.photos[1].messageID != 12 {
 		t.Fatalf("expected photos sorted by message id, got %+v", fa.photos)
 	}
-	if _, ok := ab.flush("album-1"); ok {
+	if _, ok := ab.flush(0, "album-1"); ok {
 		t.Fatal("expected album to be removed after flush")
 	}
 }
@@ -180,10 +180,10 @@ func TestAlbumGC_RemovesOrphan(t *testing.T) {
 	ab.store("orphan-album", 1, "", telebot.Photo{File: telebot.File{FileID: "a"}}, 0, 0, 0)
 
 	// gcExpired should find and remove it
-	ab.gcExpired("orphan-album")
+	ab.gcExpired(0, "orphan-album")
 
 	// Verify removed
-	_, ok := ab.flush("orphan-album")
+	_, ok := ab.flush(0, "orphan-album")
 	if ok {
 		t.Fatal("expected orphan album to be GC'd before flush")
 	}
@@ -197,13 +197,13 @@ func TestAlbumGC_NoOpForFlushedAlbums(t *testing.T) {
 	// Store album
 	ab.store("album-1", 1, "legenda", telebot.Photo{File: telebot.File{FileID: "a"}}, 0, 0, 0)
 	// Flush it normally
-	_, ok := ab.flush("album-1")
+	_, ok := ab.flush(0, "album-1")
 	if !ok {
 		t.Fatal("expected flush to succeed")
 	}
 
 	// gcExpired should be a no-op (already removed by flush)
-	ab.gcExpired("album-1") // should not panic or log
+	ab.gcExpired(0, "album-1") // should not panic or log
 }
 
 func TestAlbumGC_UnknownAlbumIsNoOp(t *testing.T) {
@@ -211,7 +211,7 @@ func TestAlbumGC_UnknownAlbumIsNoOp(t *testing.T) {
 
 	ab := newAlbumBuffer()
 	// gcExpired on non-existent album should not panic
-	ab.gcExpired("never-existed")
+	ab.gcExpired(0, "never-existed")
 }
 
 func TestAlbumGC_CleansUpAfterStoreWithoutFlush(t *testing.T) {
@@ -235,10 +235,10 @@ func TestAlbumGC_CleansUpAfterStoreWithoutFlush(t *testing.T) {
 	}
 
 	// Manually trigger GC (simulating timer firing after 5min)
-	ab.gcExpired("album-gc")
+	ab.gcExpired(0, "album-gc")
 
 	// Album should be gone
-	_, ok := ab.flush("album-gc")
+	_, ok := ab.flush(0, "album-gc")
 	if ok {
 		t.Fatal("expected album to be GC'd")
 	}
@@ -253,9 +253,9 @@ func TestFlushAlbum_ReturnsMetadata(t *testing.T) {
 	ab.store("album-meta", 10, "minhas fotos", telebot.Photo{File: telebot.File{FileID: "a"}}, 12345, 7, 999)
 
 	// Second photo — uses same album, context fields from first photo
-	ab.store("album-meta", 12, "", telebot.Photo{File: telebot.File{FileID: "b"}}, 0, 0, 0)
+	ab.store("album-meta", 12, "", telebot.Photo{File: telebot.File{FileID: "b"}}, 12345, 7, 0)
 
-	fa, ok := ab.flush("album-meta")
+	fa, ok := ab.flush(12345, "album-meta")
 	if !ok {
 		t.Fatal("expected flush to succeed")
 	}
@@ -280,9 +280,60 @@ func TestFlushAlbum_ReturnsMetadata(t *testing.T) {
 
 	// Verify timer was scheduled by checking that gcExpired eventually fires
 	// (the timer was set when first photo created the album entry in T2)
-	ab.gcExpired("album-meta")
-	if _, ok := ab.flush("album-meta"); ok {
+	ab.gcExpired(12345, "album-meta")
+	if _, ok := ab.flush(12345, "album-meta"); ok {
 		t.Fatal("expected album to be empty after gcExpired (timer was scheduled by first store)")
+	}
+}
+
+func TestAlbumKey_ScopesByChatID(t *testing.T) {
+	t.Parallel()
+
+	key1 := albumKey(12345, "album-1")
+	key2 := albumKey(67890, "album-1")
+	key3 := albumKey(12345, "album-2")
+
+	if key1 == key2 {
+		t.Fatal("expected different keys for different chatIDs with same albumID")
+	}
+	if key1 == key3 {
+		t.Fatal("expected different keys for same chatID with different albumIDs")
+	}
+	if key1 != "12345:album-1" {
+		t.Fatalf("unexpected albumKey format: %q", key1)
+	}
+}
+
+func TestAlbumStore_UsesChatIDScopedKey(t *testing.T) {
+	t.Parallel()
+
+	ab := newAlbumBuffer()
+
+	// Store photos with same albumID but different chatIDs
+	ab.store("same-album", 1, "", telebot.Photo{File: telebot.File{FileID: "a"}}, 100, 0, 0)
+	ab.store("same-album", 2, "legenda", telebot.Photo{File: telebot.File{FileID: "b"}}, 200, 0, 0)
+
+	// Each chat should have its own album with its own photos
+	fa1, ok1 := ab.flush(100, "same-album")
+	fa2, ok2 := ab.flush(200, "same-album")
+
+	if !ok1 {
+		t.Fatal("expected chat 100 album to exist")
+	}
+	if !ok2 {
+		t.Fatal("expected chat 200 album to exist")
+	}
+	if len(fa1.photos) != 1 {
+		t.Fatalf("expected 1 photo for chat 100, got %d", len(fa1.photos))
+	}
+	if len(fa2.photos) != 1 {
+		t.Fatalf("expected 1 photo for chat 200, got %d", len(fa2.photos))
+	}
+	if fa1.caption != "" {
+		t.Fatalf("expected no caption for chat 100, got %q", fa1.caption)
+	}
+	if fa2.caption != "legenda" {
+		t.Fatalf("expected caption 'legenda' for chat 200, got %q", fa2.caption)
 	}
 }
 

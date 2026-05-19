@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.20] - 2026-05-20
+
+### Segurança
+- Fix path traversal em download de arquivos Telegram via `os.CreateTemp` + validação de `filepath.Base`.
+- Fix vazamento entre chats no album buffer: chave do mapa agora inclui `chatID` (IDOR mitigation).
+- Fix redaction de secrets antes de truncamento em `startRunLog`, evitando leak parcial de credenciais.
+- Fix escape de `&` em delimitadores de continuity, prevenindo prompt injection via entidades HTML.
+
+### Corrigido
+- Fix falso sucesso em `ExecuteTask` quando o bridge fecha sem emitir evento `result` (regressão v0.7.2).
+- Mitigação de DoS/OOM no bridge: `readLoop` agora usa `bufio.Scanner` com limite de 10MB por linha NDJSON.
+- Adicionado `recover()` em 8 goroutines críticas (pipeline, bridge, dream, orchestrator) para prevenir morte do daemon.
+- `cleanupAfterPanic` no bridge agora mata o processo filho zumbi e limpa estado.
+- Log de erros de `SendText` nas branches de admission do pipeline.
+- Timeout de 5s em `startRunLog` e 30min em execução de cron jobs.
+- Log de worktree errors no orchestrator com fallback para repo root.
+- Refatoração de `handleResultEvent` em helpers para reduzir complexidade ciclomática.
+
+### Testes
+- Testes para album buffer com chave composta por chat.
+- Testes para `escapeUntrusted` com escape de `&`.
+- Testes para bridge closed without result.
+- Testes para panic recovery em callbacks e cleanup.
+
 ## [0.7.19] - 2026-05-19
 
 ### Corrigido

@@ -120,7 +120,14 @@ func hasMemoryFiles(dir string) bool {
 }
 
 func (d *Dreamer) run() {
+	start := time.Now()
 	defer d.running.Store(false)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[dream] panic: %v", r)
+			d.recordDreamReceipt(start, nil, 0, 0, "panic", fmt.Sprintf("%v", r))
+		}
+	}()
 
 	// Skip consolidation if there are no memory files to consolidate.
 	// Running on an empty directory causes the model to hallucinate content.
@@ -130,7 +137,7 @@ func (d *Dreamer) run() {
 	}
 
 	log.Println("[dream] starting memory consolidation...")
-	start := time.Now()
+	start = time.Now()
 
 	// Capture turns that triggered this run so we can subtract them later.
 	turnsAtStart := int(d.turns.Load())

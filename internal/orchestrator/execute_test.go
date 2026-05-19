@@ -134,6 +134,32 @@ func TestExecuteTask_Error(t *testing.T) {
 	}
 }
 
+func TestExecuteTask_BridgeClosedWithoutResult_ReturnsError(t *testing.T) {
+	// Bridge that returns only non-terminal events (system only, no result)
+	fb := &fakeBridge{results: make(map[string]*bridge.Event)}
+	fb.SetResult("no result prompt", &bridge.Event{
+		Type: "system", // non-terminal
+	})
+
+	o := NewOrchestrator(fb, OrchestratorConfig{RepoRoot: t.TempDir()})
+
+	result := o.ExecuteTask(
+		context.Background(),
+		Task{ID: "1", Prompt: "no result prompt"},
+		DefaultWorkerConfig,
+		t.TempDir(),
+		"prompt",
+		func(ev WorkerEvent) {},
+	)
+
+	if result.Success {
+		t.Fatal("expected failure when bridge closes without result")
+	}
+	if result.Error != "bridge closed without result" {
+		t.Errorf("error = %q, want %q", result.Error, "bridge closed without result")
+	}
+}
+
 func TestExecutePlan_TwoWaves(t *testing.T) {
 	fb := newFakeBridge()
 	fb.SetResult("task 1 prompt", &bridge.Event{Type: "result", Content: "done 1"})

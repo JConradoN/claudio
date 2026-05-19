@@ -39,10 +39,11 @@ func (bc *BotController) handlePhoto(c telebot.Context) error {
 }
 
 func (bc *BotController) handlePhotoAlbum(c telebot.Context, photo *telebot.Photo) error {
+	chatID := c.Chat().ID
 	albumID := c.Message().AlbumID
 	isOwner := bc.albums.store(
 		albumID, c.Message().ID, strings.TrimSpace(c.Message().Caption), *photo,
-		c.Chat().ID, c.Message().ThreadID, c.Sender().ID,
+		chatID, c.Message().ThreadID, c.Sender().ID,
 	)
 	if !isOwner {
 		bc.confirmMessage(c.Message())
@@ -51,7 +52,7 @@ func (bc *BotController) handlePhotoAlbum(c telebot.Context, photo *telebot.Phot
 
 	// Schedule async flush after 900ms window — handler returns immediately
 	time.AfterFunc(900*time.Millisecond, func() {
-		bc.flushAlbumAndProcess(albumID)
+		bc.flushAlbumAndProcess(chatID, albumID)
 	})
 
 	return nil
@@ -336,12 +337,24 @@ func isSupportedImageMIME(mimeType string) bool {
 	}
 }
 
-func (bc *BotController) downloadTelegramFile(file *telebot.File, filename string) (string, error) {
-	filePath := filepath.Join(os.TempDir(), filepath.Base(filename))
-	if err := bc.bot.Download(file, filePath); err != nil {
+func (bc *BotController) downloadTelegramFile(file *telebot.File, name string) (string, error) {
+	base := filepath.Base(name)
+	if base == "." || base == ".." || base == "" {
+		return "", fmt.Errorf("invalid filename: %q", name)
+	}
+
+	f, err := os.CreateTemp(os.TempDir(), "aurelia_*")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	tempPath := f.Name()
+	f.Close() // Close; bot.Download will overwrite
+
+	if err := bc.bot.Download(file, tempPath); err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
-	return filePath, nil
+	return tempPath, nil
 }
 
 func buildDocumentInput(caption, filename, mimeType, filePath string) string {
@@ -358,10 +371,15 @@ func buildDocumentInput(caption, filename, mimeType, filePath string) string {
 	return fmt.Sprintf("%s\n\n[Analise o anexo %s]:\n%s", caption, filename, extractedText)
 }
 
+// albumKey returns a scoped key combining chatID and albumID.
+func albumKey(chatID int64, albumID string) string {
+	return fmt.Sprintf("%d:%s", chatID, albumID)
+}
+
 // flushAlbumAndProcess flushes a pending album and processes it asynchronously.
 // Called by the 900ms flush timer; runs outside the telebot handler goroutine.
-func (bc *BotController) flushAlbumAndProcess(albumID string) {
-	fa, ok := bc.albums.flush(albumID)
+func (bc *BotController) flushAlbumAndProcess(chatID int64, albumID string) {
+	fa, ok := bc.albums.flush(chatID, albumID)
 	if !ok {
 		return
 	}
@@ -398,7 +416,8 @@ func (ab *albumBuffer) store(albumID string, messageID int, caption string, phot
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	album, ok := ab.pending[albumID]
+	key := albumKey(chatID, albumID)
+	album, ok := ab.pending[key]
 	if !ok {
 		album = &pendingAlbum{
 			ownerMessageID: messageID,
@@ -407,9 +426,9 @@ func (ab *albumBuffer) store(albumID string, messageID int, caption string, phot
 			senderID:       senderID,
 			firstMessageID: messageID,
 		}
-		ab.pending[albumID] = album
+		ab.pending[key] = album
 		// Schedule GC: if album owner never arrives, clean up after 5 minutes
-		time.AfterFunc(5*time.Minute, func() { ab.gcExpired(albumID) })
+		time.AfterFunc(5*time.Minute, func() { ab.gcExpired(chatID, albumID) })
 	}
 	if caption != "" && album.caption == "" {
 		album.caption = caption
@@ -428,15 +447,16 @@ type flushedAlbum struct {
 	messageID int
 }
 
-func (ab *albumBuffer) flush(albumID string) (*flushedAlbum, bool) {
+func (ab *albumBuffer) flush(chatID int64, albumID string) (*flushedAlbum, bool) {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	album, ok := ab.pending[albumID]
+	key := albumKey(chatID, albumID)
+	album, ok := ab.pending[key]
 	if !ok {
 		return nil, false
 	}
-	delete(ab.pending, albumID)
+	delete(ab.pending, key)
 
 	photos := append([]albumPhoto(nil), album.photos...)
 	sort.SliceStable(photos, func(i, j int) bool {
@@ -454,13 +474,14 @@ func (ab *albumBuffer) flush(albumID string) (*flushedAlbum, bool) {
 
 // gcExpired removes an album from pending if it still exists.
 // Called by the TTL timer when the album owner never arrives.
-func (ab *albumBuffer) gcExpired(albumID string) {
+func (ab *albumBuffer) gcExpired(chatID int64, albumID string) {
 	ab.mu.Lock()
 	defer ab.mu.Unlock()
 
-	if _, ok := ab.pending[albumID]; ok {
-		delete(ab.pending, albumID)
-		log.Printf("album: gc orphan %s", albumID)
+	key := albumKey(chatID, albumID)
+	if _, ok := ab.pending[key]; ok {
+		delete(ab.pending, key)
+		log.Printf("album: gc orphan %s", key)
 	}
 }
 

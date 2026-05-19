@@ -87,9 +87,11 @@ func (s *Scheduler) runSingleJob(ctx context.Context, now time.Time, job CronJob
 	defer s.running.Delete(job.ID)
 
 	startedAt := now
-		slog.Info("cron.scheduler: executing job", "job_id", job.ID)
+	slog.Info("cron.scheduler: executing job", "job_id", job.ID)
 
-	result, runErr := s.runtime.ExecuteJob(ctx, job)
+	jobCtx, jobCancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer jobCancel()
+	result, runErr := s.runtime.ExecuteJob(jobCtx, job)
 	finishedAt := s.clock.Now().UTC()
 
 	exec := CronExecution{

@@ -5,19 +5,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"os"
-	"time"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const eventChannelBuffer = 128
+const (
+	eventChannelBuffer = 128
+	maxNDJSONLineSize  = 10 * 1024 * 1024 // 10 MB safety limit per NDJSON line
+)
 
 // safeClose closes a channel, recovering from panic if already closed.
 func safeClose(ch chan Event) {
@@ -139,50 +143,63 @@ func (b *Bridge) startLocked() error {
 // request channels. When the process exits, all pending channels are closed.
 func (b *Bridge) readLoop() {
 	defer close(b.done)
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("bridge: panic in readLoop", "error", r)
+			b.cleanupAfterPanic()
+		}
+	}()
 
-	for {
-		line, err := b.reader.ReadBytes('\n')
-		buf := bytes.TrimRight(line, "\n\r")
+	// Use bufio.Scanner with maxNDJSONLineSize limit to prevent OOM from
+	// oversized NDJSON lines. A token exceeding the limit produces ErrTooLong
+	// without allocating the entire line.
+	scanner := bufio.NewScanner(b.reader)
+	scanner.Buffer(make([]byte, 64*1024), maxNDJSONLineSize)
 
-		if len(buf) > 0 {
-			var ev Event
-			if parseErr := json.Unmarshal(buf, &ev); parseErr != nil {
-				log.Printf("bridge: failed to parse NDJSON line: %v", parseErr)
-				continue
-			}
-			rid := ev.RequestID
-
-			b.pendingMu.Lock()
-			ch, ok := b.pending[rid]
-			b.pendingMu.Unlock()
-
-			if ok {
-				if ev.IsTerminal() {
-					b.sendTerminalEvent(ch, ev, rid)
-				} else {
-					// Non-blocking send — channel has buffer.
-					select {
-					case ch <- ev:
-					default:
-						b.droppedEvents.Add(1)
-						slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
-					}
-				}
-
-				if ev.IsTerminal() {
-					b.pendingMu.Lock()
-					delete(b.pending, rid)
-					b.pendingMu.Unlock()
-					safeClose(ch)
-				}
-			}
+	for scanner.Scan() {
+		buf := bytes.TrimRight(scanner.Bytes(), "\n\r")
+		if len(buf) == 0 {
+			continue
 		}
 
-		if err != nil {
-			if err != io.EOF {
-				slog.Error("bridge: read error", "error", err)
+		var ev Event
+		if parseErr := json.Unmarshal(buf, &ev); parseErr != nil {
+			log.Printf("bridge: failed to parse NDJSON line: %v", parseErr)
+			continue
+		}
+		rid := ev.RequestID
+
+		b.pendingMu.Lock()
+		ch, ok := b.pending[rid]
+		b.pendingMu.Unlock()
+
+		if ok {
+			if ev.IsTerminal() {
+				b.sendTerminalEvent(ch, ev, rid)
+			} else {
+				// Non-blocking send — channel has buffer.
+				select {
+				case ch <- ev:
+				default:
+					b.droppedEvents.Add(1)
+					slog.Warn("bridge: dropped event", "type", ev.Type, "rid", rid)
+				}
 			}
-			break
+
+			if ev.IsTerminal() {
+				b.pendingMu.Lock()
+				delete(b.pending, rid)
+				b.pendingMu.Unlock()
+				safeClose(ch)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			slog.Error("bridge: NDJSON line exceeds max size", "max", maxNDJSONLineSize)
+		} else if err != io.EOF {
+			slog.Error("bridge: read error", "error", err)
 		}
 	}
 
@@ -192,7 +209,14 @@ func (b *Bridge) readLoop() {
 	cb := b.onDeath
 	b.mu.Unlock()
 	if !stopping && cb != nil {
-		go cb()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("bridge: panic in onDeath callback", "error", r)
+				}
+			}()
+			cb()
+		}()
 	}
 
 	// Process exited or stdout closed — close all pending channels.
@@ -280,6 +304,51 @@ func (b *Bridge) Stop() {
 	b.mu.Unlock()
 }
 
+// cleanupAfterPanic is called from readLoop's recover to close all pending
+// channels, reset process state, and notify the death listener when the bridge
+// panics unexpectedly.
+func (b *Bridge) cleanupAfterPanic() {
+	b.pendingMu.Lock()
+	for rid, ch := range b.pending {
+		safeClose(ch)
+		delete(b.pending, rid)
+	}
+	b.pendingMu.Unlock()
+
+	var cmd *exec.Cmd
+	var cb func()
+	var stopping bool
+	b.mu.Lock()
+	cmd = b.cmd
+	cb = b.onDeath
+	stopping = b.stopping
+	b.started = false
+	b.cmd = nil
+	b.stdin = nil
+	b.reader = nil
+	b.mu.Unlock()
+
+	// Kill the OS process if still alive (prevents zombie processes).
+	if cmd != nil && cmd.Process != nil && (cmd.ProcessState == nil || !cmd.ProcessState.Exited()) {
+		_ = cmd.Process.Kill()
+	}
+	if cmd != nil {
+		_ = cmd.Wait()
+	}
+
+	// Notify death listener only on unexpected panic (not during Stop).
+	if !stopping && cb != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("bridge: panic in onDeath callback", "error", r)
+				}
+			}()
+			cb()
+		}()
+	}
+}
+
 // DroppedEvents returns the number of events dropped due to slow consumers.
 func (b *Bridge) DroppedEvents() uint64 {
 	return b.droppedEvents.Load()
@@ -338,12 +407,18 @@ func (b *Bridge) Execute(ctx context.Context, req Request) (<-chan Event, error)
 	// Wrap channel with context cancellation.
 	out := make(chan Event, eventChannelBuffer)
 	go func() {
-		defer close(out)
 		cleanupPending := func() {
 			b.pendingMu.Lock()
 			delete(b.pending, req.RequestID)
 			b.pendingMu.Unlock()
 		}
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("bridge: panic in Execute proxy", "error", r)
+				cleanupPending()
+			}
+		}()
+		defer close(out)
 		for {
 			select {
 			case ev, ok := <-ch:
@@ -396,6 +471,11 @@ func (b *Bridge) ExecuteSync(ctx context.Context, req Request) (*Event, error) {
 		if ev.IsTerminal() {
 			// Drain remaining events (shouldn't be any, but be safe).
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("bridge: panic in ExecuteSync drain", "error", r)
+					}
+				}()
 				for range ch { //nolint:revive
 				}
 			}()

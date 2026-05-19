@@ -98,19 +98,29 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 			s.processRun(input, run)
 		}()
 	case admitCancelOnly:
-		_, _ = s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior.")
+		if _, err := s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior."); err != nil {
+			log.Printf("pipeline: SendText(admitCancelOnly) failed for chat=%d: %v", chatID, err)
+		}
 		s.output.ConfirmMessage(chatID, messageID)
 	case admitSupersede:
-		_, _ = s.output.SendText(chatID, threadID, "🔁 Interrompi o pedido anterior e vou seguir com sua correção.")
+		if _, err := s.output.SendText(chatID, threadID, "🔁 Interrompi o pedido anterior e vou seguir com sua correção."); err != nil {
+			log.Printf("pipeline: SendText(admitSupersede) failed for chat=%d: %v", chatID, err)
+		}
 		s.output.ConfirmMessage(chatID, messageID)
 	case admitStatus:
 		queueSize := s.runs.queueSize(runKey{chatID: chatID, threadID: threadID})
-		_, _ = s.output.SendText(chatID, threadID, queueStatusMessage(active, queueSize))
+		if _, err := s.output.SendText(chatID, threadID, queueStatusMessage(active, queueSize)); err != nil {
+			log.Printf("pipeline: SendText(admitStatus) failed for chat=%d: %v", chatID, err)
+		}
 		s.output.ConfirmMessage(chatID, messageID)
 	case admitQueued:
-		_, _ = s.output.SendText(chatID, threadID, queueAdmittedMessage(active))
+		if _, err := s.output.SendText(chatID, threadID, queueAdmittedMessage(active)); err != nil {
+			log.Printf("pipeline: SendText(admitQueued) failed for chat=%d: %v", chatID, err)
+		}
 	case admitReplacedQueued:
-		_, _ = s.output.SendText(chatID, threadID, "🔁 Atualizei a próxima instrução na fila.")
+		if _, err := s.output.SendText(chatID, threadID, "🔁 Atualizei a próxima instrução na fila."); err != nil {
+			log.Printf("pipeline: SendText(admitReplacedQueued) failed for chat=%d: %v", chatID, err)
+		}
 		s.output.ConfirmMessage(chatID, messageID)
 	}
 	return nil
@@ -156,7 +166,14 @@ func (s *Service) startQueuedAfter(run *activeRun) {
 	if nextRun == nil || nextInput == nil {
 		return
 	}
-	go s.processRun(*nextInput, nextRun)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("pipeline: panic in startQueuedAfter: %v", r)
+			}
+		}()
+		s.processRun(*nextInput, nextRun)
+	}()
 }
 
 func stripAgentPrefix(text string, agent *agents.Agent) string {
@@ -445,6 +462,11 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 func (s *Service) cancelBridgeOnContextDone(ctx context.Context, requestID string) func() {
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("pipeline: panic in cancelBridgeOnContextDone: %v", r)
+			}
+		}()
 		select {
 		case <-ctx.Done():
 			cancelCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -565,42 +587,10 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 
 	needsReset := s.recordUsage(chatID, threadID, ev)
 	finalText := strings.TrimSpace(assistantText.String())
+
 	if finalText == "" {
-		if emptyResultHadWork(ev) {
-			log.Printf("bridge: empty result after work chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d",
-				chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
-
-			// Deactivate session so next turn does not Continue into a suspect session
-			if s.sessions != nil {
-				s.sessions.Deactivate(chatID, threadID)
-			}
-
-			// Capture tool summary before completeRunLog cleans up the state
-			toolSummary := s.getRunToolSummary(chatID, threadID)
-
-			s.patchContinuityFailure(chatID, threadID, "failed", "empty result after work")
-			s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result after work")
-
-			recoveryMsg := buildEmptyResultRecoveryMessage(toolSummary)
-			if err := s.output.SendError(chatID, threadID, recoveryMsg); err != nil {
-				log.Printf("Failed to send recovery message to chat %d: %v", chatID, err)
-			}
-		} else {
-			log.Printf("bridge: empty result (no work) chat=%d thread=%d request=%s",
-				chatID, threadID, ev.RequestID)
-			s.patchContinuityFailure(chatID, threadID, "failed", "empty result")
-			s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
-			if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
-				log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
-			}
-		}
-
-		// Even on empty results, flush remaining nudge buffer and reset if threshold was crossed
-		if needsReset {
-			s.resetSessionAfterSuccessfulTurn(chatID, threadID)
-		}
-		s.output.ConfirmMessage(chatID, messageID)
-		return OutcomeLLMError
+		toolSummary := s.getRunToolSummary(chatID, threadID)
+		return s.handleEmptyResult(chatID, threadID, messageID, ev, userText, toolSummary, needsReset)
 	}
 
 	safeFinalText := sanitizeExecutionPlanForChat(finalText)
@@ -609,15 +599,69 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	successRunID := s.getRunID(chatID, threadID)
 	s.completeRunLog(chatID, threadID, runlog.RunCompleted, safeFinalText, "")
 
-	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
-		s.output.ConfirmMessage(chatID, messageID)
-		s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID)
-		if needsReset {
-			s.resetSessionAfterSuccessfulTurn(chatID, threadID)
-		}
-		return OutcomeSuccess
+	if ok, outcome := s.handlePlanExecution(chatID, threadID, messageID, finalText, safeFinalText, successRunID, userText, needsReset); ok {
+		return outcome
 	}
 
+	return s.handleNormalReply(chatID, threadID, messageID, safeFinalText, successRunID, userText, needsReset)
+}
+
+// handleEmptyResult handles the case where the bridge returned no text.
+// It distinguishes between "worked but empty" (tokens consumed) and "no work at all".
+func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, ev bridge.Event, userText string, toolSummary string, needsReset bool) Outcome {
+	if emptyResultHadWork(ev) {
+		log.Printf("bridge: empty result after work chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d",
+			chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
+
+		// Deactivate session so next turn does not Continue into a suspect session
+		if s.sessions != nil {
+			s.sessions.Deactivate(chatID, threadID)
+		}
+
+		s.patchContinuityFailure(chatID, threadID, "failed", "empty result after work")
+		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result after work")
+
+		recoveryMsg := buildEmptyResultRecoveryMessage(toolSummary)
+		if err := s.output.SendError(chatID, threadID, recoveryMsg); err != nil {
+			log.Printf("Failed to send recovery message to chat %d: %v", chatID, err)
+		}
+	} else {
+		log.Printf("bridge: empty result (no work) chat=%d thread=%d request=%s",
+			chatID, threadID, ev.RequestID)
+		s.patchContinuityFailure(chatID, threadID, "failed", "empty result")
+		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
+		if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
+			log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
+		}
+	}
+
+	// Even on empty results, flush remaining nudge buffer and reset if threshold was crossed
+	if needsReset {
+		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+	}
+	s.output.ConfirmMessage(chatID, messageID)
+	return OutcomeLLMError
+}
+
+// handlePlanExecution checks whether the assistant output contains an execution
+// plan and, if so, starts the orchestrator. Returns (true, outcome) when a plan
+// was executed, or (false, OutcomeSuccess) to continue with normal reply.
+func (s *Service) handlePlanExecution(chatID int64, threadID int, messageID int, finalText string, safeFinalText string, successRunID string, userText string, needsReset bool) (bool, Outcome) {
+	if !s.tryExecutePlan(chatID, threadID, messageID, finalText) {
+		return false, OutcomeSuccess
+	}
+
+	s.output.ConfirmMessage(chatID, messageID)
+	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID)
+	if needsReset {
+		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+	}
+	return true, OutcomeSuccess
+}
+
+// handleNormalReply sends the assistant's text response to the chat as a
+// normal reply and finalizes the turn.
+func (s *Service) handleNormalReply(chatID int64, threadID int, messageID int, safeFinalText string, successRunID string, userText string, needsReset bool) Outcome {
 	if err := s.output.SendReply(chatID, threadID, safeFinalText); err != nil {
 		log.Printf("Failed to send reply to chat %d: %v", chatID, err)
 	}
@@ -700,7 +744,14 @@ func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, fina
 	if displayText := orchestrator.StripPlanBlock(finalText); displayText != "" {
 		_ = s.output.SendReply(chatID, threadID, displayText)
 	}
-	go s.output.ExecuteApprovedPlan(chatID, messageID, plan)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("pipeline: panic in ExecuteApprovedPlan: %v", r)
+			}
+		}()
+		s.output.ExecuteApprovedPlan(chatID, messageID, plan)
+	}()
 	return true
 }
 
@@ -911,13 +962,15 @@ func (s *Service) startRunLog(chatID int64, threadID int, requestID string, cwd 
 
 	runID := uuid.NewString()
 	now := time.Now()
-	err := s.runLog.Start(context.Background(), runlog.RunRecord{
+	runLogCtx, runLogCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer runLogCancel()
+	err := s.runLog.Start(runLogCtx, runlog.RunRecord{
 		RunID:     runID,
 		ChatID:    chatID,
 		ThreadID:  threadID,
 		RequestID: requestID,
 		CWD:       cwd,
-		Prompt:    redactSecrets(truncatePrompt(prompt)),
+		Prompt:    truncatePrompt(redactSecrets(prompt)),
 		StartedAt: now,
 	})
 	if err != nil {

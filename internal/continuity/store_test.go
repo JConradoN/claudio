@@ -250,6 +250,41 @@ func TestStore_GetDifferentThread(t *testing.T) {
 	}
 }
 
+func TestEscapeUntrusted_EscapesAmpersandBeforeAngleBrackets(t *testing.T) {
+	// &amp; must come before &lt; to prevent double-escaping
+	input := "& < > &lt;"
+	got := escapeUntrusted(input)
+	want := "&amp; &lt; &gt; &amp;lt;"
+	if got != want {
+		t.Fatalf("escapeUntrusted(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestEscapeUntrusted_DoubleEscapesEntities(t *testing.T) {
+	// escapeUntrusted is NOT idempotent — & is replaced first, so already-escaped
+	// entities get their & escaped again. This is correct for delimiter-injection
+	// defense: every & → &amp; before < or > are processed.
+	input := "&amp; &lt; &gt;"
+	got := escapeUntrusted(input)
+	if got != "&amp;amp; &amp;lt; &amp;gt;" {
+		t.Fatalf("escapeUntrusted(%q) = %q, want double-escaped", input, got)
+	}
+}
+
+func TestEscapeUntrusted_HandlesEmptyString(t *testing.T) {
+	if got := escapeUntrusted(""); got != "" {
+		t.Fatalf("expected empty, got %q", got)
+	}
+}
+
+func TestEscapeUntrusted_NoSpecialChars(t *testing.T) {
+	input := "hello world 123"
+	got := escapeUntrusted(input)
+	if got != input {
+		t.Fatalf("escapeUntrusted(%q) = %q, want unchanged", input, got)
+	}
+}
+
 // helpers
 
 func newTestStore(t *testing.T) *SQLiteStore {

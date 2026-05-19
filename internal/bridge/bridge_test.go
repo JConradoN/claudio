@@ -586,3 +586,112 @@ func TestBridge_Stop_And_Restart(t *testing.T) {
 		t.Fatalf("Ping after restart error: %v", err)
 	}
 }
+
+func TestBridge_OnDeath_PanicCallback_DoesNotEscape(t *testing.T) {
+	dir := t.TempDir()
+
+	crashMockJS := `
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+rl.on('line', () => {
+    process.exit(1);
+});
+rl.on('close', () => process.exit(0));
+`
+	b := newMockBridge(t, dir, crashMockJS)
+
+	// Callback that panics — the recover in the goroutine wrapper must catch it.
+	b.SetOnDeath(func() {
+		panic("test onDeath panic")
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := b.Execute(ctx, Request{Command: "query", Prompt: "crash"})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+
+	// Drain channel — process crashes, channel gets closed by readLoop.
+	for range ch {
+	}
+
+	// If we get here, the recover caught the panic and the daemon survived.
+	// Give a brief moment for any deferred recovery to complete.
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestBridge_ExecuteSync_DrainRecover(t *testing.T) {
+	dir := t.TempDir()
+	b := newMockBridge(t, dir, longLivedMockJS)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Normal flow: ExecuteSync receives a terminal event, spawns the drain
+	// goroutine (with defer recover), and returns. This verifies the code
+	// path compiles and runs without panicking.
+	ev, err := b.ExecuteSync(ctx, Request{Command: "query", Prompt: "test"})
+	if err != nil {
+		t.Fatalf("ExecuteSync() error: %v", err)
+	}
+	if ev.Type != "result" {
+		t.Errorf("Type = %q, want %q", ev.Type, "result")
+	}
+	if ev.Content != "done" {
+		t.Errorf("Content = %q, want %q", ev.Content, "done")
+	}
+}
+
+func TestBridge_CleanupAfterPanic_KillsProcess(t *testing.T) {
+	dir := t.TempDir()
+	b := newMockBridge(t, dir, longLivedMockJS)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := b.Ping(ctx); err != nil {
+		t.Fatalf("Ping error: %v", err)
+	}
+
+	b.mu.Lock()
+	cmd := b.cmd
+	b.mu.Unlock()
+
+	if cmd == nil || cmd.Process == nil {
+		t.Fatal("process should be running before cleanupAfterPanic")
+	}
+
+	// Call cleanupAfterPanic directly — this simulates what happens when
+	// readLoop panics and the deferred recover invokes cleanupAfterPanic.
+	b.cleanupAfterPanic()
+
+	// Process should be killed and reaped (Kill + Wait inside cleanupAfterPanic).
+	// Note: ProcessState.Exited() returns false when killed by a signal
+	// (SIGKILL), which is correct behavior. We verify Wait() was called by
+	// checking ProcessState is non-nil.
+	if cmd.ProcessState == nil {
+		t.Fatal("ProcessState is nil — cleanupAfterPanic did not call Wait(); process may be a zombie")
+	}
+	t.Logf("ProcessState=%s (exit code=%d)", cmd.ProcessState, cmd.ProcessState.ExitCode())
+
+	// Bridge state should be reset.
+	b.mu.Lock()
+	started := b.started
+	alive := b.cmd != nil
+	b.mu.Unlock()
+	if started {
+		t.Error("bridge should be marked as not started after cleanupAfterPanic")
+	}
+	if alive {
+		t.Error("bridge cmd should be nil after cleanupAfterPanic")
+	}
+
+	// Wait for readLoop to finish (pipe broke after Kill; scanner will exit).
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for readLoop to finish after cleanupAfterPanic")
+	}
+}
