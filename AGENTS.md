@@ -96,7 +96,19 @@ Every change that goes into `main` **must** bump the version and update
 **must be approved by Igor before committing** — propose the bump and
 entry text, wait for confirmation, then commit.
 
+## Lessons Learned
+
+Historical lessons from prior implementations live in `.opencode/lessons/learned/`. Check `lessons/index.md` before implementing changes in related areas.
+
+**Critical patterns from the 2026-05-20 code review remediation:**
+
+- **Goroutine recovery**: Every background goroutine launched by a package must have `defer recover()` at the top. If it panics, the daemon dies or leaks state. See `goroutine-recovery-mandatory.md`.
+- **Redaction before truncation**: Always redact secrets (`redactSecrets`, escaping) **before** truncating/slicing data. A secret sliced in half evades regex detection. See `redaction-before-truncation.md`.
+- **Path traversal**: `filepath.Base("..")` returns `".."`. Never rely on `Base` alone for untrusted input — use `os.CreateTemp` for temp files and store original names as metadata only. See `filepath-base-traversal.md`.
+- **Post-implementation review**: Self-review + passing build is not sufficient. After non-trivial changes, trigger specialized reviewers (security + backend) with an explicit validation checklist. See `post-impl-review-gaps.md`.
+
 ## Reference
 
 - Architecture and codebase details: `.specs/codebase/`
 - Project vision and roadmap: `.specs/project/`
+- Lessons learned index: `.opencode/lessons/index.md`
