@@ -137,3 +137,71 @@ func cwdClearThread(args string, threadID int) (int, bool, error) {
 		return 0, false, nil
 	}
 }
+
+// buildCwdStatusText formats the /cwd no-args status output showing the
+// full resolution chain and known project suggestions.
+// threadID 0 means no topic (private chat or group general).
+func buildCwdStatusText(defaultCwd, groupCwd, topicCwd, agentCwd string, threadID int, known []projectbinding.ProjectBinding) string {
+	var b strings.Builder
+	b.WriteString("📂 **cwd Resolution Chain**\n\n")
+	b.WriteString("(from lowest to highest priority)\n\n")
+
+	// Use a counter to number only active levels.
+	n := 1
+
+	// Base: bot default
+	fmt.Fprintf(&b, "%d. ⚙️ Bot default: `%s`\n", n, defaultCwd)
+	b.WriteString("   (operational cwd only; not a project binding)\n\n")
+	n++
+
+	// Then: group
+	if groupCwd != "" {
+		fmt.Fprintf(&b, "%d. 👥 Group: `%s`\n", n, groupCwd)
+	} else {
+		fmt.Fprintf(&b, "%d. 👥 Group: *(not set)*\n", n)
+	}
+	b.WriteString("   (configure with /cwd --group <path> ou /cwd <path> no tópico geral)\n\n")
+	n++
+
+	// Then: topic (if applicable)
+	if threadID > 0 {
+		if topicCwd != "" && topicCwd != groupCwd {
+			fmt.Fprintf(&b, "%d. 📌 This topic: `%s`\n", n, topicCwd)
+			b.WriteString("   (overrides group for this topic)\n\n")
+		} else {
+			fmt.Fprintf(&b, "%d. 📌 This topic: *(inherited from group)*\n\n", n)
+		}
+		n++
+	}
+
+	// Finally: agent (highest priority)
+	if agentCwd != "" {
+		fmt.Fprintf(&b, "%d. 🤖 Agent: `%s`\n", n, agentCwd)
+		b.WriteString("   (defined in agent markdown — highest priority)\n\n")
+		n++
+	}
+
+	// Only show "no cwd" guidance when truly no binding exists at any level.
+	hasGroup := groupCwd != ""
+	hasAgent := agentCwd != ""
+	hasTopic := threadID > 0 && topicCwd != ""
+	if !hasGroup && !hasAgent && !hasTopic {
+		b.WriteString("💡 **Nenhum cwd ativo.** Known/remembered project paths from other chats or memory are NOT the active operational cwd.\n\n")
+		b.WriteString("   Set a group-wide binding with: `/cwd --group /caminho/do/projeto`\n")
+		b.WriteString("   Set a topic-specific binding with: `/cwd /caminho/do/projeto`\n")
+
+		if len(known) > 0 {
+			b.WriteString("\n📁 Projetos conhecidos (sugestões — não são cwd ativo):\n")
+			seen := make(map[string]struct{}, len(known))
+			for _, kb := range known {
+				if _, dup := seen[kb.CWD]; dup {
+					continue
+				}
+				seen[kb.CWD] = struct{}{}
+				fmt.Fprintf(&b, "   `/cwd %s`\n", kb.CWD)
+			}
+		}
+	}
+
+	return b.String()
+}

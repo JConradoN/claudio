@@ -132,6 +132,9 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 	if run.ctx.Err() != nil {
 		return
 	}
+	if s.checkProjectPreflight(input, agent, userText) {
+		return
+	}
 	systemPrompt, err := s.buildSystemPrompt(userText, agent, input.chatID, input.messageID, input.threadID, input.userID)
 	if err != nil {
 		log.Printf("Failed to build system prompt: %s", redactSecrets(err.Error()))

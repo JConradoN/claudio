@@ -71,31 +71,28 @@ func looksLikeCodebaseRead(text string) bool {
 // chat. It tells the model to guide the user to /cwd. When knownPaths is
 // non-empty, it lists the user's known project bindings from other chats.
 func codebaseReadChatModeGuidanceForKnownProjects(knownPaths []string) string {
-	if len(knownPaths) == 0 {
-		return `## Codebase / Project Analysis Request
-
-The user is asking you to read or analyze a codebase/project, but no working directory (cwd) is set. You are in chat mode and CANNOT access files.
-
-When this happens:
-1. Tell the user they need to set a working directory first using the command: /cwd <path>
-2. Explain that file operations (Read, Write, Edit, Bash, Glob, Grep) are only available after a cwd is configured.
-3. Do NOT try to read files or run commands — you have no file access without a cwd.
-4. If the user mentions a specific project name (like "aurelia") and you know its path, suggest it: e.g. "/cwd /home/user/projects/aurelia"`
-	}
-
 	var b strings.Builder
 	b.WriteString(`## Codebase / Project Analysis Request
 
-The user is asking you to read or analyze a codebase/project, but no working directory (cwd) is set for this chat. You are in chat mode and CANNOT access files.
+The user is asking you to read or analyze a codebase/project, but no working directory (cwd) is set. You are in chat mode and CANNOT access files.
+
+IMPORTANT: You HAVE memory loaded — do NOT claim you cannot remember or that each session starts empty. Memory IS available. But known/remembered project paths are NOT the active operational cwd. Without a /cwd binding, you CANNOT access files for this chat/topic.
 
 When this happens:
-1. Tell the user to set a working directory: /cwd <path>
-2. File operations are only available after a cwd is configured.
+1. Tell the user they need to set a working directory first using the command: /cwd <path>
+2. File operations (Read, Write, Edit, Bash, Glob, Grep) are only available after a cwd is configured.
 3. Do NOT try to read files or run commands — you have no file access without a cwd.
-4. The user has previously bound projects in other chats. Suggest the most relevant one:`)
-	for _, p := range knownPaths {
-		fmt.Fprintf(&b, "\n   `/cwd %s`", p)
+`)
+
+	if len(knownPaths) == 0 {
+		b.WriteString(`4. If the user mentions a specific project name (like "aurelia") and you know its path, suggest it: e.g. ` + "`/cwd /home/user/projects/aurelia`")
+	} else {
+		b.WriteString(`4. The user has previously bound projects in other chats. These are suggestions, not the active cwd. Suggest the most relevant one:`)
+		for _, p := range knownPaths {
+			fmt.Fprintf(&b, "\n   `/cwd %s`", p)
+		}
+		b.WriteString("\n5. If none of these match, ask what project the user wants to work on.")
 	}
-	b.WriteString("\n5. If none of these match, ask what project the user wants to work on.")
+
 	return b.String()
 }

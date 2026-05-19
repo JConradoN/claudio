@@ -1,7 +1,10 @@
 package telegram
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/igormaneschy/aurelia/internal/projectbinding"
 )
 
 // --- cwdSetTarget tests ---
@@ -162,6 +165,127 @@ func TestParseCwdSetTarget_WhitespaceOnly(t *testing.T) {
 	_, err := parseCwdSetTarget("   ", 0)
 	if err == nil {
 		t.Fatal("expected error for whitespace-only args")
+	}
+}
+
+func TestBuildCwdStatusText_NoBindingShowsKnownProjectsAsSuggestions(t *testing.T) {
+	t.Parallel()
+
+	known := []projectbinding.ProjectBinding{
+		{CWD: "/repo/aurelia", ProjectSlug: "aurelia"},
+		{CWD: "/repo/other", ProjectSlug: "other"},
+	}
+
+	got := buildCwdStatusText("/tmp/bot", "", "", "", 0, known)
+
+	// Must mention known projects as suggestions, not active cwd
+	if !strings.Contains(got, "sugestões") && !strings.Contains(got, "suggestions") {
+		t.Fatal("expected suggestions/sugestões wording for known projects")
+	}
+	if !strings.Contains(got, "NOT the active operational cwd") {
+		t.Fatal("expected 'NOT the active operational cwd' distinction")
+	}
+	if !strings.Contains(got, "/repo/aurelia") {
+		t.Fatal("expected /repo/aurelia in known projects list")
+	}
+	if !strings.Contains(got, "/repo/other") {
+		t.Fatal("expected /repo/other in known projects list")
+	}
+}
+
+func TestBuildCwdStatusText_NoKnownProjectsOmitsSuggestions(t *testing.T) {
+	t.Parallel()
+
+	got := buildCwdStatusText("/tmp/bot", "", "", "", 0, nil)
+
+	// No known projects → should not include suggestions section
+	if strings.Contains(got, "sugestões") || strings.Contains(got, "suggestions") {
+		t.Fatal("should NOT mention suggestions when no known projects")
+	}
+	// Should still include the active cwd distinction
+	if !strings.Contains(got, "NOT the active operational cwd") {
+		t.Fatal("expected 'NOT the active operational cwd' distinction even without known projects")
+	}
+}
+
+func TestBuildCwdStatusText_GroupBindingShowsEffectiveCwd(t *testing.T) {
+	t.Parallel()
+
+	got := buildCwdStatusText("/tmp/bot", "/repo/group", "", "", 0, nil)
+
+	// Group cwd is set, so no "no cwd" guidance
+	if strings.Contains(got, "NOT the active operational cwd") {
+		t.Fatal("should NOT show no-cwd guidance when group cwd is set")
+	}
+	// Should show the group cwd
+	if !strings.Contains(got, "/repo/group") {
+		t.Fatal("expected /repo/group in status output")
+	}
+}
+
+func TestBuildCwdStatusText_TopicInheritsGroup(t *testing.T) {
+	t.Parallel()
+
+	got := buildCwdStatusText("/tmp/bot", "/repo/group", "", "", 99, nil)
+
+	// Topic inherited from group
+	if !strings.Contains(got, "inherited from group") {
+		t.Fatal("expected 'inherited from group' wording for topic")
+	}
+	// No "no cwd" guidance
+	if strings.Contains(got, "NOT the active operational cwd") {
+		t.Fatal("should NOT show no-cwd guidance when group cwd exists")
+	}
+}
+
+func TestBuildCwdStatusText_TopicOverridesGroup(t *testing.T) {
+	t.Parallel()
+
+	got := buildCwdStatusText("/tmp/bot", "/repo/group", "/repo/topic", "", 99, nil)
+
+	if !strings.Contains(got, "/repo/topic") {
+		t.Fatal("expected topic cwd in status output")
+	}
+	if !strings.Contains(got, "overrides group") {
+		t.Fatal("expected 'overrides group' wording for topic override")
+	}
+}
+
+func TestBuildCwdStatusText_DeduplicatesKnownProjects(t *testing.T) {
+	t.Parallel()
+
+	known := []projectbinding.ProjectBinding{
+		{CWD: "/repo/aurelia", ProjectSlug: "slug1"},
+		{CWD: "/repo/aurelia", ProjectSlug: "slug2"},
+		{CWD: "/repo/unique", ProjectSlug: "unique"},
+	}
+
+	got := buildCwdStatusText("/tmp/bot", "", "", "", 0, known)
+
+	// Count occurrences of /repo/aurelia in the output
+	count := strings.Count(got, "/repo/aurelia")
+	if count != 1 {
+		t.Fatalf("expected 1 occurrence of /repo/aurelia (deduplicated), got %d", count)
+	}
+	if !strings.Contains(got, "/repo/unique") {
+		t.Fatal("expected /repo/unique in known projects")
+	}
+}
+
+func TestBuildCwdStatusText_AgentBindingShowsHighestPriority(t *testing.T) {
+	t.Parallel()
+
+	got := buildCwdStatusText("/tmp/bot", "/repo/group", "", "/repo/agent", 99, nil)
+
+	if !strings.Contains(got, "/repo/agent") {
+		t.Fatal("expected agent cwd in status output")
+	}
+	if !strings.Contains(got, "highest priority") {
+		t.Fatal("expected 'highest priority' wording")
+	}
+	// No "no cwd" guidance since agent has cwd
+	if strings.Contains(got, "NOT the active operational cwd") {
+		t.Fatal("should NOT show no-cwd guidance when agent cwd is set")
 	}
 }
 

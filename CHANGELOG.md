@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.18] - 2026-05-19
+
+### Adicionado
+- Preflight determinístico para pedidos de leitura/análise de codebase sem `cwd` ativo, respondendo localmente com orientação de `/cwd` e evitando chamada desnecessária ao LLM.
+- Sugestões de projetos conhecidos são exibidas quando disponíveis, com comandos `/cwd <path>` prontos para uso.
+
+### Alterado
+- Prompt agora diferencia memória carregada/projetos conhecidos de `cwd` operacional ativo quando nenhum projeto está fixado.
+- Quando há projetos conhecidos mas sem `cwd` ativo, o agente é instruído a sugerir `/cwd <path>` em vez de dizer que não lembra.
+- `/cwd` sem argumentos agora mostra status efetivo com mais clareza e marca projetos conhecidos como sugestões, não como cwd ativo.
+
+### Corrigido
+- `/cwd` não mostra mais "nenhum cwd ativo" quando há binding ativo apenas no tópico.
+- Numeração da cadeia de resolução de cwd agora é dinâmica.
+
 ## [0.7.17] - 2026-05-19
 
 ### Adicionado

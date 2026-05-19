@@ -78,7 +78,7 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	sections = append(sections, cronSection)
 
 	// Telegram interaction instructions
-	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent)
+	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent, userID)
 	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
 
@@ -181,10 +181,16 @@ func (bc *Service) listKnownProjectPaths(userID int64) []string {
 }
 
 // buildTelegramInstructions returns instructions for interacting with the Telegram chat.
-func (bc *Service) buildTelegramInstructions(chatID int64, messageID int, threadID int, agent *agents.Agent) string {
+func (bc *Service) buildTelegramInstructions(chatID int64, messageID int, threadID int, agent *agents.Agent, userID int64) string {
 	bin := "aurelia"
 	if bc.exePath != "" {
 		bin = bc.exePath
+	}
+
+	cwd := bc.effectiveCwd(agent, chatID, threadID)
+	cwdDisplay := cwd
+	if cwd == "" {
+		cwdDisplay = "(none — no project set)"
 	}
 
 	forumContext := ""
@@ -192,10 +198,16 @@ func (bc *Service) buildTelegramInstructions(chatID int64, messageID int, thread
 		forumContext = fmt.Sprintf("\nYou are in a FORUM TOPIC (thread ID %d).\nMessages and replies are scoped to this topic — they do NOT leak to other topics.\nThe typing indicator and all responses will appear in THIS topic only.\n", threadID)
 	}
 
-	return fmt.Sprintf(`## Telegram Context
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf(`## Telegram Context
 
 You ARE the Telegram bot. The user is talking to you via Telegram chat %d.
-The current message ID is %d.`+forumContext+`
+The current message ID is %d.`, chatID, messageID))
+	if forumContext != "" {
+		sb.WriteString(forumContext)
+	}
+	sb.WriteString(fmt.Sprintf(`
 
 You can interact with the chat using the Aurelia CLI via Bash:
 
@@ -214,13 +226,28 @@ IMPORTANT rules about the working directory:
 - When cwd is "(none)", you are in CHAT MODE. Do NOT read files, run commands, or analyze any project. Only use your memory and conversation context to answer questions.
 - When the user wants to work on files or a project, tell them to set the directory first: `+"`/cwd <path>`"+`
 - Only perform file operations (Read, Write, Edit, Bash, Glob, Grep) when a cwd is explicitly set.
-- If the user asks about "this project" or "the project", refer to conversation context and memory — do NOT go reading random directories.`,
-		chatID, messageID, bin, chatID, messageID, func() string {
-			if cwd := bc.effectiveCwd(agent, chatID, threadID); cwd != "" {
-				return cwd
+- If the user asks about "this project" or "the project", refer to conversation context and memory — do NOT go reading random directories.`, bin, chatID, messageID, cwdDisplay))
+
+	// When cwd is empty, add distinction about known projects and memory.
+	// This applies broadly (not only codebase-read intent) but concisely.
+	if cwd == "" {
+		// Remind the model it has memory loaded — do not claim inability to remember.
+		sb.WriteString(`
+- You HAVE memory loaded — do NOT claim you cannot remember or that each session starts empty. Memory and conversation context ARE available. However, without a cwd binding, you CANNOT access files for this chat/topic.`)
+
+		// If the user has known projects from other chats, list them as suggestions.
+		knownPaths := bc.listKnownProjectPaths(userID)
+		if len(knownPaths) > 0 {
+			sb.WriteString(`
+- Known/remembered project paths from other chats are NOT the active operational cwd. They are suggestions.`)
+			sb.WriteString("\n  Suggested projects (use `/cwd <path>` to activate):")
+			for _, p := range knownPaths {
+				sb.WriteString(fmt.Sprintf("\n  - `/cwd %s`", p))
 			}
-			return "(none — no project set)"
-		}())
+		}
+	}
+
+	return sb.String()
 }
 
 // topicMemoryDir returns the directory used to store memories scoped to a

@@ -13,6 +13,7 @@ import (
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	memoryuxpkg "github.com/igormaneschy/aurelia/internal/memoryux"
+	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 )
 
@@ -146,7 +147,7 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 	args := strings.TrimSpace(c.Message().Payload)
 
 	if args == "" {
-		// Show full CWD hierarchy
+		// Build resolution chain status
 		topicCwd := ""
 		if threadID > 0 {
 			topicCwd = bc.currentCwd(chatID, threadID)
@@ -163,62 +164,21 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 			}
 		}
 
-		var b strings.Builder
-		b.WriteString("📂 **CWD Resolution Chain**\n\n")
-		b.WriteString("(from lowest to highest priority)\n\n")
-
-		// Base: bot default
-		fmt.Fprintf(&b, "1. ⚙️ Bot default: `%s`\n", defaultCwd)
-		b.WriteString("   (operational cwd only; not a project binding)\n\n")
-
-		// Then: group
-		if groupCwd != "" {
-			fmt.Fprintf(&b, "2. 👥 Group: `%s`\n", groupCwd)
-		} else {
-			b.WriteString("2. 👥 Group: *(not set)*\n")
-		}
-		b.WriteString("   (configure with /cwd --group <path> ou /cwd <path> no tópico geral)\n\n")
-
-		// Then: topic (if applicable)
-		if threadID > 0 {
-			if topicCwd != "" && topicCwd != groupCwd {
-				fmt.Fprintf(&b, "3. 📌 This topic: `%s`\n", topicCwd)
-				b.WriteString("   (overrides group for this topic)\n\n")
-			} else {
-				b.WriteString("3. 📌 This topic: *(inherited from group)*\n\n")
+		// Show known project bindings from other chats when available
+		var known []projectbinding.ProjectBinding
+		if userID := safeSenderID(c.Sender()); userID > 0 && bc.bindings != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var err error
+			known, err = bc.bindings.ListByUser(ctx, userID, 5)
+			if err != nil {
+				log.Printf("cwd: listKnownProjects error: %v", err)
+				known = nil
 			}
 		}
 
-		// Finally: agent (highest priority)
-		if agentCwd != "" {
-			fmt.Fprintf(&b, "4. 🤖 Agent: `%s`\n", agentCwd)
-			b.WriteString("   (defined in agent markdown — highest priority)\n\n")
-		}
-
-		if groupCwd == "" && agentCwd == "" {
-			b.WriteString("💡 Set a group-wide binding with: `/cwd --group /caminho/do/projeto`\n")
-			b.WriteString("   Set a topic-specific binding with: `/cwd /caminho/do/projeto`\n")
-
-			// Show known project bindings from other chats when available
-			if userID := safeSenderID(c.Sender()); userID > 0 && bc.bindings != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				known, err := bc.bindings.ListByUser(ctx, userID, 5)
-				if err == nil && len(known) > 0 {
-					b.WriteString("\n📁 Projetos conhecidos de outros chats:\n")
-					seen := make(map[string]struct{}, len(known))
-					for _, kb := range known {
-						if _, dup := seen[kb.CWD]; dup {
-							continue
-						}
-						seen[kb.CWD] = struct{}{}
-						fmt.Fprintf(&b, "   `/cwd %s`\n", kb.CWD)
-					}
-				}
-			}
-		}
-
-		return SendTextWithThread(bc.bot, c.Chat(), b.String(), threadID)
+		status := buildCwdStatusText(defaultCwd, groupCwd, topicCwd, agentCwd, threadID, known)
+		return SendTextWithThread(bc.bot, c.Chat(), status, threadID)
 	}
 
 	if clearThreadID, clear, err := cwdClearThread(args, threadID); err != nil {

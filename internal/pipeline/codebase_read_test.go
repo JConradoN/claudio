@@ -49,12 +49,15 @@ func TestLooksLikeCodebaseRead(t *testing.T) {
 		{"browse the code", true},
 		{"browse the codebase", true},
 		{"browse the project", true},
-		// False negatives
+		// False negatives — casual chat should never match
 		{"bom dia", false},
 		{"qual o status do servidor", false},
 		{"implementa a feature", false},
 		{"", false},
 		{"como funciona o cache", false},
+		// False negatives — project/cwd mentions without file action
+		{"qual projeto você prefere?", false},
+		{"memória do projeto", false},
 	}
 
 	for _, tc := range tests {
@@ -175,6 +178,12 @@ func TestCodebaseReadGuidance_IncludesKnownProjectsForUser(t *testing.T) {
 	if !strings.Contains(prompt, "previously bound") {
 		t.Fatal("expected 'previously bound' language in guidance")
 	}
+	if !strings.Contains(prompt, "suggestions, not the active cwd") {
+		t.Fatal("expected 'suggestions, not the active cwd' distinction in guidance")
+	}
+	if !strings.Contains(prompt, "do NOT claim you cannot remember") {
+		t.Fatal("expected 'do NOT claim you cannot remember' language in guidance")
+	}
 }
 
 func TestCodebaseReadGuidance_NoCrossChatForUserIDZero(t *testing.T) {
@@ -217,6 +226,115 @@ func TestCodebaseReadGuidance_NoCrossChatForUserIDZero(t *testing.T) {
 	}
 	if strings.Contains(prompt, "other chats") {
 		t.Fatal("should NOT mention other chats for userID=0")
+	}
+}
+
+func TestGeneralCwdGuidance_IncludedWhenCwdEmptyWithKnownProjects(t *testing.T) {
+	bindings, err := projectbinding.NewSQLiteStore(filepath.Join(t.TempDir(), "bindings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bindings.Close()
+
+	ctx := t.Context()
+	if err := bindings.Set(ctx, projectbinding.ProjectBinding{
+		Key:         projectbinding.ConversationKey{ChatID: 100, ThreadID: 0},
+		CWD:         "/repo/aurelia",
+		ProjectSlug: "-repo-aurelia",
+		Source:      projectbinding.BindingManual,
+		CreatedBy:   42,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
+		sessions:    session.NewStore(),
+		bindings:    bindings,
+		memoryDir:   t.TempDir(),
+		memoryCache: newMemoryCache(),
+	}
+
+	// Use a general chat message (NOT codebase-read) to verify broad guidance
+	prompt, err := svc.buildSystemPrompt("bom dia, tudo bem?", nil, 42, 1, 0, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should include memory distinction
+	if !strings.Contains(prompt, "do NOT claim you cannot remember") {
+		t.Fatal("expected 'do NOT claim you cannot remember' memory distinction for general chat")
+	}
+	// Should include known projects suggestion
+	if !strings.Contains(prompt, "/repo/aurelia") {
+		t.Fatal("expected known project /repo/aurelia in general cwd guidance")
+	}
+	if !strings.Contains(prompt, "NOT the active operational cwd") {
+		t.Fatal("expected 'NOT the active operational cwd' distinction in general guidance")
+	}
+}
+
+func TestGeneralCwdGuidance_OmittedForNoKnownProjects(t *testing.T) {
+	svc := &Service{
+		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
+		sessions:    session.NewStore(),
+		memoryDir:   t.TempDir(),
+		memoryCache: newMemoryCache(),
+	}
+
+	// General chat, no cwd, no known projects — should NOT add known-project suggestions
+	prompt, err := svc.buildSystemPrompt("bom dia, tudo bem?", nil, 42, 1, 0, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should still include the memory distinction (always there when cwd empty)
+	if !strings.Contains(prompt, "do NOT claim you cannot remember") {
+		t.Fatal("expected 'do NOT claim you cannot remember' memory distinction even without known projects")
+	}
+	// Should NOT include known project paths (none exist)
+	if strings.Contains(prompt, "NOT the active operational cwd") {
+		t.Fatal("should NOT include active cwd distinction when no known projects exist")
+	}
+}
+
+func TestGeneralCwdGuidance_OmittedForUserIDZero(t *testing.T) {
+	bindings, err := projectbinding.NewSQLiteStore(filepath.Join(t.TempDir(), "bindings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bindings.Close()
+
+	ctx := t.Context()
+	if err := bindings.Set(ctx, projectbinding.ProjectBinding{
+		Key:         projectbinding.ConversationKey{ChatID: 100, ThreadID: 0},
+		CWD:         "/repo/secret-project",
+		ProjectSlug: "-repo-secret",
+		Source:      projectbinding.BindingManual,
+		CreatedBy:   99,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
+		sessions:    session.NewStore(),
+		bindings:    bindings,
+		memoryDir:   t.TempDir(),
+		memoryCache: newMemoryCache(),
+	}
+
+	// userID=0 — unidentifiable sender, should NOT get cross-chat suggestions
+	prompt, err := svc.buildSystemPrompt("bom dia", nil, 42, 1, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(prompt, "/repo/secret-project") {
+		t.Fatal("should NOT show known projects for userID=0 in general guidance")
+	}
+	if strings.Contains(prompt, "NOT the active operational cwd") {
+		t.Fatal("should NOT include active cwd distinction for userID=0 in general guidance")
 	}
 }
 
