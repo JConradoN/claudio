@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
@@ -518,5 +521,107 @@ func TestIsContinuation(t *testing.T) {
 				t.Errorf("isContinuation(%q) = %v, want %v", tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildSystemPrompt_ContinuityOrdering(t *testing.T) {
+	// Set up continuity store with recent state
+	contDir := t.TempDir()
+	contStore, err := continuity.NewSQLiteStore(filepath.Join(contDir, "cont.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer contStore.Close()
+
+	ctx := t.Context()
+	now := time.Now()
+	err = contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		CWD:                  "/repo",
+		ActiveGoal:           "Test continuity ordering",
+		LastUserIntent:       "User said something",
+		LastAssistantSummary: "Assistant responded",
+		LastRunStatus:        "completed",
+		UpdatedAt:            now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up runlog store with a failed run (so LastKnownRunState appears)
+	runLogDir := t.TempDir()
+	runLogStore, err := runlog.NewSQLiteStore(filepath.Join(runLogDir, "runlog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runLogStore.Close()
+
+	sessionStore := session.NewStore()
+
+	svc := &Service{
+		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
+		continuity:  contStore,
+		sessions:    sessionStore,
+		runLog:      runLogStore,
+		memoryDir:   t.TempDir(), // empty dir so memory section is minimal
+		memoryCache: newMemoryCache(),
+	}
+
+	// Build system prompt — should include continuity, last-run-state, and memory sections
+	prompt, err := svc.buildSystemPrompt("continua", nil, 42, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all expected sections are present
+	if !strings.Contains(prompt, "Conversation Continuity") {
+		t.Fatal("system prompt missing Conversation Continuity section")
+	}
+	if !strings.Contains(prompt, "Persistent Memory") {
+		t.Fatal("system prompt missing Persistent Memory section")
+	}
+	if !strings.Contains(prompt, "Continuity") {
+		t.Fatal("system prompt missing Continuity section")
+	}
+
+	// Verify ordering: Continuity before Last Known Run State before Memory
+	contIdx := strings.Index(prompt, "Conversation Continuity")
+	memIdx := strings.Index(prompt, "Persistent Memory")
+	lastRunIdx := strings.Index(prompt, "Last Known Run State")
+
+	if contIdx < 0 {
+		t.Fatal("Conversation Continuity section not found")
+	}
+	if memIdx < 0 {
+		t.Fatal("Persistent Memory section not found")
+	}
+
+	// Continuity must appear before Persistent Memory
+	if contIdx > memIdx {
+		t.Fatal("Conversation Continuity appears AFTER Persistent Memory — violates spec ordering")
+	}
+
+	// If LastKnownRunState is present, Continuity must appear before it too
+	if lastRunIdx >= 0 && contIdx > lastRunIdx {
+		t.Fatal("Conversation Continuity appears AFTER Last Known Run State — violates spec ordering")
+	}
+}
+
+func TestBuildSystemPrompt_NoContinuityWhenNilStore(t *testing.T) {
+	svc := &Service{
+		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
+		continuity:  nil,
+		sessions:    session.NewStore(),
+		memoryDir:   t.TempDir(),
+		memoryCache: newMemoryCache(),
+	}
+
+	prompt, err := svc.buildSystemPrompt("hello", nil, 1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "Conversation Continuity") {
+		t.Fatal("expected no continuity section when store is nil")
 	}
 }

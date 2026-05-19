@@ -13,6 +13,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/cron"
 	"github.com/igormaneschy/aurelia/internal/deps"
 	"github.com/igormaneschy/aurelia/internal/dream"
@@ -34,6 +35,7 @@ type app struct {
 	cronStore  *cron.SQLiteCronStore
 	bindings   projectbinding.Store
 	runLog     runlog.Store
+	continuity continuity.Store
 	bot        *telegram.BotController
 	sessions   *session.Store
 	scheduler  *cron.Scheduler
@@ -127,8 +129,25 @@ func bootstrapApp() (*app, error) {
 		return nil, fmt.Errorf("initialize runlog store: %w", err)
 	}
 
+	continuityStore, err := continuity.NewSQLiteStore(resolver.DBPath("continuity.db"))
+	if err != nil {
+		if closeErr := runLogStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close runlog store: %v", closeErr)
+		}
+		if closeErr := bindings.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close project binding store: %v", closeErr)
+		}
+		if closeErr := cronStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close cron store: %v", closeErr)
+		}
+		return nil, fmt.Errorf("initialize continuity store: %w", err)
+	}
+
 	transcriber, err := buildTranscriber(cfg)
 	if err != nil {
+		if closeErr := continuityStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close continuity store: %v", closeErr)
+		}
 		if closeErr := runLogStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close runlog store: %v", closeErr)
 		}
@@ -153,6 +172,13 @@ func bootstrapApp() (*app, error) {
 	br.SetOnDeath(func() {
 		log.Printf("bridge: process died, deactivating all sessions")
 		sessions.DeactivateAll()
+		if continuityStore != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := continuityStore.MarkColdForSessions(ctx, "bridge process died"); err != nil {
+				log.Printf("Warning: failed to mark continuity cold after bridge death: %v", err)
+			}
+		}
 	})
 
 	bot, err := telegram.NewBotController(
@@ -160,6 +186,9 @@ func bootstrapApp() (*app, error) {
 		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker, resolver, bindings,
 	)
 	if err != nil {
+		if closeErr := continuityStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close continuity store: %v", closeErr)
+		}
 		if closeErr := runLogStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close runlog store: %v", closeErr)
 		}
@@ -172,10 +201,14 @@ func bootstrapApp() (*app, error) {
 		return nil, fmt.Errorf("initialize telegram bot: %w", err)
 	}
 	bot.SetRunLog(runLogStore)
+	bot.SetContinuity(continuityStore)
 
 	// Wire orchestrator — enables autonomous agent orchestration
 	cwd, err := os.Getwd()
 	if err != nil {
+		if closeErr := continuityStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close continuity store: %v", closeErr)
+		}
 		if closeErr := runLogStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close runlog store: %v", closeErr)
 		}
@@ -256,6 +289,9 @@ func bootstrapApp() (*app, error) {
 
 	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider, exePath)
 	if err != nil {
+		if closeErr := continuityStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close continuity store: %v", closeErr)
+		}
 		if closeErr := runLogStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close runlog store: %v", closeErr)
 		}
@@ -278,6 +314,7 @@ func bootstrapApp() (*app, error) {
 		cronStore:  cronStore,
 		bindings:   bindings,
 		runLog:     runLogStore,
+		continuity: continuityStore,
 		bot:        bot,
 		sessions:   sessions,
 		scheduler:  scheduler,
@@ -455,6 +492,11 @@ func (a *app) close() {
 	if a.runLog != nil {
 		if err := a.runLog.Close(); err != nil {
 			log.Printf("Warning: failed to close runlog store: %v", err)
+		}
+	}
+	if a.continuity != nil {
+		if err := a.continuity.Close(); err != nil {
+			log.Printf("Warning: failed to close continuity store: %v", err)
 		}
 	}
 }

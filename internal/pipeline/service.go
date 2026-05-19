@@ -6,6 +6,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/persona"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
@@ -57,6 +58,7 @@ type Config struct {
 	ProjectIndex *runtime.ProjectIndex
 	Bindings     projectbinding.Store
 	RunLog       runlog.Store
+	Continuity   continuity.Store
 }
 
 // Service owns the LLM/message pipeline independent from Telegram routing.
@@ -84,6 +86,7 @@ type Service struct {
 	runLog         runlog.Store
 	runLogMu       sync.Mutex
 	runLogStates   map[string]*runLogState
+	continuity     continuity.Store
 }
 
 // NewService builds a pipeline service with explicit dependencies.
@@ -109,6 +112,7 @@ func NewService(cfg Config) *Service {
 		runs:          newRunSupervisor(),
 		runLog:        cfg.RunLog,
 		runLogStates:  make(map[string]*runLogState),
+		continuity:    cfg.Continuity,
 	}
 
 	if cfg.Bridge != nil {
@@ -156,6 +160,11 @@ func (s *Service) SetDreamer(d Dreamer) {
 // SetRunLog injects the run log store after construction (optional).
 func (s *Service) SetRunLog(rl runlog.Store) {
 	s.runLog = rl
+}
+
+// SetContinuity injects the continuity store after construction (optional).
+func (s *Service) SetContinuity(cs continuity.Store) {
+	s.continuity = cs
 }
 
 // NudgeBuffer returns the per-service nudge buffer for command-triggered flushes.

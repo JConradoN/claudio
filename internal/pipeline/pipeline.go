@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/runlog"
 )
@@ -346,13 +347,16 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 		} else if errors.Is(err, context.Canceled) {
 			log.Printf("pipeline: run canceled by user chat=%d thread=%d", chatID, threadID)
 			if runLogStarted {
+				s.patchContinuityFailure(chatID, threadID, "canceled", "cancelado pelo usuário")
 				s.completeRunLog(chatID, threadID, runlog.RunCanceled, "", "cancelado pelo usuário")
 			}
 			return
 		} else {
 			log.Printf("Bridge execute error: %s", redactSecrets(err.Error()))
 			if runLogStarted {
-				s.completeRunLog(chatID, threadID, runlog.RunFailed, "", redactSecrets(err.Error()))
+				redacted := redactSecrets(err.Error())
+				s.patchContinuityFailure(chatID, threadID, "failed", redacted)
+				s.completeRunLog(chatID, threadID, runlog.RunFailed, "", redacted)
 			}
 			if s.resilient == nil {
 				if err := s.output.SendError(chatID, threadID, bridgeConnectErrorMessage); err != nil {
@@ -374,6 +378,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 		}
 		if outcome != OutcomeProcessDeath {
 			if runLogStarted {
+				s.patchContinuityFailure(chatID, threadID, "failed", "")
 				s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "")
 			}
 			return
@@ -384,6 +389,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	log.Printf("bridge: process died mid-request, retrying for chat=%d thread=%d", chatID, threadID)
 
 	if runLogStarted {
+		s.patchContinuityFailure(chatID, threadID, "failed", "process death, retrying")
 		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "process death, retrying")
 	}
 
@@ -409,6 +415,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	s.output.DeleteMessage(reconnectMsg)
 	if err != nil {
 		log.Printf("bridge: retry failed for chat=%d: %s", chatID, redactSecrets(err.Error()))
+		s.patchContinuitySessionCold(chatID, threadID, "bridge retry failed: "+redactSecrets(err.Error()))
 		_ = s.output.SendError(chatID, threadID, bridgeRetryFailedMessage)
 		s.output.ConfirmMessage(chatID, messageID)
 		return
@@ -441,11 +448,13 @@ func (s *Service) cancelBridgeOnContextDone(ctx context.Context, requestID strin
 func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Context, chatID int64, threadID int) bool {
 	if parentCtx.Err() != nil {
 		log.Printf("pipeline: run canceled chat=%d thread=%d", chatID, threadID)
+		s.patchContinuityFailure(chatID, threadID, "canceled", "cancelado pelo usuário")
 		s.completeRunLog(chatID, threadID, runlog.RunCanceled, "", "cancelado pelo usuário")
 		return true
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		log.Printf("pipeline: run timeout chat=%d thread=%d", chatID, threadID)
+		s.patchContinuityFailure(chatID, threadID, "timed_out", "timeout")
 		s.completeRunLog(chatID, threadID, runlog.RunTimedOut, "", "timeout")
 		if s.sessions != nil {
 			s.sessions.Deactivate(chatID, threadID)
@@ -469,6 +478,7 @@ func (s *Service) handleRetryOutcome(chatID int64, threadID int, messageID int, 
 		s.bridgeFailures.reset()
 	case OutcomeProcessDeath:
 		s.bridgeFailures.record()
+		s.patchContinuitySessionCold(chatID, threadID, "bridge retry process death")
 		_ = s.output.SendError(chatID, threadID, bridgeRetryFailedMessage)
 		s.output.ConfirmMessage(chatID, messageID)
 	}
@@ -522,6 +532,7 @@ func (s *Service) handleSystemEvent(chatID int64, threadID int, ev bridge.Event)
 	}
 	log.Printf("session store: chat=%d thread=%d sid=%s", chatID, threadID, shortSessionID(ev.SessionID))
 	s.sessions.Set(chatID, threadID, ev.SessionID)
+	s.patchContinuitySessionID(chatID, threadID, ev.SessionID)
 }
 
 func eventContent(ev bridge.Event) string {
@@ -554,6 +565,7 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 			// Capture tool summary before completeRunLog cleans up the state
 			toolSummary := s.getRunToolSummary(chatID, threadID)
 
+			s.patchContinuityFailure(chatID, threadID, "failed", "empty result after work")
 			s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result after work")
 
 			recoveryMsg := buildEmptyResultRecoveryMessage(toolSummary)
@@ -563,6 +575,7 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		} else {
 			log.Printf("bridge: empty result (no work) chat=%d thread=%d request=%s",
 				chatID, threadID, ev.RequestID)
+			s.patchContinuityFailure(chatID, threadID, "failed", "empty result")
 			s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
 			if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
 				log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
@@ -577,11 +590,13 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		return OutcomeLLMError
 	}
 
+	// Capture runID before completeRunLog cleans up runLogStates.
+	successRunID := s.getRunID(chatID, threadID)
 	s.completeRunLog(chatID, threadID, runlog.RunCompleted, finalText, "")
 
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		s.output.ConfirmMessage(chatID, messageID)
-		s.afterSuccessfulTurn(chatID, threadID, userText, finalText)
+		s.afterSuccessfulTurn(chatID, threadID, userText, finalText, successRunID)
 		if needsReset {
 			s.resetSessionAfterSuccessfulTurn(chatID, threadID)
 		}
@@ -592,7 +607,7 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		log.Printf("Failed to send reply to chat %d: %v", chatID, err)
 	}
 	s.output.ConfirmMessage(chatID, messageID)
-	s.afterSuccessfulTurn(chatID, threadID, userText, finalText)
+	s.afterSuccessfulTurn(chatID, threadID, userText, finalText, successRunID)
 	if needsReset {
 		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
 	}
@@ -622,10 +637,18 @@ func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) bool 
 // Uses ClearSession to preserve cwd and project binding so the user does not
 // lose their working directory after an auto-reset.
 func (s *Service) resetSessionAfterSuccessfulTurn(chatID int64, threadID int) {
-	log.Printf("session auto-reset: chat=%d thread=%d threshold=%d", chatID, threadID, s.config.MaxSessionTokens)
+	if s.config != nil {
+		log.Printf("session auto-reset: chat=%d thread=%d threshold=%d", chatID, threadID, s.config.MaxSessionTokens)
+	} else {
+		log.Printf("session auto-reset: chat=%d thread=%d", chatID, threadID)
+	}
+	// Patch continuity before clearing session — mark cold with reason
+	s.patchContinuitySessionCold(chatID, threadID, "auto-reset")
 	s.flushDreamer(chatID, threadID)
 	s.sessions.ClearSession(chatID, threadID)
-	s.tracker.Clear(chatID, threadID)
+	if s.tracker != nil {
+		s.tracker.Clear(chatID, threadID)
+	}
 }
 
 func (s *Service) flushDreamer(chatID int64, threadID int) {
@@ -653,7 +676,10 @@ func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, fina
 	return true
 }
 
-func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText string, finalText string) {
+func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText string, finalText string, runID string) {
+	// Patch continuity with successful turn state
+	s.patchContinuityAfterSuccess(chatID, threadID, userText, finalText, runID)
+
 	if s.dreamer == nil {
 		return
 	}
@@ -662,6 +688,149 @@ func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText strin
 	s.nudgeBuffer.AddTurn(chatID, threadID, userText, finalText)
 	s.dreamer.AfterTurnNudge(chatID, threadID, cwd, s.nudgeBuffer)
 	s.InvalidateMemoryDirs(chatID, threadID, cwd)
+}
+
+// --- Continuity lifecycle helpers ---
+
+// getRunID returns the current runID from runLogStates, or empty string.
+// Must be called before completeRunLog, which deletes the state.
+func (s *Service) getRunID(chatID int64, threadID int) string {
+	key := runLogKey(chatID, threadID)
+	s.runLogMu.Lock()
+	state, ok := s.runLogStates[key]
+	s.runLogMu.Unlock()
+	if ok && state != nil {
+		return state.runID
+	}
+	return ""
+}
+
+// patchContinuityAfterSuccess writes successful turn state into the continuity store.
+// runID must be captured before completeRunLog (which cleans up runLogStates).
+func (s *Service) patchContinuityAfterSuccess(chatID int64, threadID int, userText string, assistantText string, runID string) {
+	if s.continuity == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cwd := s.effectiveCwd(nil, chatID, threadID)
+	now := time.Now()
+	runStatus := "completed"
+	sessionCold := false
+
+	sessionID := ""
+	if s.sessions != nil {
+		sessionID = s.sessions.Get(chatID, threadID)
+	}
+
+	err := s.continuity.Patch(ctx, continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}, continuity.StatePatch{
+		CWD:                  &cwd,
+		LastUserIntent:       &userText,
+		LastAssistantSummary: &assistantText,
+		LastRunID:            &runID,
+		LastRunStatus:        &runStatus,
+		SessionID:            &sessionID,
+		SessionCold:          &sessionCold,
+		UpdatedAt:            now,
+	})
+	if err != nil {
+		log.Printf("continuity: failed to patch after success chat=%d thread=%d: %v", chatID, threadID, err)
+	}
+}
+
+// patchContinuityFailure writes failure/timeout/error state into the continuity store.
+// Must be called BEFORE completeRunLog, since that cleans up the run log state.
+func (s *Service) patchContinuityFailure(chatID int64, threadID int, status string, errMsg string) {
+	if s.continuity == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	sessionCold := true
+
+	// Capture latest checkpoint and tools from the runLogState
+	checkpoint := ""
+	tools := ""
+	runID := ""
+	key := runLogKey(chatID, threadID)
+	s.runLogMu.Lock()
+	state, ok := s.runLogStates[key]
+	if ok && state != nil {
+		runID = state.runID
+		state.mu.Lock()
+		tools = state.summary.String()
+		state.mu.Unlock()
+	}
+	s.runLogMu.Unlock()
+
+	if tools != "" {
+		tools = redactSecrets(tools)
+	}
+
+	// Build checkpoint from available info
+	cp := buildCheckpoint(runlog.RunStatus(status), "", tools, errMsg)
+	checkpoint = redactSecrets(cp)
+
+	cwd := s.effectiveCwd(nil, chatID, threadID)
+
+	sid := ""
+	if s.sessions != nil {
+		sid = s.sessions.Get(chatID, threadID)
+	}
+
+	err := s.continuity.Patch(ctx, continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}, continuity.StatePatch{
+		CWD:             &cwd,
+		LastRunID:       &runID,
+		LastRunStatus:   &status,
+		LastCheckpoint:  &checkpoint,
+		LastTools:       &tools,
+		SessionID:       &sid,
+		SessionCold:     &sessionCold,
+		ResetReason:     &errMsg,
+		UpdatedAt:       now,
+	})
+	if err != nil {
+		log.Printf("continuity: failed to patch failure chat=%d thread=%d: %v", chatID, threadID, err)
+	}
+}
+
+// patchContinuitySessionCold marks the session as cold with a reset reason.
+func (s *Service) patchContinuitySessionCold(chatID int64, threadID int, reason string) {
+	if s.continuity == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cold := true
+	err := s.continuity.Patch(ctx, continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}, continuity.StatePatch{
+		SessionCold: &cold,
+		ResetReason: &reason,
+		UpdatedAt:   time.Now(),
+	})
+	if err != nil {
+		log.Printf("continuity: failed to patch session cold chat=%d thread=%d: %v", chatID, threadID, err)
+	}
+}
+
+// patchContinuitySessionID updates the session ID in continuity state.
+func (s *Service) patchContinuitySessionID(chatID int64, threadID int, sessionID string) {
+	if s.continuity == nil || sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := s.continuity.Patch(ctx, continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}, continuity.StatePatch{
+		SessionID: &sessionID,
+		UpdatedAt: time.Now(),
+	})
+	if err != nil {
+		log.Printf("continuity: failed to patch session ID chat=%d thread=%d: %v", chatID, threadID, err)
+	}
 }
 
 func (s *Service) handleErrorEvent(chatID int64, threadID int, messageID int, ev bridge.Event) Outcome {
@@ -674,6 +843,7 @@ func (s *Service) handleErrorEvent(chatID int64, threadID int, messageID int, ev
 	}
 	redacted := redactSecrets(errMsg)
 	log.Printf("Bridge error: %s", redacted)
+	s.patchContinuityFailure(chatID, threadID, "failed", redacted)
 	s.completeRunLog(chatID, threadID, runlog.RunFailed, "", redacted)
 	if err := s.output.SendError(chatID, threadID, redacted); err != nil {
 		log.Printf("Failed to send error to chat %d: %v", chatID, err)

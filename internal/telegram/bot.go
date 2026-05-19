@@ -15,6 +15,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/config"
 	"github.com/igormaneschy/aurelia/internal/cron"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/persona"
 	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
@@ -60,6 +61,7 @@ type BotController struct {
 	allowedGroups      map[int64]struct{}
 	projectIndex       *runtime.ProjectIndex
 	bindings           projectbinding.Store
+	continuity         continuity.Store
 	runLog             runlog.Store
 	pipeline           *pipelinepkg.Service
 }
@@ -153,19 +155,20 @@ func NewBotController(
 		bindings:         bindings,
 	}
 	bc.pipeline = pipelinepkg.NewService(pipelinepkg.Config{
-		AppConfig: bc.config,
-		Bridge:    bc.bridge,
-		Agents:    bc.agents,
-		Persona:   bc.persona,
-		Sessions:  bc.sessions,
-		Tracker:   bc.tracker,
-		Resolver:  bc.resolver,
-		MemoryDir: bc.memoryDir,
-		ExePath:   bc.exePath,
-		BotCwd:    bc.botCwd,
-		Output:    telegramPipelineOutput{bc: bc},
-		Bindings:  bc.bindings,
-		RunLog:    bc.runLog,
+		AppConfig:  bc.config,
+		Bridge:     bc.bridge,
+		Agents:     bc.agents,
+		Persona:    bc.persona,
+		Sessions:   bc.sessions,
+		Tracker:    bc.tracker,
+		Resolver:   bc.resolver,
+		MemoryDir:  bc.memoryDir,
+		ExePath:    bc.exePath,
+		BotCwd:     bc.botCwd,
+		Output:     telegramPipelineOutput{bc: bc},
+		Bindings:   bc.bindings,
+		RunLog:     bc.runLog,
+		Continuity: bc.continuity,
 	})
 	// nudgeBuffer is owned by the pipeline service; bot accesses via this alias
 	// so command handlers can flush it on reset/cancel.
@@ -194,6 +197,12 @@ func (bc *BotController) SetProviderEnvRefresher(f func()) {
 func (bc *BotController) SetRunLog(rl runlog.Store) {
 	bc.runLog = rl
 	bc.ensurePipeline().SetRunLog(rl)
+}
+
+// SetContinuity injects the continuity store after construction.
+func (bc *BotController) SetContinuity(cs continuity.Store) {
+	bc.continuity = cs
+	bc.ensurePipeline().SetContinuity(cs)
 }
 
 // SetProjectIndex injects a cached project name index for fast lookup.

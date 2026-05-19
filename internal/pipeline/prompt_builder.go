@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runlog"
@@ -80,6 +81,14 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent)
 	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
+
+	// Conversation Continuity — durable recovery context for this chat/thread.
+	// Injected before memory so it is never evicted by large memory budgets.
+	// Placed before the last-run-state checkpoint section and memory sections,
+	// immediately after Telegram/cwd instructions (per spec priority order).
+	if continuitySection := bc.buildContinuitySection(chatID, threadID, userText); continuitySection != "" {
+		sections = append(sections, continuitySection)
+	}
 
 	// Last known run state — injects checkpoint when the previous run failed,
 	// the session is cold, or the user text looks like a continuation.
@@ -559,6 +568,9 @@ func (bc *Service) buildLastRunStateSection(chatID int64, threadID int, userText
 
 func (bc *Service) formatCheckpointSection(record *runlog.RunRecord) string {
 	checkpoint := redactSecrets(record.Checkpoint)
+	// Escape delimiter-sensitive characters to prevent injection of
+	// closing </checkpoint_untrusted> tags from user/assistant content.
+	checkpoint = continuity.EscapeUntrusted(checkpoint)
 
 	var sb strings.Builder
 	sb.WriteString("\n\n## Last Known Run State\n\n")
@@ -569,6 +581,34 @@ func (bc *Service) formatCheckpointSection(record *runlog.RunRecord) string {
 	}
 	sb.WriteString("</checkpoint_untrusted>")
 	return sb.String()
+}
+
+// buildContinuitySection returns the prompt block for durable conversation
+// recovery context. Returns empty when no recent state exists in the store.
+// The block is redacted and wrapped in untrusted delimiters.
+func (bc *Service) buildContinuitySection(chatID int64, threadID int, userText string) string {
+	if bc.continuity == nil {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	state, err := bc.continuity.Get(ctx, chatID, threadID)
+	if err != nil {
+		log.Printf("continuity: failed to get state chat=%d thread=%d: %v", chatID, threadID, err)
+		return ""
+	}
+	if state == nil {
+		return ""
+	}
+
+	// Always include if state exists and is recent, or if user text looks like continuation
+	if !continuity.IsRecent(state) && !isContinuation(userText) {
+		return ""
+	}
+
+	return continuity.FormatContinuitySection(state, RedactSecrets)
 }
 
 // accentReplacerForContinuation strips common Portuguese diacritics for

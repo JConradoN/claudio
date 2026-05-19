@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.16] - 2026-05-19
+
+### Adicionado
+- Continuity Engine v1 com estado persistente por chat/thread para preservar contexto mínimo entre rodadas.
+- Novo store SQLite `conversation_state` para cwd, objetivo ativo, último intent, resumo, checkpoint, status de run e estado de sessão.
+- Injeção de `Conversation Continuity` no prompt antes de memórias longas.
+- Cobertura de lifecycle para sucesso, timeout, empty result, erro, process death, retry failure, auto-reset e bridge death.
+
+### Segurança
+- Dados de continuidade são redigidos e limitados antes da persistência.
+- Blocos de continuidade/checkpoint escapam delimitadores para reduzir prompt injection persistente.
+
+### Testes
+- Adicionados testes de store, formatação, lifecycle e ordenação do prompt para continuidade.
+
 ## [0.7.15] - 2026-05-19
 
 ### Corrigido
