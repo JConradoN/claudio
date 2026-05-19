@@ -4,9 +4,10 @@ import "github.com/igormaneschy/aurelia/internal/agents"
 
 // DefaultWorkerConfig is the built-in worker that works without any .md file.
 var DefaultWorkerConfig = WorkerConfig{
-	Model:    "sonnet",
-	MaxTurns: 25,
-	Tools:    []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+	Model:             "sonnet",
+	MaxTurns:          25,
+	Tools:             []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+	CapabilityProfile: "execute_safe",
 	Prompt: `You are an implementation worker in a software development squad.
 
 You receive atomic tasks from the orchestrator and execute them thoroughly.
@@ -43,9 +44,10 @@ func ResolveAgentConfig(registry *agents.Registry, agentName string) WorkerConfi
 // agentToWorkerConfig converts an Agent definition to a WorkerConfig.
 func agentToWorkerConfig(a *agents.Agent) WorkerConfig {
 	cfg := WorkerConfig{
-		Model:    a.Model,
-		MaxTurns: a.MaxTurns,
-		Prompt:   a.Prompt,
+		Model:             a.Model,
+		MaxTurns:          a.MaxTurns,
+		Prompt:            a.Prompt,
+		CapabilityProfile: a.CapabilityProfile,
 	}
 	if len(a.AllowedTools) > 0 {
 		cfg.Tools = a.AllowedTools
@@ -78,6 +80,9 @@ func mergeWorkerConfig(base WorkerConfig, override *agents.Agent) WorkerConfig {
 		base.Tools = override.AllowedTools
 	}
 	base.DisallowedTools = override.DisallowedTools
+	if override.CapabilityProfile != "" {
+		base.CapabilityProfile = override.CapabilityProfile
+	}
 	if override.Prompt != "" {
 		base.Prompt = override.Prompt
 	}

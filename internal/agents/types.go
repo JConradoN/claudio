@@ -2,21 +2,34 @@ package agents
 
 // Agent represents a loaded agent definition from a markdown file.
 type Agent struct {
-	Name         string         `yaml:"name"`
-	Description  string         `yaml:"description"`
-	Model        string         `yaml:"model,omitempty"`
-	Schedule     string         `yaml:"schedule,omitempty"`
-	Cwd          string         `yaml:"cwd,omitempty"`
-	MCPServers   map[string]any `yaml:"mcp_servers,omitempty"`
-	AllowedTools    []string       `yaml:"allowed_tools,omitempty"`
-	DisallowedTools []string       `yaml:"disallowed_tools,omitempty"`
-	MaxTurns        int            `yaml:"max_turns,omitempty"`
-	Prompt          string         `yaml:"-"` // body after frontmatter
+	Name              string         `yaml:"name"`
+	Description       string         `yaml:"description"`
+	Model             string         `yaml:"model,omitempty"`
+	Schedule          string         `yaml:"schedule,omitempty"`
+	Cwd               string         `yaml:"cwd,omitempty"`
+	MCPServers        map[string]any `yaml:"mcp_servers,omitempty"`
+	CapabilityProfile string         `yaml:"capability_profile,omitempty"`
+	AllowedTools        []string       `yaml:"allowed_tools,omitempty"`
+	DisallowedTools     []string       `yaml:"disallowed_tools,omitempty"`
+	MaxTurns            int            `yaml:"max_turns,omitempty"`
+	Prompt              string         `yaml:"-"` // body after frontmatter
 }
 
 // IsReadOnly reports whether the agent has no write-capable tools.
-// It considers both AllowedTools and DisallowedTools.
+// It considers CapabilityProfile first, then AllowedTools and DisallowedTools.
 func (a *Agent) IsReadOnly() bool {
+	// If CapabilityProfile is set, use it as the source of truth.
+	if a.CapabilityProfile != "" {
+		switch a.CapabilityProfile {
+		case "observe", "read_only":
+			return true
+		case "edit_project", "execute_safe", "privileged":
+			return false
+		default:
+			// Unknown profile — fall through to tool-based detection.
+		}
+	}
+
 	// Determine the effective set of tools.
 	var effective []string
 	if len(a.AllowedTools) > 0 {

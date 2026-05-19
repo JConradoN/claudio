@@ -21,6 +21,12 @@ var knownToolNames = map[string]bool{
 	"WebSearch": true, "WebSearchPremium": true, "WebFetch": true,
 }
 
+// knownProfiles holds the set of valid CapabilityProfile values.
+var knownProfiles = map[string]bool{
+	"observe": true, "read_only": true, "edit_project": true,
+	"execute_safe": true, "privileged": true,
+}
+
 // ClassifyFunc sends a text prompt and returns the LLM response.
 // Defined in agents package to avoid importing bridge.
 type ClassifyFunc func(ctx context.Context, systemPrompt, userPrompt string) (string, error)
@@ -183,6 +189,13 @@ func parseAgentFile(data []byte) (*Agent, error) {
 	}
 
 	if agent.Name == "" {
+		return nil, nil
+	}
+
+	// Validate capability profile if set.
+	if agent.CapabilityProfile != "" && !knownProfiles[agent.CapabilityProfile] {
+		slog.Warn("agent has unknown capability_profile, skipping agent",
+			"agent", agent.Name, "profile", agent.CapabilityProfile)
 		return nil, nil
 	}
 

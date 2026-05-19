@@ -34,4 +34,22 @@ type RequestOptions struct {
 	NoUserSettings bool              `json:"no_user_settings,omitempty"`
 	PersistSession *bool             `json:"persist_session,omitempty"`
 	Images         []ImageAttachment `json:"images,omitempty"`
+	Security       *SecurityContext  `json:"security,omitempty"`
+}
+
+// SecurityContext carries capability profile and policy configuration to the
+// Bridge so the PI tool_call hook can evaluate and govern individual tool
+// calls before they execute.
+type SecurityContext struct {
+	Enabled           bool     `json:"enabled"`
+	Profile           string   `json:"profile"`
+	Mode              string   `json:"mode"`
+	Cwd               string   `json:"cwd"`
+	SensitivePaths    []string `json:"sensitive_paths,omitempty"`
+	AllowedOutsideCWD []string `json:"allowed_outside_cwd,omitempty"`
+	ChatID            int64    `json:"chat_id,omitempty"`
+	ThreadID          int      `json:"thread_id,omitempty"`
+	UserID            int64    `json:"user_id,omitempty"`
+	AgentName         string   `json:"agent_name,omitempty"`
+	RequestID         string   `json:"request_id,omitempty"`
 }

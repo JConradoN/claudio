@@ -15,3 +15,13 @@
 ## Change pi-sdk-cli-independence (2026-05-17)
 - [pattern] error-handling-slog
 - [pattern] early-return-placement
+
+## Change code-review-remediation (2026-05-20)
+- [pattern] goroutine-recovery-mandatory
+- [pattern] redaction-before-truncation
+- [anti-pattern] filepath-base-traversal
+- [process] post-impl-review-gaps
+
+## Change 3-sprint-remediation (2026-05-19)
+- [pattern] scanner-over-readbytes
+- [pattern] panic-cleanup-stale-pointers

@@ -12,6 +12,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/security"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
 
@@ -170,4 +171,13 @@ func (s *Service) SetContinuity(cs continuity.Store) {
 // NudgeBuffer returns the per-service nudge buffer for command-triggered flushes.
 func (s *Service) NudgeBuffer() *session.NudgeBuffer {
 	return s.nudgeBuffer
+}
+
+// getSecurityConfig returns the security configuration from AppConfig,
+// falling back to safe defaults if not configured.
+func (s *Service) getSecurityConfig() security.SecurityConfig {
+	if s.config != nil {
+		return s.config.SecurityConfig
+	}
+	return security.DefaultConfig()
 }

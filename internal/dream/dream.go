@@ -15,6 +15,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/memoryux"
 	"github.com/igormaneschy/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/security"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
 
@@ -164,14 +165,20 @@ func (d *Dreamer) run() {
 		Command: "query",
 		Prompt:  consolidationPrompt,
 		Options: bridge.RequestOptions{
-			Provider:        d.config.Provider,
-			Model:           d.config.Model,
-			SystemPrompt:    systemConsolidationPrompt,
-			Cwd:             d.memoryDir,
-			AllowedTools:    []string{},
-			DisallowedTools: []string{"Read", "Glob", "Grep", "Write", "Edit", "Bash", "LS", "WebSearch", "WebFetch"},
-			NoUserSettings:  true,
-			PersistSession:  boolPtr(false),
+			Provider:       d.config.Provider,
+			Model:          d.config.Model,
+			SystemPrompt:   systemConsolidationPrompt,
+			Cwd:            d.memoryDir,
+			AllowedTools:   []string{},
+			NoUserSettings: true,
+			PersistSession: boolPtr(false),
+			Security: &bridge.SecurityContext{
+				Enabled:   true,
+				Profile:   string(security.ProfileEditProject),
+				Mode:      string(security.PolicyBlock),
+				Cwd:       d.memoryDir,
+				AgentName: "dream",
+			},
 		},
 	}
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/igormaneschy/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/security"
 )
 
 // NormalizeProvider returns a canonical lowercase provider name.
@@ -95,6 +96,9 @@ type AppConfig struct {
 	// and the projectIndex already covers the common cases. Opt-in for users
 	// who really want fuzzy disk discovery.
 	DiskScanEnabled bool `json:"disk_scan_enabled,omitempty"`
+
+	// SecurityConfig governs capability profiles, tool policies, and audit mode.
+	SecurityConfig security.SecurityConfig `json:"security,omitempty"`
 }
 
 // VisionFallback returns the configured vision model and provider for image inputs.
@@ -163,7 +167,8 @@ type fileConfig struct {
 	VisionProvider  string `json:"vision_provider,omitempty"`
 	LogLevel        string `json:"log_level,omitempty"`
 	LogFormat       string `json:"log_format,omitempty"`
-	DiskScanEnabled bool   `json:"disk_scan_enabled,omitempty"`
+	DiskScanEnabled bool                     `json:"disk_scan_enabled,omitempty"`
+	SecurityConfig  security.SecurityConfig `json:"security,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -227,11 +232,16 @@ func defaultFileConfig(r *runtime.PathResolver) fileConfig {
 		SessionTTLHours:         defaultSessionTTLHours,
 		DBPath:                  filepath.Join(r.Data(), "aurelia.db"),
 		MCPConfigPath:           filepath.Join(r.Config(), "mcp_servers.json"),
+		SecurityConfig:          security.DefaultConfig(),
 	}
 }
 
 func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver) fileConfig {
 	defaults := defaultFileConfig(r)
+	// Copy security config defaults if not set
+	if cfg.SecurityConfig.Mode == "" {
+		cfg.SecurityConfig = defaults.SecurityConfig
+	}
 	if cfg.TelegramAllowedUserIDs == nil {
 		cfg.TelegramAllowedUserIDs = defaults.TelegramAllowedUserIDs
 	}
@@ -313,5 +323,6 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		LogLevel:                cfg.LogLevel,
 		LogFormat:               cfg.LogFormat,
 		DiskScanEnabled:         cfg.DiskScanEnabled,
+		SecurityConfig:          cfg.SecurityConfig,
 	}
 }

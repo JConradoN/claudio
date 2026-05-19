@@ -16,6 +16,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/runlog"
+	"github.com/igormaneschy/aurelia/internal/security"
 )
 
 // runLogState tracks per-run state for the run journal.
@@ -316,7 +317,73 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 			chatID, threadID, s.bindings != nil, sessionCwd, cwd, s.botCwd)
 	}
 
+	// ── Resolve and attach security context ──
+	cwd = req.Options.Cwd
+	profile := security.DefaultProfileForContext(cwd != "", agent != nil && agent.CapabilityProfile == "", needsWriteTools(agent))
+
+	// Allow agent-level capability_profile override
+	if agent != nil && agent.CapabilityProfile != "" {
+		profile = security.CapabilityProfile(agent.CapabilityProfile)
+	}
+
+	// Intersect agent allowed_tools with profile limits
+	effectiveProfile, effectiveTools := security.ResolveProfile(
+		profile,
+		req.Options.AllowedTools,
+		req.Options.DisallowedTools,
+		cwd != "",
+	)
+
+	// Replace allowed_tools with profile-limited set
+	req.Options.AllowedTools = effectiveTools
+
+	// Attach security context
+	secCfg := s.getSecurityConfig()
+	agentName := ""
+	if agent != nil {
+		agentName = agent.Name
+	}
+	req.Options.Security = &bridge.SecurityContext{
+		Enabled: true,
+		Profile: string(effectiveProfile),
+		Mode:    string(secCfg.Mode),
+		Cwd:     cwd,
+		ChatID:  int64(chatID),
+		ThreadID: threadID,
+		AgentName: agentName,
+		RequestID: req.RequestID,
+	}
+
+	// If profile is privileged, check allow_privileged config
+	if effectiveProfile == security.ProfilePrivileged && !secCfg.AllowPrivilegedAgents {
+		// Downgrade to execute_safe
+		req.Options.Security.Profile = string(security.ProfileExecuteSafe)
+		req.Options.AllowedTools = security.ProfileTools(security.ProfileExecuteSafe)
+	}
+
 	return req
+}
+
+// needsWriteTools returns true if the agent requires write-capable tools.
+func needsWriteTools(agent *agents.Agent) bool {
+	if agent == nil {
+		return true // default to write-capable
+	}
+	// If agent has explicit allowed_tools, check if it includes write tools
+	for _, t := range agent.AllowedTools {
+		if t == "Write" || t == "Edit" || t == "Bash" {
+			return true
+		}
+	}
+	// If agent has a capability profile, check if it's write-capable
+	switch agent.CapabilityProfile {
+	case "edit_project", "execute_safe", "privileged":
+		return true
+	case "observe", "read_only":
+		return false
+	}
+	// Default: check IsReadOnly
+	return !agent.IsReadOnly()
 }
 
 var chatModeDisallowedTools = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "LS", "List"}

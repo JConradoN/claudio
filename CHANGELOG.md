@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-05-20
+
+### Segurança
+- Implementado Security Guard-Rails completo com CapabilityProfile governance (5 níveis: observe, read_only, edit_project, execute_safe, privileged).
+- Policy engine com EvaluateToolCall: detecção de comandos destrutivos, exfiltração e paths sensíveis (.env, ~/.ssh, etc).
+- Bridge hook `pi.on('tool_call')` com fail-closed — bloqueia tools antes da execução.
+- Audit trail em JSON lines (stderr) para todas as chamadas governadas.
+- Duas fases: Warn (log only) e Block (padrão, bloqueia tudo) — configurável via `Security.Mode`.
+- Integração com pipeline, config, dream, orchestrator e agents.
+- 44 testes unitários no pacote `internal/security/`.
+
 ## [0.7.20] - 2026-05-20
 
 ### Segurança

@@ -15,6 +15,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runlog"
+	"github.com/igormaneschy/aurelia/internal/security"
 )
 
 const (
@@ -81,6 +82,14 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent, userID)
 	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
+
+	// Security Boundaries — capability profile and rules for tool usage.
+	// Injected before continuity so the model sees its restrictions early.
+	// Skipped for observe profile (no tools at all).
+	securitySection := bc.buildSecurityPromptSection(chatID, threadID, agent)
+	if securitySection != "" {
+		sections = append(sections, securitySection)
+	}
 
 	// Conversation Continuity — durable recovery context for this chat/thread.
 	// Injected before memory so it is never evicted by large memory budgets.
@@ -652,6 +661,37 @@ func (bc *Service) formatCheckpointSection(record *runlog.RunRecord) string {
 // buildContinuitySection returns the prompt block for durable conversation
 // recovery context. Returns empty when no recent state exists in the store.
 // The block is redacted and wrapped in untrusted delimiters.
+func (bc *Service) buildSecurityPromptSection(chatID int64, threadID int, agent *agents.Agent) string {
+	cwd := bc.effectiveCwd(agent, chatID, threadID)
+
+	// Resolve the effective profile for this context
+	profile := security.DefaultProfileForContext(cwd != "", agent != nil && agent.CapabilityProfile == "", needsWriteTools(agent))
+	if agent != nil && agent.CapabilityProfile != "" {
+		profile = security.CapabilityProfile(agent.CapabilityProfile)
+	}
+
+	// Observe profile gets no tools, no prompt section (tools already empty)
+	if profile == security.ProfileObserve {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Security Boundaries\n\n")
+	sb.WriteString("You operate under a security policy. These rules are enforced by the PI tool_call hook:\n\n")
+	sb.WriteString("1. Stay within the working directory — do not read or write outside it.\n")
+	sb.WriteString("2. Do NOT attempt to read sensitive files (.env, secrets, keys, config).\n")
+	sb.WriteString("3. Do NOT run destructive commands (rm -rf, sudo, chmod -R).\n")
+	sb.WriteString("4. Do NOT exfiltrate data via curl/wget/nc.\n")
+	sb.WriteString("5. Do NOT access environment variables or credentials via env/printenv/echo $VAR.\n")
+	sb.WriteString("6. For ambiguous or risky operations, ask the user for confirmation.\n\n")
+	fmt.Fprintf(&sb, "Your current capability profile: **%s**\n", string(profile))
+	if cwd != "" {
+		fmt.Fprintf(&sb, "Working directory: `%s`\n", cwd)
+	}
+
+	return sb.String()
+}
+
 func (bc *Service) buildContinuitySection(chatID int64, threadID int, userText string) string {
 	if bc.continuity == nil {
 		return ""
