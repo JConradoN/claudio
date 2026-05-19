@@ -18,7 +18,8 @@ func (bc *BotController) processInput(c telebot.Context, text string) error {
 }
 
 func (bc *BotController) processInputWithImages(c telebot.Context, text string, images []bridge.ImageAttachment) error {
-	if state, ok := bc.popPendingBootstrap(c.Sender().ID); ok {
+	senderID := safeSenderID(c.Sender())
+	if state, ok := bc.popPendingBootstrap(senderID); ok {
 		defer bc.confirmMessage(c.Message())
 		switch state.Step {
 		case bootstrapStepAssistant:
@@ -32,15 +33,15 @@ func (bc *BotController) processInputWithImages(c telebot.Context, text string, 
 		return bc.handleCommand(c, cmd)
 	}
 
-	return bc.runPipeline(c.Chat().ID, c.Message().ThreadID, c.Message().ID, text, images)
+	return bc.runPipeline(c.Chat().ID, c.Message().ThreadID, c.Message().ID, text, images, senderID)
 }
 
-func (bc *BotController) runPipeline(chatID int64, threadID int, messageID int, text string, images []bridge.ImageAttachment) error {
-	return bc.ensurePipeline().Process(chatID, threadID, messageID, text, images)
+func (bc *BotController) runPipeline(chatID int64, threadID int, messageID int, text string, images []bridge.ImageAttachment, userID int64) error {
+	return bc.ensurePipeline().Process(chatID, threadID, messageID, text, images, userID)
 }
 
-func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int) (string, error) {
-	return bc.ensurePipeline().BuildSystemPrompt(userText, agent, chatID, messageID, threadID)
+func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int, userID int64) (string, error) {
+	return bc.ensurePipeline().BuildSystemPrompt(userText, agent, chatID, messageID, threadID, userID)
 }
 
 func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan bridge.Event, progress *progressReporter, userText string, messageID int) bridgeOutcome {

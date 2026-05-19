@@ -389,7 +389,7 @@ func (bc *BotController) flushAlbumAndProcess(albumID string) {
 	if partialMsg != "" {
 		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, partialMsg, fa.threadID)
 	}
-	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images); err != nil {
+	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images, fa.senderID); err != nil {
 		log.Printf("album: pipeline error for %s: %v", albumID, err)
 	}
 }

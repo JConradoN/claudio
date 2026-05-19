@@ -51,5 +51,6 @@ type Store interface {
 	Set(ctx context.Context, binding ProjectBinding) error
 	Delete(ctx context.Context, key ConversationKey) error
 	Touch(ctx context.Context, key ConversationKey) error
+	ListByUser(ctx context.Context, userID int64, limit int) ([]ProjectBinding, error)
 	Close() error
 }

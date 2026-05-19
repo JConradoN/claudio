@@ -26,13 +26,13 @@ const (
 )
 
 // BuildSystemPrompt assembles all system prompt sections for a request.
-func (bc *Service) BuildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int) (string, error) {
-	return bc.buildSystemPrompt(userText, agent, chatID, messageID, threadID)
+func (bc *Service) BuildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int, userID int64) (string, error) {
+	return bc.buildSystemPrompt(userText, agent, chatID, messageID, threadID, userID)
 }
 
-func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int) (string, error) {
+func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int, userID int64) (string, error) {
 	var sections []string
-	var personaLen, agentLen, cronLen, telegramLen int
+	var identityLen, personaLen, agentLen, orchLen, cronLen, telegramLen, continuityLen, lastRunLen, longTaskLen, projectDocsLen int
 
 	// Runtime identity — tells the model what provider and model it is running on
 	provider := bc.config.DefaultProvider
@@ -41,6 +41,7 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 		model = agent.Model
 	}
 	identitySection := fmt.Sprintf("# Runtime Identity\n\nYou are running via the Aurelia bridge over the PI SDK.\nProvider: %s\nModel: %s\nAlways answer accurately when asked what model you are.", provider, model)
+	identityLen = len(identitySection)
 	sections = append(sections, identitySection)
 
 	// Persona prompt
@@ -64,7 +65,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// Orchestrator TLC methodology — only when user signals planning intent
 	// AND a working directory is set (planning without a project to act on
 	// just bloats the prompt with ~3-5k tokens of unused methodology).
-	var orchLen int
 	if bc.orchestrator != nil && looksLikePlanningIntent(userText) && bc.effectiveCwd(agent, chatID, threadID) != "" {
 		agentSummaries := bc.buildAgentSummaries()
 		orchSection := orchestrator.BuildOrchestratorPrompt("", agentSummaries)
@@ -87,6 +87,7 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// Placed before the last-run-state checkpoint section and memory sections,
 	// immediately after Telegram/cwd instructions (per spec priority order).
 	if continuitySection := bc.buildContinuitySection(chatID, threadID, userText); continuitySection != "" {
+		continuityLen = len(continuitySection)
 		sections = append(sections, continuitySection)
 	}
 
@@ -94,6 +95,7 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// the session is cold, or the user text looks like a continuation.
 	// Placed before memory so the model sees it as contextual guidance.
 	if lastRunSection := bc.buildLastRunStateSection(chatID, threadID, userText); lastRunSection != "" {
+		lastRunLen = len(lastRunSection)
 		sections = append(sections, lastRunSection)
 	}
 
@@ -104,17 +106,28 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 
 	// Long-task guidance — prompt the model to checkpoint when the task looks complex
 	if looksLikeLongTask(userText, bc.effectiveCwd(agent, chatID, threadID) != "") {
+		longTaskLen = len("# Long Task Guidance\n\n" + longTaskGuidance())
 		sections = append(sections, "# Long Task Guidance\n\n"+longTaskGuidance())
 	}
 
 	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
 	if projectSection := bc.buildProjectDocsSection(chatID, agent, threadID); projectSection != "" {
+		projectDocsLen = len(projectSection)
 		sections = append(sections, projectSection)
 	}
 
+	// Codebase-read guidance — when user asks to read/analyze code but no cwd is set,
+	// inject a specific instruction so the model responds with clear /cwd guidance
+	// instead of attempting file operations or giving a vague answer.
+	// When the user has known project bindings from other chats, list them as suggestions.
+	if looksLikeCodebaseRead(userText) && bc.effectiveCwd(agent, chatID, threadID) == "" {
+		knownPaths := bc.listKnownProjectPaths(userID)
+		sections = append(sections, codebaseReadChatModeGuidanceForKnownProjects(knownPaths))
+	}
+
 	result := strings.Join(sections, "\n\n")
-	log.Printf("system prompt breakdown: persona=%d agent=%d orch=%d cron=%d telegram=%d memory=%d total=%d chars",
-		personaLen, agentLen, orchLen, cronLen, telegramLen, len(memorySection), len(result))
+	log.Printf("system prompt breakdown: identity=%d persona=%d agent=%d orch=%d cron=%d telegram=%d continuity=%d last_run=%d memory=%d long_task=%d project_docs=%d total=%d chars",
+		identityLen, personaLen, agentLen, orchLen, cronLen, telegramLen, continuityLen, lastRunLen, len(memorySection), longTaskLen, projectDocsLen, len(result))
 
 	return result, nil
 }
@@ -139,6 +152,32 @@ func (bc *Service) effectiveCwd(agent *agents.Agent, chatID int64, threadID int)
 		return ""
 	}
 	return bc.sessions.GetCwd(chatID, threadID)
+}
+
+// listKnownProjectPaths returns up to 5 unique CWD paths from the user's
+// previous project bindings in other chats. Returns nil when userID is 0
+// (unidentifiable sender) or when the binding store is unavailable.
+func (bc *Service) listKnownProjectPaths(userID int64) []string {
+	if userID <= 0 || bc.bindings == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	bindings, err := bc.bindings.ListByUser(ctx, userID, 5)
+	if err != nil {
+		log.Printf("cwd: listKnownProjectPaths user=%d: %v", userID, err)
+		return nil
+	}
+	if len(bindings) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(bindings))
+	for _, b := range bindings {
+		paths = append(paths, b.CWD)
+	}
+	return paths
 }
 
 // buildTelegramInstructions returns instructions for interacting with the Telegram chat.

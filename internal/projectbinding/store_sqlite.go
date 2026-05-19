@@ -49,6 +49,8 @@ func (s *SQLiteStore) initialize() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_project_binding_slug
 	ON conversation_project_binding(project_slug);
+	CREATE INDEX IF NOT EXISTS idx_project_binding_created_by
+	ON conversation_project_binding(created_by);
 	`
 	if _, err := s.db.Exec(query); err != nil {
 		return fmt.Errorf("initialize project binding schema: %w", err)
@@ -132,6 +134,44 @@ func (s *SQLiteStore) Touch(ctx context.Context, key ConversationKey) error {
 		return fmt.Errorf("touch project binding %s: %w", key, err)
 	}
 	return nil
+}
+
+// ListByUser returns the most recent unique project bindings created by userID,
+// ordered by last_used_at DESC. Duplicate CWD paths are deduplicated — the most
+// recently used entry for each path wins. Limit caps the returned slice.
+func (s *SQLiteStore) ListByUser(ctx context.Context, userID int64, limit int) ([]ProjectBinding, error) {
+	// Fetch a generous buffer to allow for deduplication
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT chat_id, thread_id, cwd, project_slug, source, created_by, created_at, updated_at, last_used_at
+		FROM conversation_project_binding
+		WHERE created_by = ?
+		ORDER BY last_used_at DESC
+		LIMIT ?`, userID, max(limit*4, 50))
+	if err != nil {
+		return nil, fmt.Errorf("list project bindings by user %d: %w", userID, err)
+	}
+	defer rows.Close()
+
+	var result []ProjectBinding
+	seen := make(map[string]struct{}, limit)
+	for rows.Next() {
+		b, err := scanBinding(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list project bindings by user %d: scan: %w", userID, err)
+		}
+		if _, ok := seen[b.CWD]; ok {
+			continue
+		}
+		seen[b.CWD] = struct{}{}
+		result = append(result, *b)
+		if len(result) >= limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list project bindings by user %d: rows: %w", userID, err)
+	}
+	return result, nil
 }
 
 func (s *SQLiteStore) Close() error {

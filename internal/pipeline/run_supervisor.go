@@ -14,6 +14,7 @@ type pipelineInput struct {
 	chatID    int64
 	threadID  int
 	messageID int
+	userID    int64
 	text      string
 	images    []bridge.ImageAttachment
 }

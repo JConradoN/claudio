@@ -198,6 +198,24 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		if groupCwd == "" && agentCwd == "" {
 			b.WriteString("💡 Set a group-wide binding with: `/cwd --group /caminho/do/projeto`\n")
 			b.WriteString("   Set a topic-specific binding with: `/cwd /caminho/do/projeto`\n")
+
+			// Show known project bindings from other chats when available
+			if userID := safeSenderID(c.Sender()); userID > 0 && bc.bindings != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				known, err := bc.bindings.ListByUser(ctx, userID, 5)
+				if err == nil && len(known) > 0 {
+					b.WriteString("\n📁 Projetos conhecidos de outros chats:\n")
+					seen := make(map[string]struct{}, len(known))
+					for _, kb := range known {
+						if _, dup := seen[kb.CWD]; dup {
+							continue
+						}
+						seen[kb.CWD] = struct{}{}
+						fmt.Fprintf(&b, "   `/cwd %s`\n", kb.CWD)
+					}
+				}
+			}
 		}
 
 		return SendTextWithThread(bc.bot, c.Chat(), b.String(), threadID)

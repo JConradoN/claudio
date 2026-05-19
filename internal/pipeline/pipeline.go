@@ -77,7 +77,7 @@ func queueAdmittedMessage(active *activeRun) string {
 }
 
 // Process handles a user message after transport-level bootstrap and command checks.
-func (s *Service) Process(chatID int64, threadID int, messageID int, text string, images []bridge.ImageAttachment) error {
+func (s *Service) Process(chatID int64, threadID int, messageID int, text string, images []bridge.ImageAttachment, userID int64) error {
 	if s == nil {
 		return errors.New("pipeline service is nil")
 	}
@@ -85,7 +85,7 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 		return errors.New("pipeline output is nil")
 	}
 
-	input := pipelineInput{chatID: chatID, threadID: threadID, messageID: messageID, text: text, images: images}
+	input := pipelineInput{chatID: chatID, threadID: threadID, messageID: messageID, userID: userID, text: text, images: images}
 	run, admission, active := s.runs.admit(input)
 	switch admission {
 	case admitStart:
@@ -132,7 +132,7 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 	if run.ctx.Err() != nil {
 		return
 	}
-	systemPrompt, err := s.buildSystemPrompt(userText, agent, input.chatID, input.messageID, input.threadID)
+	systemPrompt, err := s.buildSystemPrompt(userText, agent, input.chatID, input.messageID, input.threadID, input.userID)
 	if err != nil {
 		log.Printf("Failed to build system prompt: %s", redactSecrets(err.Error()))
 		_ = s.output.SendError(input.chatID, input.threadID, "Falha ao montar o prompt de sistema.")
@@ -279,11 +279,21 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 		}
 	}
 
-	if cwd := s.effectiveCwd(agent, chatID, threadID); cwd != "" {
+	cwd := s.effectiveCwd(agent, chatID, threadID)
+	if cwd != "" {
 		req.Options.Cwd = cwd
 	} else {
 		req.Options.Cwd = s.botCwd
 		req.Options.DisallowedTools = appendUniqueTools(req.Options.DisallowedTools, chatModeDisallowedTools...)
+
+		// Diagnostic: log why file tools are disabled — helps debug issues where
+		// the model cannot access files despite the user asking to read/analyze code.
+		sessionCwd := ""
+		if s.sessions != nil {
+			sessionCwd = s.sessions.GetCwd(chatID, threadID)
+		}
+		log.Printf("chat mode: file tools disabled for chat=%d thread=%d (bindings=%v session_cwd=%q effective_cwd=%q bot_cwd=%q)",
+			chatID, threadID, s.bindings != nil, sessionCwd, cwd, s.botCwd)
 	}
 
 	return req

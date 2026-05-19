@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.17] - 2026-05-19
+
+### Adicionado
+- `/cwd` agora sugere projetos conhecidos do mesmo usuário quando o chat atual não tem projeto fixado.
+- Pedidos de leitura/análise de codebase sem `cwd` agora recebem orientação explícita para fixar um projeto com `/cwd <path>`.
+- Prompt breakdown agora inclui seções de `identity`, `continuity`, `last_run`, `long_task` e `project_docs`.
+
+### Alterado
+- Pipeline agora carrega `userID` até a montagem do prompt para permitir sugestões seguras de projetos por usuário.
+- Logs em chat mode agora indicam quando ferramentas de arquivo foram desabilitadas por ausência de `cwd`.
+
+### Segurança
+- Sugestões de projetos conhecidos são filtradas por `created_by`, evitando exposição entre usuários.
+
 ## [0.7.16] - 2026-05-19
 
 ### Adicionado

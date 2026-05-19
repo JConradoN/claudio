@@ -569,7 +569,7 @@ func TestBuildSystemPrompt_ContinuityOrdering(t *testing.T) {
 	}
 
 	// Build system prompt — should include continuity, last-run-state, and memory sections
-	prompt, err := svc.buildSystemPrompt("continua", nil, 42, 1, 0)
+	prompt, err := svc.buildSystemPrompt("continua", nil, 42, 1, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,6 +608,78 @@ func TestBuildSystemPrompt_ContinuityOrdering(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_AllSectionsPresent(t *testing.T) {
+	// Set up continuity store with recent state
+	contDir := t.TempDir()
+	contStore, err := continuity.NewSQLiteStore(filepath.Join(contDir, "cont.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err = contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		CWD:                  "/repo",
+		ActiveGoal:           "Test all sections",
+		LastUserIntent:       "leia a code base do aurelia",
+		LastAssistantSummary: "Assistant responded",
+		LastRunStatus:        "completed",
+		UpdatedAt:            time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sessionStore := session.NewStore()
+
+	// Use fakeRunLog to inject a failed run checkpoint
+	svc := &Service{
+		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
+		continuity:  contStore,
+		sessions:    sessionStore,
+		runLog: &fakeRunLog{
+			latest: &runlog.RunRecord{
+				ChatID:     42,
+				ThreadID:   0,
+				Status:     runlog.RunFailed,
+				Checkpoint: "Status: failed\nFerramentas: Read\nErro: timeout",
+			},
+		},
+		memoryDir:   t.TempDir(),
+		memoryCache: newMemoryCache(),
+	}
+
+	prompt, err := svc.buildSystemPrompt("continua", nil, 42, 1, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all expected sections are present (agent is nil so Agent Instructions
+	// is omitted — that is expected).
+	sections := []string{
+		"Runtime Identity",
+		"Conversation Continuity",
+		"Last Known Run State",
+		"Persistent Memory",
+	}
+	for _, s := range sections {
+		if !strings.Contains(prompt, s) {
+			t.Errorf("system prompt missing section: %s", s)
+		}
+	}
+
+	// Verify the continuity and last_run sections have content (not just headers)
+	if contIdx := strings.Index(prompt, "Conversation Continuity"); contIdx >= 0 {
+		remainder := prompt[contIdx:]
+		lastRunIdx := strings.Index(remainder, "Last Known Run State")
+		if lastRunIdx < 0 {
+			t.Error("Last Known Run State should follow Conversation Continuity")
+		}
+	}
+}
+
 func TestBuildSystemPrompt_NoContinuityWhenNilStore(t *testing.T) {
 	svc := &Service{
 		config:      &config.AppConfig{DefaultProvider: "test", DefaultModel: "test"},
@@ -617,7 +689,7 @@ func TestBuildSystemPrompt_NoContinuityWhenNilStore(t *testing.T) {
 		memoryCache: newMemoryCache(),
 	}
 
-	prompt, err := svc.buildSystemPrompt("hello", nil, 1, 1, 0)
+	prompt, err := svc.buildSystemPrompt("hello", nil, 1, 1, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
