@@ -50,8 +50,9 @@ go build -o ~/.aurelia/bin/aurelia ./cmd/aurelia/
 kill $(pgrep -f "aurelia" | head -1)
 sleep 2
 
-# 3. Restart
-nohup ~/.aurelia/bin/aurelia &
+# 3. Restart with log redirection
+mkdir -p ~/.aurelia/logs
+nohup ~/.aurelia/bin/aurelia >> ~/.aurelia/logs/aurelia.stdout.log 2>> ~/.aurelia/logs/aurelia.stderr.log &
 sleep 3
 
 # 4. Confirm it's running

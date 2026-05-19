@@ -50,33 +50,24 @@ const (
 )
 
 // parseConsolidationJSON parses model JSON output for consolidation actions.
+// Uses extractJSONObject for tolerant extraction.
+// Returns nil if parsing fails or the result is empty.
 func parseConsolidationJSON(raw string) *consolidationExtraction {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil
-	}
+	ext, _ := parseConsolidationJSONWithError(raw)
+	return ext
+}
 
-	// Strip fenced code block markers (same approach as parseNudgeJSON)
-	if strings.HasPrefix(trimmed, "```") {
-		lines := strings.Split(trimmed, "\n")
-		start := 1
-		if start >= len(lines) {
-			return nil
-		}
-		end := len(lines) - 1
-		for end >= start && strings.HasPrefix(strings.TrimSpace(lines[end]), "```") {
-			end--
-		}
-		if end < start {
-			return nil
-		}
-		trimmed = strings.TrimSpace(strings.Join(lines[start:end+1], "\n"))
+// parseConsolidationJSONWithError is like parseConsolidationJSON but also
+// returns the underlying parse/extraction error for diagnostics.
+func parseConsolidationJSONWithError(raw string) (*consolidationExtraction, error) {
+	jsonStr, err := extractJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("extract: %w", err)
 	}
 
 	var ext consolidationExtraction
-	if err := json.Unmarshal([]byte(trimmed), &ext); err != nil {
-		log.Printf("[dream] failed to parse consolidation JSON: %v", err)
-		return nil
+	if err := json.Unmarshal([]byte(jsonStr), &ext); err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 
 	// Cap actions
@@ -86,9 +77,9 @@ func parseConsolidationJSON(raw string) *consolidationExtraction {
 	}
 
 	if len(ext.Actions) == 0 {
-		return nil
+		return nil, nil
 	}
-	return &ext
+	return &ext, nil
 }
 
 // applyConsolidationActions applies consolidation actions through the safe memory writer.

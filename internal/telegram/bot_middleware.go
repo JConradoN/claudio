@@ -524,17 +524,24 @@ func (bc *BotController) handleMemoryCommand(c telebot.Context) error {
 		}
 	}
 
+	log.Printf("memory command: action=%s chat=%d thread=%d cwd_set=%t",
+		cmd, chatID, threadID, cwd != "")
+
 	switch cmd {
 	case "", "status":
 		status, err := svc.Status(chatID, threadID, cwd)
 		if err != nil {
 			return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
 		}
+		log.Printf("memory command: status complete chat=%d layers=%d", chatID, len(status.Layers))
 		return SendTextWithThread(bc.bot, c.Chat(), memoryuxpkg.FormatStatus(status), threadID)
 	case "checkpoint":
 		result, err := svc.WriteCheckpoint(chatID, threadID, cwd, args)
 		if err != nil {
 			return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
+		}
+		if result.Path != "" {
+			log.Printf("memory command: checkpoint written chat=%d layer=%s path=%s", chatID, result.Layer, result.Path)
 		}
 		return SendTextWithThread(bc.bot, c.Chat(), memoryuxpkg.FormatCheckpoint(result), threadID)
 	default:

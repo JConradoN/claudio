@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.11] - 2026-05-19
+
+### Corrigido
+- Nudge e dream agora aceitam respostas JSON com fences Markdown ou texto ao redor, reduzindo receipts `invalid`.
+- Prompts de nudge/dream reforçados para retornar somente JSON.
+- Receipts inválidos agora incluem diagnóstico seguro sem armazenar output bruto do modelo.
+
+### Observabilidade
+- Comandos `/memory status` e `/memory checkpoint` agora registram logs operacionais sem expor conteúdo sensível.
+- Snippet de restart em `AGENTS.md` agora redireciona stdout/stderr para `~/.aurelia/logs/`.
+
 ## [0.7.10] - 2026-05-19
 
 ### Alterado

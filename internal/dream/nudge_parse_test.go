@@ -299,6 +299,98 @@ func TestSanitizeFact_IntegrationViaParse(t *testing.T) {
 	}
 }
 
+// --- Tolerant parse tests via parseNudgeJSONWithError ---
+
+func TestParseNudgeJSONWithError_ProseBeforeJSON(t *testing.T) {
+	raw := `Based on my analysis, here are the facts to save:
+{"updates":[{"layer":"global","filename":"test.md","facts":["fact one"]}]}
+I hope this helps.`
+	ext, err := parseNudgeJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext == nil {
+		t.Fatal("expected parsed result from prose-wrapped JSON")
+	}
+	if len(ext.Updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(ext.Updates))
+	}
+}
+
+func TestParseNudgeJSONWithError_EmptyUpdates(t *testing.T) {
+	raw := `{"updates":[]}`
+	ext, err := parseNudgeJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext != nil {
+		t.Fatal("expected nil for empty updates")
+	}
+}
+
+func TestParseNudgeJSONWithError_InvalidReturnsError(t *testing.T) {
+	raw := `not json at all`
+	ext, err := parseNudgeJSONWithError(raw)
+	if ext != nil {
+		t.Fatal("expected nil for invalid JSON")
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error for invalid input")
+	}
+	if !strings.Contains(err.Error(), "no JSON object") {
+		t.Fatalf("expected 'no JSON object found', got: %v", err)
+	}
+}
+
+func TestParseNudgeJSONWithError_FencedWithProse(t *testing.T) {
+	// Model wrapped in fenced code block WITH surrounding explanation
+	raw := "I found this:\n```json\n{\"updates\":[{\"layer\":\"global\",\"filename\":\"test.md\",\"facts\":[\"fact\"]}]}\n```\nEnd."
+	ext, err := parseNudgeJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext == nil {
+		t.Fatal("expected parsed result from fenced + prose JSON")
+	}
+	if len(ext.Updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(ext.Updates))
+	}
+}
+
+func TestParseNudgeJSONWithError_UnbalancedBraces(t *testing.T) {
+	raw := `{"updates":[{"layer":"global","filename":"test.md","facts":["fact"]}`
+	ext, err := parseNudgeJSONWithError(raw)
+	if ext != nil {
+		t.Fatal("expected nil for unbalanced braces")
+	}
+	if err == nil {
+		t.Fatal("expected error for unbalanced braces")
+	}
+}
+
+func TestParseNudgeJSONWithError_BracesInStrings(t *testing.T) {
+	raw := `{"updates":[{"layer":"global","filename":"test.md","facts":["some {text} with braces"]}]}`
+	ext, err := parseNudgeJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext == nil {
+		t.Fatal("expected parsed result when braces are inside strings")
+	}
+	if len(ext.Updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(ext.Updates))
+	}
+}
+
+// --- Diagnostic preservation via parseNudgeJSONWithError ---
+
+func TestParseNudgeJSONWithError_ErrorOnWhitespaceOnly(t *testing.T) {
+	_, err := parseNudgeJSONWithError("   \n\n  ")
+	if err == nil {
+		t.Fatal("expected error for whitespace only")
+	}
+}
+
 // quoteJoin joins strings with JSON-style quoted items.
 func quoteJoin(items []string) string {
 	quoted := make([]string, len(items))

@@ -1,6 +1,7 @@
 package memoryux
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -235,6 +236,95 @@ func TestAppendReceipt_EmptyDir(t *testing.T) {
 	err := AppendReceipt("", Receipt{Time: time.Now().UTC(), Source: "test", Status: "error"})
 	if err == nil {
 		t.Fatal("expected error for empty memoryDir")
+	}
+}
+
+func TestModelOutputDiagnostic_Empty(t *testing.T) {
+	got := ModelOutputDiagnostic("", nil)
+	if got != "" {
+		t.Fatalf("expected empty for empty input, got %q", got)
+	}
+}
+
+func TestModelOutputDiagnostic_WithError(t *testing.T) {
+	raw := `not json content`
+	err := fmt.Errorf("no JSON object found")
+	got := ModelOutputDiagnostic(raw, err)
+	if !strings.Contains(got, "parse_error=") {
+		t.Fatalf("expected parse_error in diagnostic, got %q", got)
+	}
+	if !strings.Contains(got, "output_len=") {
+		t.Fatalf("expected output_len in diagnostic, got %q", got)
+	}
+}
+
+func TestModelOutputDiagnostic_StartsWithJSON(t *testing.T) {
+	raw := `{"key": "value"}`
+	got := ModelOutputDiagnostic(raw, nil)
+	if !strings.Contains(got, "starts_with_json=true") {
+		t.Fatalf("expected starts_with_json=true, got %q", got)
+	}
+	if !strings.Contains(got, "output_len=") {
+		t.Fatalf("expected output_len, got %q", got)
+	}
+	if strings.Contains(got, "parse_error=") {
+		t.Fatalf("unexpected parse_error in diagnostic, got %q", got)
+	}
+}
+
+func TestModelOutputDiagnostic_Fenced(t *testing.T) {
+	raw := "```json\n{\"key\": \"value\"}\n```"
+	got := ModelOutputDiagnostic(raw, nil)
+	if !strings.Contains(got, "fenced=true") {
+		t.Fatalf("expected fenced=true, got %q", got)
+	}
+}
+
+func TestModelOutputDiagnostic_Sanitized(t *testing.T) {
+	raw := "line1\nline2"
+	err := fmt.Errorf("some error\nwith newlines")
+	got := ModelOutputDiagnostic(raw, err)
+	if strings.Contains(got, "\n") {
+		t.Fatalf("expected no newlines in diagnostic, got %q", got)
+	}
+}
+
+func TestModelOutputDiagnostic_Truncated(t *testing.T) {
+	long := strings.Repeat("a", 500)
+	err := fmt.Errorf("%s", "parse: "+long)
+	got := ModelOutputDiagnostic(long, err)
+	if len(got) > 300 {
+		t.Fatalf("expected diagnostic capped at 300 chars, got %d", len(got))
+	}
+}
+
+func TestModelOutputDiagnostic_Combined(t *testing.T) {
+	raw := "```json\n{\"key\": \"val\"}\n```"
+	err := fmt.Errorf("unexpected field")
+	got := ModelOutputDiagnostic(raw, err)
+	if !strings.Contains(got, "parse_error=") {
+		t.Fatalf("expected parse_error, got %q", got)
+	}
+	if !strings.Contains(got, "fenced=true") {
+		t.Fatalf("expected fenced=true, got %q", got)
+	}
+	if !strings.Contains(got, "output_len=") {
+		t.Fatalf("expected output_len, got %q", got)
+	}
+	if strings.Contains(got, raw) {
+		t.Fatalf("diagnostic must not contain raw output")
+	}
+}
+
+func TestModelOutputDiagnostic_NoStartsWithJSONForFenced(t *testing.T) {
+	// Fenced output does NOT start with {
+	raw := "```\n{\"key\": \"val\"}\n```"
+	got := ModelOutputDiagnostic(raw, nil)
+	if strings.Contains(got, "starts_with_json=true") {
+		t.Fatalf("fenced output should not have starts_with_json=true, got %q", got)
+	}
+	if !strings.Contains(got, "fenced=true") {
+		t.Fatalf("expected fenced=true for fenced output, got %q", got)
 	}
 }
 

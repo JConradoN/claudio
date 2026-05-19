@@ -780,10 +780,12 @@ func extractModelName(text string) string {
 func (bc *BotController) cmdMemoryStatus(chatID int64, threadID int) (string, error) {
 	svc := memoryuxpkg.New(bc.memoryDir, bc.resolver)
 	cwd := bc.currentCwd(chatID, threadID)
+	log.Printf("memory command: action=status chat=%d thread=%d cwd_set=%t", chatID, threadID, cwd != "")
 	status, err := svc.Status(chatID, threadID, cwd)
 	if err != nil {
 		return "", fmt.Errorf("memory status: %w", err)
 	}
+	log.Printf("memory command: status complete chat=%d layers=%d", chatID, len(status.Layers))
 	return memoryuxpkg.FormatStatus(status), nil
 }
 
@@ -807,9 +809,13 @@ func (bc *BotController) cmdMemoryCheckpoint(chatID int64, threadID int, text st
 
 	svc := memoryuxpkg.New(bc.memoryDir, bc.resolver)
 	cwd := bc.currentCwd(chatID, threadID)
+	log.Printf("memory command: action=checkpoint chat=%d thread=%d cwd_set=%t", chatID, threadID, cwd != "")
 	result, err := svc.WriteCheckpoint(chatID, threadID, cwd, note)
 	if err != nil {
 		return "", fmt.Errorf("memory checkpoint: %w", err)
+	}
+	if result.Path != "" {
+		log.Printf("memory command: checkpoint written chat=%d layer=%s path=%s", chatID, result.Layer, result.Path)
 	}
 	return memoryuxpkg.FormatCheckpoint(result), nil
 }

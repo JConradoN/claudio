@@ -12,6 +12,53 @@ import (
 	"unicode"
 )
 
+// ModelOutputDiagnostic builds a safe, sanitized diagnostic string from raw
+// model output and an optional parse error. It includes only metadata:
+//
+//	parse_error=<summary> output_len=<N> fenced=true starts_with_json=true
+//
+// The result is truncated to maxErrorLen and sanitized (no newlines/control chars).
+// It never includes the raw model output, transcripts, prompts, facts, or secrets.
+func ModelOutputDiagnostic(raw string, parseErr error) string {
+	if raw == "" && parseErr == nil {
+		return ""
+	}
+
+	var parts []string
+	if parseErr != nil {
+		parts = append(parts, "parse_error="+briefParseError(parseErr))
+	}
+	parts = append(parts, fmt.Sprintf("output_len=%d", len(raw)))
+
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "{") {
+		parts = append(parts, "starts_with_json=true")
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		parts = append(parts, "fenced=true")
+	}
+
+	diag := strings.Join(parts, " ")
+	if len(diag) > maxErrorLen {
+		diag = diag[:maxErrorLen]
+	}
+	return SanitizeReceiptError(diag)
+}
+
+// briefParseError extracts a short, safe summary from a parse error chain.
+// It unwraps the leaf error to avoid leaking internal paths or prompts.
+func briefParseError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	// Truncate to first ~100 chars to avoid model output fragments in error message
+	if len(msg) > 100 {
+		msg = msg[:100]
+	}
+	return SanitizeReceiptError(msg)
+}
+
 const (
 	receiptFilename = "memory_receipts.jsonl"
 	maxErrorLen     = 300

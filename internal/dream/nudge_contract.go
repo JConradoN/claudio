@@ -2,6 +2,7 @@ package dream
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 	"unicode"
@@ -39,39 +40,25 @@ const (
 )
 
 // parseNudgeJSON parses model output into a nudgeExtraction.
-// It accepts a direct JSON object or a fenced code block containing JSON.
+// It uses extractJSONObject for tolerant extraction, accepting direct JSON,
+// fenced code blocks, and text with embedded JSON.
 // Returns nil if parsing fails or the result is empty.
 func parseNudgeJSON(raw string) *nudgeExtraction {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil
-	}
+	ext, _ := parseNudgeJSONWithError(raw)
+	return ext
+}
 
-	// Strip fenced code block markers if present.
-	// Use line-based detection: opening fence is first line starting with ```,
-	// closing fence is last non-empty line starting with ```.
-	if strings.HasPrefix(trimmed, "```") {
-		lines := strings.Split(trimmed, "\n")
-		// Skip the first line (opening fence)
-		start := 1
-		if start >= len(lines) {
-			return nil
-		}
-		// Find the last line that starts with ``` (closing fence)
-		end := len(lines) - 1
-		for end >= start && strings.HasPrefix(strings.TrimSpace(lines[end]), "```") {
-			end--
-		}
-		if end < start {
-			return nil
-		}
-		trimmed = strings.TrimSpace(strings.Join(lines[start:end+1], "\n"))
+// parseNudgeJSONWithError is like parseNudgeJSON but also returns the
+// underlying parse/extraction error for diagnostics.
+func parseNudgeJSONWithError(raw string) (*nudgeExtraction, error) {
+	jsonStr, err := extractJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("extract: %w", err)
 	}
 
 	var ext nudgeExtraction
-	if err := json.Unmarshal([]byte(trimmed), &ext); err != nil {
-		log.Printf("[nudge] failed to parse model JSON: %v", err)
-		return nil
+	if err := json.Unmarshal([]byte(jsonStr), &ext); err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 
 	// Validate, sanitize, and cap
@@ -106,9 +93,9 @@ func parseNudgeJSON(raw string) *nudgeExtraction {
 	}
 
 	if len(ext.Updates) == 0 {
-		return nil
+		return nil, nil
 	}
-	return &ext
+	return &ext, nil
 }
 
 func dedupeStrings(s []string) []string {

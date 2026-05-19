@@ -275,6 +275,78 @@ func TestConsolidationMerge_PrivatePermissions(t *testing.T) {
 	}
 }
 
+// --- Tolerant parse tests via parseConsolidationJSONWithError ---
+
+func TestParseConsolidationJSONWithError_ProseBeforeJSON(t *testing.T) {
+	raw := `After reviewing the files, I recommend:
+{"actions":[{"delete_file":"old.md"}]}
+Let me know if you agree.`
+	ext, err := parseConsolidationJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext == nil {
+		t.Fatal("expected parsed result from prose-wrapped JSON")
+	}
+	if len(ext.Actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(ext.Actions))
+	}
+}
+
+func TestParseConsolidationJSONWithError_EmptyActions(t *testing.T) {
+	raw := `{"actions":[]}`
+	ext, err := parseConsolidationJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext != nil {
+		t.Fatal("expected nil for empty actions")
+	}
+}
+
+func TestParseConsolidationJSONWithError_InvalidReturnsError(t *testing.T) {
+	raw := `this is not json`
+	ext, err := parseConsolidationJSONWithError(raw)
+	if ext != nil {
+		t.Fatal("expected nil for invalid JSON")
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error for invalid input")
+	}
+}
+
+func TestParseConsolidationJSONWithError_FencedWithProse(t *testing.T) {
+	raw := "Output:\n```\n{\"actions\":[{\"delete_file\":\"old.md\"}]}\n```\nDone."
+	ext, err := parseConsolidationJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ext == nil {
+		t.Fatal("expected parsed result from fenced + prose JSON")
+	}
+	if len(ext.Actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(ext.Actions))
+	}
+}
+
+func TestParseConsolidationJSONWithError_UnbalancedBraces(t *testing.T) {
+	raw := `{"actions":[{"delete_file":"old.md"}]`
+	ext, err := parseConsolidationJSONWithError(raw)
+	if ext != nil {
+		t.Fatal("expected nil for unbalanced braces")
+	}
+	if err == nil {
+		t.Fatal("expected error for unbalanced braces")
+	}
+}
+
+func TestParseConsolidationJSONWithError_ErrorOnWhitespaceOnly(t *testing.T) {
+	_, err := parseConsolidationJSONWithError("   \n  ")
+	if err == nil {
+		t.Fatal("expected error for whitespace only")
+	}
+}
+
 func TestLoadMemoryForConsolidation_ExcludesPersonas(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "safe.md"), []byte("safe"), 0644); err != nil {
