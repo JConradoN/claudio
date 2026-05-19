@@ -603,24 +603,26 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		return OutcomeLLMError
 	}
 
+	safeFinalText := sanitizeExecutionPlanForChat(finalText)
+
 	// Capture runID before completeRunLog cleans up runLogStates.
 	successRunID := s.getRunID(chatID, threadID)
-	s.completeRunLog(chatID, threadID, runlog.RunCompleted, finalText, "")
+	s.completeRunLog(chatID, threadID, runlog.RunCompleted, safeFinalText, "")
 
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		s.output.ConfirmMessage(chatID, messageID)
-		s.afterSuccessfulTurn(chatID, threadID, userText, finalText, successRunID)
+		s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID)
 		if needsReset {
 			s.resetSessionAfterSuccessfulTurn(chatID, threadID)
 		}
 		return OutcomeSuccess
 	}
 
-	if err := s.output.SendReply(chatID, threadID, finalText); err != nil {
+	if err := s.output.SendReply(chatID, threadID, safeFinalText); err != nil {
 		log.Printf("Failed to send reply to chat %d: %v", chatID, err)
 	}
 	s.output.ConfirmMessage(chatID, messageID)
-	s.afterSuccessfulTurn(chatID, threadID, userText, finalText, successRunID)
+	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID)
 	if needsReset {
 		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
 	}
@@ -678,7 +680,20 @@ func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, fina
 		return false
 	}
 	plan, err := s.orchestrator.ExtractPlan(finalText)
-	if err != nil || plan == nil {
+	if err != nil {
+		if orchestrator.ContainsPlanMarker(finalText) {
+			log.Printf("Execution plan marker detected but plan was invalid: %v", err)
+			_ = s.output.SendError(chatID, threadID, "Plano de execução gerado, mas não consegui interpretar o JSON. Não vou enviar os prompts internos no chat.")
+			return true
+		}
+		return false
+	}
+	if plan == nil {
+		if orchestrator.ContainsPlanMarker(finalText) {
+			log.Printf("Execution plan marker detected but plan block was incomplete")
+			_ = s.output.SendError(chatID, threadID, "Plano de execução gerado, mas o bloco veio incompleto. Não vou enviar os prompts internos no chat.")
+			return true
+		}
 		return false
 	}
 	log.Printf("Execution plan detected with %d tasks", len(plan.Tasks))
@@ -687,6 +702,17 @@ func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, fina
 	}
 	go s.output.ExecuteApprovedPlan(chatID, messageID, plan)
 	return true
+}
+
+func sanitizeExecutionPlanForChat(text string) string {
+	if !orchestrator.ContainsPlanMarker(text) {
+		return text
+	}
+	displayText := strings.TrimSpace(orchestrator.StripPlanBlock(text))
+	if displayText == "" {
+		return "Plano de execução gerado para o orquestrador. Prompts internos omitidos."
+	}
+	return displayText + "\n\n[plano de execução interno omitido]"
 }
 
 func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText string, finalText string, runID string) {
@@ -795,15 +821,15 @@ func (s *Service) patchContinuityFailure(chatID int64, threadID int, status stri
 	}
 
 	err := s.continuity.Patch(ctx, continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}, continuity.StatePatch{
-		CWD:             &cwd,
-		LastRunID:       &runID,
-		LastRunStatus:   &status,
-		LastCheckpoint:  &checkpoint,
-		LastTools:       &tools,
-		SessionID:       &sid,
-		SessionCold:     &sessionCold,
-		ResetReason:     &errMsg,
-		UpdatedAt:       now,
+		CWD:            &cwd,
+		LastRunID:      &runID,
+		LastRunStatus:  &status,
+		LastCheckpoint: &checkpoint,
+		LastTools:      &tools,
+		SessionID:      &sid,
+		SessionCold:    &sessionCold,
+		ResetReason:    &errMsg,
+		UpdatedAt:      now,
 	})
 	if err != nil {
 		log.Printf("continuity: failed to patch failure chat=%d thread=%d: %v", chatID, threadID, err)
@@ -1151,7 +1177,7 @@ func init() {
 
 	privateKeyRE = regexp.MustCompile(`(?s)-----BEGIN (?:OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----.*?-----END (?:OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----`)
 	authRE = regexp.MustCompile(`(?i)(Authorization:\s*(?:Bearer|Basic)\s+)\S+`)
-	lineRE       = regexp.MustCompile(`(password|secret|api_key|api-key|api\.key|apikey|clientsecret|client_secret|access_token|refresh_token|token)\s*[=:]\s*\S+`)
+	lineRE = regexp.MustCompile(`(password|secret|api_key|api-key|api\.key|apikey|clientsecret|client_secret|access_token|refresh_token|token)\s*[=:]\s*\S+`)
 	jsonSecretRE = regexp.MustCompile(`"(?:apiKey|api_key|api-key|api\.key|clientSecret|client_secret|client-secret|client\.secret|accessToken|access_token|access-token|access\.token|refreshToken|refresh_token|refresh-token|refresh\.token|token)"\s*:\s*"[^"]{4,}"`)
 }
 

@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.19] - 2026-05-19
+
+### Corrigido
+- Blocos internos `aurelia-plan` inválidos ou incompletos não são mais enviados crus ao Telegram.
+- Runlog e continuidade agora armazenam versão sanitizada da resposta quando o modelo gera plano de execução interno.
+- Parser do orquestrador agora detecta marcadores de plano mesmo quando o JSON está malformado, evitando fallback para resposta normal.
+
+### Segurança
+- Prompts internos de workers são omitidos das respostas de chat e da memória persistente quando a extração do plano falha.
+
 ## [0.7.18] - 2026-05-19
 
 ### Adicionado

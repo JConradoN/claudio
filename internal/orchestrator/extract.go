@@ -7,6 +7,12 @@ import (
 const planMarkerStart = "```aurelia-plan"
 const planMarkerEnd = "```"
 
+// ContainsPlanMarker reports whether the response appears to contain an
+// Aurelia execution plan block, even if the block is malformed or incomplete.
+func ContainsPlanMarker(response string) bool {
+	return strings.Contains(response, planMarkerStart)
+}
+
 // ExtractPlan detects and parses an execution plan from Aurelia's response.
 // The plan is expected inside a ```aurelia-plan ... ``` code block.
 // Returns nil if no plan marker is found. Returns error if JSON is malformed.
@@ -53,7 +59,7 @@ func StripPlanBlock(response string) string {
 	afterMarker := startIdx + len(planMarkerStart)
 	endIdx := strings.Index(response[afterMarker:], planMarkerEnd)
 	if endIdx == -1 {
-		return response
+		return strings.TrimSpace(response[:startIdx])
 	}
 
 	// Remove the entire block (marker + content + closing)

@@ -38,6 +38,24 @@ func TestExtractPlan_NoMarker(t *testing.T) {
 	}
 }
 
+func TestContainsPlanMarker(t *testing.T) {
+	response := "intro\n```aurelia-plan\n{not closed"
+	if !ContainsPlanMarker(response) {
+		t.Fatal("expected marker to be detected")
+	}
+	if ContainsPlanMarker("normal response") {
+		t.Fatal("did not expect marker in normal response")
+	}
+}
+
+func TestStripPlanBlock_IncompleteBlock(t *testing.T) {
+	response := "Vou executar.\n\n```aurelia-plan\n{\"tasks\":["
+	got := StripPlanBlock(response)
+	if got != "Vou executar." {
+		t.Fatalf("StripPlanBlock() = %q, want %q", got, "Vou executar.")
+	}
+}
+
 func TestExtractPlan_InvalidJSON(t *testing.T) {
 	response := "```aurelia-plan\n{not valid json}\n```"
 	_, err := ExtractPlanFromText(response)

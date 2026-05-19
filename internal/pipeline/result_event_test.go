@@ -12,6 +12,7 @@ import (
 type fakeOutput struct {
 	lastError     string
 	lastReply     string
+	planExecuted  bool
 	confirmCalled bool
 }
 
@@ -43,7 +44,9 @@ func (f *fakeOutput) ConfirmMessage(_ int64, _ int) {
 	f.confirmCalled = true
 }
 
-func (f *fakeOutput) ExecuteApprovedPlan(_ int64, _ int, _ *orchestrator.Plan) {}
+func (f *fakeOutput) ExecuteApprovedPlan(_ int64, _ int, _ *orchestrator.Plan) {
+	f.planExecuted = true
+}
 
 type fakeProgress struct{}
 
@@ -159,5 +162,49 @@ func TestHandleResultEvent_TextContent_ReturnsSuccess(t *testing.T) {
 	}
 	if fo.lastReply != "Resposta via campo Text." {
 		t.Fatalf("expected reply %q, got %q", "Resposta via campo Text.", fo.lastReply)
+	}
+}
+
+func TestHandleResultEvent_StripsPlanBlockFromNormalReply(t *testing.T) {
+	fo := &fakeOutput{}
+	s := newTestService(fo)
+
+	ev := bridge.Event{Type: "result", Content: "Vou executar.\n\n```aurelia-plan\n{\"tasks\":[{\"id\":\"T1\",\"description\":\"secret\",\"prompt\":\"internal prompt\",\"needs_worktree\":false}]}\n```"}
+	var assistantText strings.Builder
+
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello")
+
+	if outcome != OutcomeSuccess {
+		t.Fatalf("expected OutcomeSuccess, got %v", outcome)
+	}
+	if strings.Contains(fo.lastReply, "internal prompt") || strings.Contains(fo.lastReply, "aurelia-plan") {
+		t.Fatalf("reply leaked plan internals: %q", fo.lastReply)
+	}
+	if !strings.Contains(fo.lastReply, "[plano de execução interno omitido]") {
+		t.Fatalf("expected omission marker, got %q", fo.lastReply)
+	}
+}
+
+func TestHandleResultEvent_InvalidPlanMarkerIsNotSentRaw(t *testing.T) {
+	fo := &fakeOutput{}
+	s := newTestService(fo)
+	s.orchestrator = orchestrator.NewOrchestrator(nil, orchestrator.OrchestratorConfig{})
+
+	ev := bridge.Event{Type: "result", Content: "Now emit plan.\n\n```aurelia-plan\n{not valid json with prompt: secret}\n```"}
+	var assistantText strings.Builder
+
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "pode iniciar")
+
+	if outcome != OutcomeSuccess {
+		t.Fatalf("expected OutcomeSuccess, got %v", outcome)
+	}
+	if fo.lastError == "" {
+		t.Fatal("expected safe parse error message")
+	}
+	if strings.Contains(fo.lastError, "secret") || strings.Contains(fo.lastError, "aurelia-plan") {
+		t.Fatalf("error leaked plan internals: %q", fo.lastError)
+	}
+	if fo.lastReply != "" {
+		t.Fatalf("did not expect raw reply, got %q", fo.lastReply)
 	}
 }
