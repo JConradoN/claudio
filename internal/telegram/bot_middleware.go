@@ -57,6 +57,7 @@ func (bc *BotController) registerContentRoutes() {
 	bc.bot.Handle("/new", bc.handleResetCommand)
 	bc.bot.Handle("/compact", bc.handleResetCommand)
 	bc.bot.Handle("/usage", bc.handleUsageCommand)
+	bc.bot.Handle("/stop", bc.handleStopCommand)
 	bc.bot.Handle("/status", bc.handleStatusCommand)
 	bc.bot.Handle("/cron", bc.handleCronCommand)
 	bc.bot.Handle("/agents", bc.handleAgentsCommand)
@@ -80,6 +81,7 @@ func (bc *BotController) registerSlashMenu() {
 		{Text: "agents", Description: "Listar agentes disponíveis"},
 		{Text: "memory", Description: "Ver status da memória e criar checkpoints"},
 		{Text: "model", Description: "Ver/trocar modelo ativo"},
+		{Text: "stop", Description: "Interromper processamento ativo (preserva sessão)"},
 		{Text: "help", Description: "Mostrar comandos disponíveis"},
 	}
 	if err := bc.bot.SetCommands(commands); err != nil {
@@ -95,6 +97,7 @@ func (bc *BotController) handleHelpCommand(c telebot.Context) error {
 func helpMessage() string {
 	return "Comandos disponíveis:\n\n" +
 		"/new — Nova sessão (limpa contexto, cancela o que estiver em andamento)\n" +
+		"/stop — Interromper processamento ativo (preserva sessão)\n" +
 		"/usage — Ver uso de tokens da sessão\n" +
 		"/status — Ver estado atual + trabalho ativo + fila\n" +
 		"/cwd <path> — Definir diretório de trabalho (tópicos herdam do grupo)\n" +
@@ -252,6 +255,17 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		}
 	}
 	return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
+}
+
+func (bc *BotController) handleStopCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
+	chatID := c.Chat().ID
+	threadID := c.Message().ThreadID
+
+	if bc.cancelActiveRun(chatID, threadID) {
+		return SendTextWithThread(bc.bot, c.Chat(), "🛑 Processamento interrompido. A sessão foi preservada.", threadID)
+	}
+	return SendTextWithThread(bc.bot, c.Chat(), "Nenhum processamento ativo para interromper.", threadID)
 }
 
 func (bc *BotController) handleResetCommand(c telebot.Context) error {

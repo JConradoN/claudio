@@ -620,10 +620,48 @@ func TestHelpMessageIncludesNaturalExamples(t *testing.T) {
 	t.Parallel()
 
 	help := helpMessage()
-	for _, want := range []string{"💡", "agenda todo dia às 9h", "muda modelo", "limpa o contexto"} {
+	for _, want := range []string{"💡", "/stop", "agenda todo dia às 9h", "muda modelo", "limpa o contexto"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q: %q", want, help)
 		}
+	}
+}
+
+func TestCancelActiveRun_NilPipelineReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	bc := &BotController{}
+	if got := bc.cancelActiveRun(42, 0); got {
+		t.Fatal("cancelActiveRun with nil pipeline should return false")
+	}
+}
+
+// TestStopPreservesSession verifies that cancelActiveRun (the only thing /stop does)
+// does NOT clear session, tracker, or cwd — unlike /new and /reset.
+func TestStopPreservesSession(t *testing.T) {
+	t.Parallel()
+
+	sessions := session.NewStore()
+	sessions.Set(42, 0, "sess-keep")
+	tracker := session.NewTracker()
+	tracker.Add(42, 500, 300, 3, 0.02)
+
+	bc := &BotController{
+		sessions: sessions,
+		tracker:  tracker,
+		// pipeline is nil → cancelActiveRun returns false, touches nothing
+	}
+
+	bc.cancelActiveRun(42, 0)
+
+	// Session must still be intact
+	if sid := sessions.Get(42, 0); sid != "sess-keep" {
+		t.Fatalf("cancelActiveRun cleared session want %q, got %q", "sess-keep", sid)
+	}
+
+	// Tracker must still be intact
+	if usage := tracker.Get(42); usage.NumTurns != 3 {
+		t.Fatalf("cancelActiveRun modified tracker, want 3 turns, got %d", usage.NumTurns)
 	}
 }
 
