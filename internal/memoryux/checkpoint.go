@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	checkpointFilename    = "current_task.md"
-	memoryIndexFilename   = "MEMORY.md"
+	checkpointFilename     = "current_task.md"
+	memoryIndexFilename    = "MEMORY.md"
+	maxCheckpointNoteRunes = 2000
 )
 
 // writeCheckpoint atomically writes the checkpoint file to dir with validations.
@@ -91,6 +92,8 @@ func writeCheckpoint(dir, scope, cwd, note string, chatID int64, threadID int) (
 }
 
 // buildCheckpointContent returns the deterministic markdown checkpoint body.
+// The user-provided note is sanitized before embedding to prevent injection
+// of code fences, role-like prefixes, or control characters.
 func buildCheckpointContent(scope, cwd, note string, chatID int64, threadID int) string {
 	cwdLine := cwd
 	if cwdLine == "" {
@@ -98,6 +101,8 @@ func buildCheckpointContent(scope, cwd, note string, chatID int64, threadID int)
 	}
 	if note == "" {
 		note = "_No note provided._"
+	} else {
+		note = sanitizeCheckpointNote(note)
 	}
 
 	ts := time.Now().Format(time.RFC3339)
@@ -117,6 +122,49 @@ func buildCheckpointContent(scope, cwd, note string, chatID int64, threadID int)
 		"## Next Step\n"+
 		"- Continue from this checkpoint or update it with `/memory checkpoint <summary>`.\n",
 		ts, scope, cwdLine, note, scope, chatID, threadID)
+}
+
+// sanitizeCheckpointNote sanitizes a user-provided note before durable storage
+// to prevent prompt injection via code fences, role instruction prefixes,
+// or embedded control characters.
+func sanitizeCheckpointNote(note string) string {
+	// Cap length at rune-level to avoid splitting multi-byte characters
+	runes := []rune(note)
+	if len(runes) > maxCheckpointNoteRunes {
+		runes = runes[:maxCheckpointNoteRunes]
+	}
+	cleaned := string(runes)
+
+	// Collapse ASCII control characters (keep newlines and tabs)
+	var sb strings.Builder
+	for _, r := range cleaned {
+		if r < 0x20 && r != '\n' && r != '\t' {
+			sb.WriteRune(' ')
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	cleaned = sb.String()
+
+	// Neutralize code fences by prefixing with backslash
+	cleaned = strings.ReplaceAll(cleaned, "```", "\\`\\`\\`")
+
+	// Neutralize common role-like instruction prefixes at line start
+	lines := strings.Split(cleaned, "\n")
+	rolePrefixes := []string{
+		"system:", "user:", "assistant:", "human:", "ai:",
+		"instruction:", "instructions:", "command:",
+	}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(strings.ToLower(line))
+		for _, prefix := range rolePrefixes {
+			if trimmed == prefix || strings.HasPrefix(trimmed, prefix+" ") {
+				lines[i] = "\\" + lines[i]
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // updateMemoryIndex ensures MEMORY.md has a "- [Title](filename.md)" entry.

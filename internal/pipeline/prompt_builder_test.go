@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
@@ -223,14 +225,64 @@ func TestLoadMemoryContents_TriggersCompactModeAtThreshold(t *testing.T) {
 		t.Fatalf("memory content length = %d, want <= %d", len(got), maxMemoryTotalChars)
 	}
 
-	// Global layer appears in full
+	// Topic layer (loaded first for priority) appears in full
+	if !strings.Contains(got, "Topic Index") {
+		t.Fatal("expected topic memory in output")
+	}
+	if !strings.Contains(got, "current_task.md") {
+		t.Fatal("expected topic current_task.md in output")
+	}
+
+	// Global layer is truncated by budget (it loads after topic), but some content survives
 	if !strings.Contains(got, "MEMORY.md") {
 		t.Fatal("expected global MEMORY.md in output")
 	}
 
-	// Topic layer should be in compact mode (has compact notice)
-	if !strings.Contains(got, "compact") && !strings.Contains(got, "Compact") {
-		t.Fatal("expected topic layer in compact mode with notice")
+	// Total must be within budget
+	if len(got) > maxMemoryTotalChars {
+		t.Fatalf("memory content exceeds budget: %d > %d", len(got), maxMemoryTotalChars)
+	}
+}
+
+func TestLoadMemoryContents_ProjectPrivateSurvivesWhenGlobalIsHuge(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AURELIA_HOME", root)
+	resolver, err := runtime.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := "/repo/aurelia"
+	projectPrivate := resolver.ConversationProjectMemoryDir(cwd, 42, 0)
+	if err := os.MkdirAll(projectPrivate, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Create current_task.md in project private with a distinctive marker
+	if err := os.WriteFile(filepath.Join(projectPrivate, "current_task.md"), []byte("High-priority task: fix the thing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a massive global memory that alone would exhaust the budget (50KB > 40KB max)
+	globalDir := filepath.Join(root, "memory")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	massiveFile := strings.Repeat("x", 50000)
+	if err := os.WriteFile(filepath.Join(globalDir, "massive.md"), []byte(massiveFile), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := session.NewStore()
+	sessions.SetCwd(42, 0, cwd)
+	bc := &Service{resolver: resolver, sessions: sessions, memoryDir: globalDir, memoryCache: newMemoryCache()}
+	got := bc.loadMemoryContents(42, 0, nil)
+
+	// Project private current_task.md must survive even when global is huge
+	if !strings.Contains(got, "High-priority task") {
+		t.Fatal("project private current_task.md should survive when global is huge, but was not found")
+	}
+	// Total must be within budget
+	if len(got) > maxMemoryTotalChars {
+		t.Fatalf("memory content length = %d, want <= %d", len(got), maxMemoryTotalChars)
 	}
 }
 
@@ -266,5 +318,205 @@ func TestLoadMemoryContents_IsolatesProjectPrivateByThread(t *testing.T) {
 	}
 	if strings.Contains(got, "thread twenty private") {
 		t.Fatalf("thread 20 memory leaked into thread 10: %q", got)
+	}
+}
+
+// fakeRunLog implements runlog.Store for testing checkpoint injection.
+type fakeRunLog struct {
+	latest *runlog.RunRecord
+}
+
+func (f *fakeRunLog) Start(ctx context.Context, record runlog.RunRecord) error { return nil }
+func (f *fakeRunLog) Update(ctx context.Context, update runlog.RunUpdate) error { return nil }
+func (f *fakeRunLog) Complete(ctx context.Context, runID string, status runlog.RunStatus, checkpoint, errMsg string) error {
+	return nil
+}
+func (f *fakeRunLog) Latest(ctx context.Context, chatID int64, threadID int) (*runlog.RunRecord, error) {
+	if f.latest == nil || f.latest.ChatID != chatID || f.latest.ThreadID != threadID {
+		return nil, nil
+	}
+	return f.latest, nil
+}
+func (f *fakeRunLog) Close() error { return nil }
+
+func TestBuildLastRunStateSection_ReturnsEmptyWhenNoRunLog(t *testing.T) {
+	bc := &Service{}
+	got := bc.buildLastRunStateSection(1, 0, "hello")
+	if got != "" {
+		t.Fatalf("expected empty without runlog, got %q", got)
+	}
+}
+
+func TestBuildLastRunStateSection_CompletedRunSkipsWithoutContinuation(t *testing.T) {
+	bc := &Service{
+		runLog: &fakeRunLog{
+			latest: &runlog.RunRecord{
+				ChatID:     1,
+				ThreadID:   0,
+				Status:     runlog.RunCompleted,
+				Checkpoint: "Status: completed\nFerramentas: Read\nResposta/último resumo: done",
+			},
+		},
+		sessions: session.NewStore(),
+	}
+	// Active session + completed run + casual text = skip
+	bc.sessions.Set(1, 0, "sess-abc")
+
+	got := bc.buildLastRunStateSection(1, 0, "good morning")
+	if got != "" {
+		t.Fatalf("expected empty for completed run without continuation, got %q", got)
+	}
+}
+
+func TestBuildLastRunStateSection_FailedRunInjectsCheckpoint(t *testing.T) {
+	bc := &Service{
+		runLog: &fakeRunLog{
+			latest: &runlog.RunRecord{
+				ChatID:     1,
+				ThreadID:   0,
+				Status:     runlog.RunFailed,
+				Checkpoint: "Status: failed\nFerramentas: Read, Grep\nErro: timeout",
+			},
+		},
+		sessions: session.NewStore(),
+	}
+	bc.sessions.Set(1, 0, "sess-abc")
+
+	got := bc.buildLastRunStateSection(1, 0, "good morning")
+	if got == "" {
+		t.Fatal("expected checkpoint for failed run")
+	}
+	if !strings.Contains(got, "checkpoint_untrusted") {
+		t.Fatalf("expected checkpoint_untrusted wrapper, got %q", got)
+	}
+	if !strings.Contains(got, "Status: failed") {
+		t.Fatalf("expected status in checkpoint, got %q", got)
+	}
+}
+
+func TestBuildLastRunStateSection_ContinuationTriggersInjection(t *testing.T) {
+	bc := &Service{
+		runLog: &fakeRunLog{
+			latest: &runlog.RunRecord{
+				ChatID:     1,
+				ThreadID:   0,
+				Status:     runlog.RunCompleted,
+				Checkpoint: "Status: completed\nFerramentas: Read\nResposta/último resumo: done",
+			},
+		},
+		sessions: session.NewStore(),
+	}
+	bc.sessions.Set(1, 0, "sess-abc")
+
+	got := bc.buildLastRunStateSection(1, 0, "continua a análise")
+	if got == "" {
+		t.Fatal("expected checkpoint for continuation trigger")
+	}
+	if !strings.Contains(got, "completed") {
+		t.Fatalf("expected completed status in checkpoint, got %q", got)
+	}
+}
+
+func TestBuildLastRunStateSection_RedactsSecrets(t *testing.T) {
+	bc := &Service{
+		runLog: &fakeRunLog{
+			latest: &runlog.RunRecord{
+				ChatID:     1,
+				ThreadID:   0,
+				Status:     runlog.RunFailed,
+				Checkpoint: "Status: failed\nAPI Key: sk-test1234567890abcdef",
+			},
+		},
+		sessions: session.NewStore(),
+	}
+	bc.sessions.Set(1, 0, "sess-abc")
+
+	got := bc.buildLastRunStateSection(1, 0, "retoma")
+	if !strings.Contains(got, "API_KEY_REDACTED") && !strings.Contains(got, "REDACTED") {
+		t.Fatalf("expected secrets to be redacted in checkpoint, got %q", got)
+	}
+	if strings.Contains(got, "sk-test") {
+		t.Fatal("secrets leaked into checkpoint section")
+	}
+}
+
+func TestLoadMemoryDir_SkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Regular .md file that should be included
+	if err := os.WriteFile(filepath.Join(dir, "real.md"), []byte("real content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink named .md pointing outside the memory dir
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "evil.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache()}
+	got := bc.loadMemoryDir(dir)
+
+	if !strings.Contains(got, "real.md") {
+		t.Fatal("expected real.md to be loaded")
+	}
+	if strings.Contains(got, "outside content") || strings.Contains(got, "evil.md") {
+		t.Fatal("symlinked .md file should not be loaded")
+	}
+}
+
+func TestLoadMemoryDirCompact_SkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Regular .md file
+	if err := os.WriteFile(filepath.Join(dir, "real.md"), []byte("real content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink named .md pointing outside
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "evil.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache()}
+	got := bc.loadMemoryDirCompact(dir)
+
+	if strings.Contains(got, "outside content") || strings.Contains(got, "evil.md") {
+		t.Fatal("symlinked .md file should not be loaded in compact mode")
+	}
+}
+
+func TestIsContinuation(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"continua", true},
+		{"Continue a análise", true},
+		{"segue com o plano", true},
+		{"nova análise", true},
+		{"reanalisa", true},
+		{"faz de novo", true},
+		{"retoma", true},
+		{"a partir do checkpoint", true},
+		{"bom dia", false},
+		{"qual o status", false},
+		{"", false},
+		{"continuação", false},                     // word boundary: must not match "continua"
+		{"analisa isso", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.text, func(t *testing.T) {
+			if got := isContinuation(tc.text); got != tc.want {
+				t.Errorf("isContinuation(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
 	}
 }

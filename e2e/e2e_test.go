@@ -275,7 +275,7 @@ func TestCommandLayer_SessionResetClearsState(t *testing.T) {
 	tracker := session.NewTracker()
 
 	sessions.Set(100, 0, "sess-integration-test")
-	tracker.Add(100, 5000, 2000, 3, 0.05)
+	tracker.Add(100, 0, 5000, 2000, 3, 0.05)
 
 	// Verify session exists.
 	if sid := sessions.Get(100, 0); sid != "sess-integration-test" {
@@ -284,12 +284,12 @@ func TestCommandLayer_SessionResetClearsState(t *testing.T) {
 
 	// Clear (simulating what cmdSessionReset does).
 	sessions.Clear(100, 0)
-	tracker.Clear(100)
+	tracker.Clear(100, 0)
 
 	if sid := sessions.Get(100, 0); sid != "" {
 		t.Fatalf("session should be cleared, got %q", sid)
 	}
-	usage := tracker.Get(100)
+	usage := tracker.Get(100, 0)
 	if usage.NumTurns != 0 {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}

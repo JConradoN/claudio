@@ -539,7 +539,7 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		assistantText.WriteString(content)
 	}
 
-	s.recordUsage(chatID, threadID, ev)
+	needsReset := s.recordUsage(chatID, threadID, ev)
 	finalText := strings.TrimSpace(assistantText.String())
 	if finalText == "" {
 		if emptyResultHadWork(ev) {
@@ -569,6 +569,10 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 			}
 		}
 
+		// Even on empty results, flush remaining nudge buffer and reset if threshold was crossed
+		if needsReset {
+			s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+		}
 		s.output.ConfirmMessage(chatID, messageID)
 		return OutcomeLLMError
 	}
@@ -578,6 +582,9 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	if s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		s.output.ConfirmMessage(chatID, messageID)
 		s.afterSuccessfulTurn(chatID, threadID, userText, finalText)
+		if needsReset {
+			s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+		}
 		return OutcomeSuccess
 	}
 
@@ -586,25 +593,39 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	}
 	s.output.ConfirmMessage(chatID, messageID)
 	s.afterSuccessfulTurn(chatID, threadID, userText, finalText)
+	if needsReset {
+		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+	}
 	return OutcomeSuccess
 }
 
-func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) {
+// recordUsage checks whether token usage exceeds the session threshold.
+// Returns true if the session should be auto-reset.
+// The actual reset must be performed by the caller via resetSessionAfterSuccessfulTurn
+// AFTER the current turn has been saved to the nudge buffer, ensuring no context loss.
+func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) bool {
 	if s.config == nil || s.tracker == nil {
-		return
+		return false
 	}
 	if ev.CostUSD <= 0 && ev.NumTurns <= 0 {
-		return
+		return false
 	}
-	if s.tracker.RecordUsage(chatID, ev.NumTurns, ev.CostUSD, s.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens) {
-		log.Printf("session auto-reset: chat=%d threshold=%d", chatID, s.config.MaxSessionTokens)
-		s.flushDreamer(chatID, threadID)
-		s.sessions.Clear(chatID, threadID)
-		s.tracker.Clear(chatID)
-		return
-	}
-	usage := s.tracker.Get(chatID)
-	log.Printf("session usage: chat=%d %s", chatID, usage)
+	needsReset := s.tracker.RecordUsage(chatID, threadID, ev.NumTurns, ev.CostUSD, s.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens)
+	usage := s.tracker.Get(chatID, threadID)
+	log.Printf("session usage: chat=%d thread=%d %s (auto-reset=%t)", chatID, threadID, usage, needsReset)
+	return needsReset
+}
+
+// resetSessionAfterSuccessfulTurn performs the auto-reset actions that were
+// previously inside recordUsage. It must be called AFTER afterSuccessfulTurn
+// has saved the current turn to the nudge buffer — otherwise the turn is lost.
+// Uses ClearSession to preserve cwd and project binding so the user does not
+// lose their working directory after an auto-reset.
+func (s *Service) resetSessionAfterSuccessfulTurn(chatID int64, threadID int) {
+	log.Printf("session auto-reset: chat=%d thread=%d threshold=%d", chatID, threadID, s.config.MaxSessionTokens)
+	s.flushDreamer(chatID, threadID)
+	s.sessions.ClearSession(chatID, threadID)
+	s.tracker.Clear(chatID, threadID)
 }
 
 func (s *Service) flushDreamer(chatID int64, threadID int) {
@@ -950,6 +971,10 @@ func init() {
 	lineRE       = regexp.MustCompile(`(password|secret|api_key|api-key|api\.key|apikey|clientsecret|client_secret|access_token|refresh_token|token)\s*[=:]\s*\S+`)
 	jsonSecretRE = regexp.MustCompile(`"(?:apiKey|api_key|api-key|api\.key|clientSecret|client_secret|client-secret|client\.secret|accessToken|access_token|access-token|access\.token|refreshToken|refresh_token|refresh-token|refresh\.token|token)"\s*:\s*"[^"]{4,}"`)
 }
+
+// RedactSecrets is the public wrapper for redactSecrets, shared with other
+// packages (e.g. dream nudge prompt) that need credential redaction.
+func RedactSecrets(s string) string { return redactSecrets(s) }
 
 // redactSecrets replaces common credential patterns with [REDACTED].
 // All regexes are pre-compiled at init for performance.

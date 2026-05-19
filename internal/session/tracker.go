@@ -37,26 +37,29 @@ func (u Usage) String() string {
 	return base
 }
 
-// Tracker accumulates token usage per chat for auto-reset decisions.
+// Tracker accumulates token usage per chat thread for auto-reset decisions.
+// Usage is scoped to chatID+threadID so different topics in a forum do not
+// share token budgets.
 type Tracker struct {
 	mu    sync.RWMutex
-	usage map[int64]*Usage
+	usage map[SessionKey]*Usage
 }
 
 func NewTracker() *Tracker {
 	return &Tracker{
-		usage: make(map[int64]*Usage),
+		usage: make(map[SessionKey]*Usage),
 	}
 }
 
-// Add accumulates token usage for a chat. Returns the updated total tokens.
-func (t *Tracker) Add(chatID int64, inputTokens, outputTokens, numTurns int, costUSD float64) int {
+// Add accumulates token usage for a chat thread. Returns the updated total tokens.
+func (t *Tracker) Add(chatID int64, threadID int, inputTokens, outputTokens, numTurns int, costUSD float64) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	u, ok := t.usage[chatID]
+	key := SessionKeyFor(chatID, threadID)
+	u, ok := t.usage[key]
 	if !ok {
 		u = &Usage{}
-		t.usage[chatID] = u
+		t.usage[key] = u
 	}
 	u.InputTokens += inputTokens
 	u.OutputTokens += outputTokens
@@ -69,44 +72,47 @@ func (t *Tracker) Add(chatID int64, inputTokens, outputTokens, numTurns int, cos
 // Uses real input/output tokens when available (from SDK usage field),
 // falls back to turn-based estimation only when real tokens are zero.
 // Returns true if the session should be reset (threshold exceeded).
-func (t *Tracker) RecordUsage(chatID int64, numTurns int, costUSD float64, maxTokens int, inputTokens int, outputTokens int) bool {
+func (t *Tracker) RecordUsage(chatID int64, threadID int, numTurns int, costUSD float64, maxTokens int, inputTokens int, outputTokens int) bool {
 	realTokens := inputTokens + outputTokens
 	if realTokens > 0 {
 		// Use real token counts from the SDK
-		totalTokens := t.Add(chatID, inputTokens, outputTokens, numTurns, costUSD)
+		totalTokens := t.Add(chatID, threadID, inputTokens, outputTokens, numTurns, costUSD)
 		return maxTokens > 0 && totalTokens >= maxTokens
 	}
 
 	// Fallback: estimate from turns when real tokens aren't provided
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := SessionKeyFor(chatID, threadID)
 	estimated := numTurns * estimatedTokensPerTurn
-	u, ok := t.usage[chatID]
+	u, ok := t.usage[key]
 	if !ok {
 		u = &Usage{}
-		t.usage[chatID] = u
+		t.usage[key] = u
 	}
 	u.EstimatedTokens += estimated
 	u.NumTurns += numTurns
 	u.CostUSD += costUSD
 	totalTokens := u.TotalTokens()
-	t.mu.Unlock()
 	return maxTokens > 0 && totalTokens >= maxTokens
 }
 
-// Get returns the current usage for a chat.
-func (t *Tracker) Get(chatID int64) Usage {
+// Get returns the current usage for a chat thread.
+func (t *Tracker) Get(chatID int64, threadID int) Usage {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	u := t.usage[chatID]
+	key := SessionKeyFor(chatID, threadID)
+	u := t.usage[key]
 	if u == nil {
 		return Usage{}
 	}
 	return *u
 }
 
-// Clear resets usage tracking for a chat.
-func (t *Tracker) Clear(chatID int64) {
+// Clear resets usage tracking for a chat thread.
+func (t *Tracker) Clear(chatID int64, threadID int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.usage, chatID)
+	key := SessionKeyFor(chatID, threadID)
+	delete(t.usage, key)
 }

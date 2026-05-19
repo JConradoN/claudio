@@ -13,6 +13,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 )
 
 const (
@@ -79,6 +80,13 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent)
 	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
+
+	// Last known run state — injects checkpoint when the previous run failed,
+	// the session is cold, or the user text looks like a continuation.
+	// Placed before memory so the model sees it as contextual guidance.
+	if lastRunSection := bc.buildLastRunStateSection(chatID, threadID, userText); lastRunSection != "" {
+		sections = append(sections, lastRunSection)
+	}
 
 	// Auto-memory instructions (SDK auto-memory doesn't activate via programmatic API,
 	// so we instruct the model explicitly)
@@ -300,21 +308,29 @@ func (bc *Service) loadMemoryContents(chatID int64, threadID int, agent *agents.
 		total += layerSize
 	}
 
-	appendLayer("#### Global (cross-project)\n\n", bc.memoryDir)
+	cwd := bc.effectiveCwd(agent, chatID, threadID)
+	hasProject := cwd != "" && bc.resolver != nil
+
+	// Priority order: current-context layers (project private, topic) load before
+	// the broad global layer, so they survive the token budget even when global
+	// memory is huge.
+	if hasProject {
+		projectName := filepath.Base(cwd)
+		privateDir := bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID)
+		header := fmt.Sprintf("#### Project: %s (private)\n\n", projectName)
+		appendLayer(header, privateDir)
+	}
 
 	if topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID); topicDir != "" {
 		header := fmt.Sprintf("\n\n#### Topic %d (chat %d)\n\n", threadID, chatID)
 		appendLayer(header, topicDir)
 	}
 
-	cwd := bc.effectiveCwd(agent, chatID, threadID)
-	if cwd != "" && bc.resolver != nil {
+	appendLayer("#### Global (cross-project)\n\n", bc.memoryDir)
+
+	if hasProject {
 		projectName := filepath.Base(cwd)
-
-		header := fmt.Sprintf("\n\n#### Project: %s (private)\n\n", projectName)
-		appendLayer(header, bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID))
-
-		header = fmt.Sprintf("\n\n#### Project: %s (team)\n\n", projectName)
+		header := fmt.Sprintf("\n\n#### Project: %s (team)\n\n", projectName)
 		appendLayer(header, bc.resolver.ProjectTeamMemoryDir(cwd))
 	}
 
@@ -353,7 +369,7 @@ func (bc *Service) loadMemoryDir(dir string) string {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
 			continue
 		}
 		if fi, err := entry.Info(); err == nil {
@@ -403,10 +419,10 @@ func (bc *Service) loadMemoryDirCompact(dir string) string {
 		mtimes["MEMORY.md"] = fi.ModTime()
 	}
 
-	// Collect non-index .md files with their modtimes
+	// Collect non-index .md files with their modtimes (skip symlinks)
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
 			continue
 		}
 		if fi, err := entry.Info(); err == nil {
@@ -500,6 +516,146 @@ func (bc *Service) buildProjectDocsSection(chatID int64, agent *agents.Agent, th
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// buildLastRunStateSection returns a system prompt section describing the last
+// run state when the run was not completed (e.g., failed, timed out, canceled),
+// when the session is cold/inactive, or when userText suggests a continuation.
+// The checkpoint data is wrapped in <checkpoint_untrusted> to prevent prompt injection.
+// Returns empty string when no relevant last-run state exists.
+func (bc *Service) buildLastRunStateSection(chatID int64, threadID int, userText string) string {
+	if bc.runLog == nil {
+		return ""
+	}
+
+	// Query persisted latest run
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	record, err := bc.runLog.Latest(ctx, chatID, threadID)
+	if err != nil || record == nil || record.Checkpoint == "" {
+		return ""
+	}
+
+	// Always inject for non-completed runs (failed, timed out, canceled)
+	if record.Status != runlog.RunCompleted {
+		return bc.formatCheckpointSection(record)
+	}
+
+	// For completed runs: inject only if continuation keywords or session is cold
+	if isContinuation(userText) {
+		return bc.formatCheckpointSection(record)
+	}
+
+	if bc.sessions != nil {
+		_, active := bc.sessions.GetWithState(chatID, threadID)
+		if !active {
+			// Cold session with completed run — inject for context
+			return bc.formatCheckpointSection(record)
+		}
+	}
+
+	return ""
+}
+
+func (bc *Service) formatCheckpointSection(record *runlog.RunRecord) string {
+	checkpoint := redactSecrets(record.Checkpoint)
+
+	var sb strings.Builder
+	sb.WriteString("\n\n## Last Known Run State\n\n")
+	sb.WriteString("<checkpoint_untrusted>\n")
+	sb.WriteString(checkpoint)
+	if !strings.HasSuffix(checkpoint, "\n") {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("</checkpoint_untrusted>")
+	return sb.String()
+}
+
+// accentReplacerForContinuation strips common Portuguese diacritics for
+// continuation detection, matching the same normalization used by MatchCommand
+// so "nova análise" and "nova analise" are treated identically.
+var accentReplacerForContinuation = strings.NewReplacer(
+	"á", "a", "à", "a", "ã", "a", "â", "a",
+	"é", "e", "ê", "e",
+	"í", "i",
+	"ó", "o", "ô", "o", "õ", "o",
+	"ú", "u",
+	"ç", "c",
+)
+
+// isContinuation returns true when userText suggests the user is continuing,
+// retrying, or resuming a previous analysis. Uses word-boundary matching to
+// avoid false positives like "continuação" matching "continua".
+// Accents are stripped before matching so "nova análise" and "nova analise"
+// both trigger continuation detection.
+func isContinuation(text string) bool {
+	normalized := accentReplacerForContinuation.Replace(strings.ToLower(strings.TrimSpace(text)))
+	if normalized == "" {
+		return false
+	}
+
+	triggers := []string{
+		"continua",
+		"continue",
+		"segue",
+		"nova analise",
+		"reanalisa",
+		"faz de novo",
+		"retoma",
+		"a partir do checkpoint",
+	}
+
+	for _, trigger := range triggers {
+		if matchContinuationWord(normalized, trigger) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchContinuationWord checks if trigger appears in lower as a whole word,
+// respecting multi-byte UTF-8 boundaries to avoid false positives like
+// "continuação" matching "continua".
+func matchContinuationWord(lower, trigger string) bool {
+	idx := strings.Index(lower, trigger)
+	if idx < 0 {
+		return false
+	}
+
+	// Check word boundary before trigger
+	if idx > 0 {
+		prev := lower[idx-1]
+		// For ASCII characters: must not be a word char
+		if prev >= 'a' && prev <= 'z' || prev >= '0' && prev <= '9' || prev == '_' {
+			return false
+		}
+		// For multi-byte UTF-8: if previous byte is a continuation byte (0x80-0xBF),
+		// we are inside a multi-byte sequence, so not a word boundary.
+		if prev >= 0x80 && prev <= 0xBF {
+			return false
+		}
+		// For leading bytes of multi-byte sequences: check there's no combining letter
+		if prev >= 0xC0 && prev <= 0xFF {
+			return false
+		}
+	}
+
+	// Check word boundary after trigger
+	after := idx + len(trigger)
+	if after < len(lower) {
+		next := lower[after]
+		if next >= 'a' && next <= 'z' || next >= '0' && next <= '9' || next == '_' {
+			return false
+		}
+		if next >= 0x80 && next <= 0xBF {
+			return false
+		}
+		if next >= 0xC0 && next <= 0xFF {
+			return false
+		}
+	}
+
+	return true
 }
 
 // buildCronInstructions returns the system prompt section for cron scheduling.

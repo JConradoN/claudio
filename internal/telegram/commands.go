@@ -249,7 +249,7 @@ func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalid
 	canceledActive := bc.cancelActiveRun(chatID, threadID)
 	var usage session.Usage
 	if bc.tracker != nil {
-		usage = bc.tracker.Get(chatID)
+		usage = bc.tracker.Get(chatID, threadID)
 	}
 	if bc.dreamer != nil && bc.sessions != nil {
 		cwd := bc.currentCwd(chatID, threadID)
@@ -262,7 +262,7 @@ func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalid
 		bc.sessions.ClearSession(chatID, threadID)
 	}
 	if bc.tracker != nil {
-		bc.tracker.Clear(chatID)
+		bc.tracker.Clear(chatID, threadID)
 	}
 	log.Printf("command: session reset for chat=%d thread=%d", chatID, threadID)
 	return formatResetSummary(usage, canceledActive), nil
@@ -557,10 +557,16 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 		if cwd := bc.currentCwd(chatID, threadID); cwd != "" {
 			lines = append(lines, fmt.Sprintf("📂 Diretório: `%s`", cwd))
 		}
+
+		if sid, active := bc.sessions.GetWithState(chatID, threadID); sid != "" {
+			if !active {
+				lines = append(lines, "😴 Sessão: **fria** (inativa) — mensagens passadas não estão mais disponíveis para o modelo.")
+			}
+		}
 	}
 
 	if bc.tracker != nil {
-		usage := bc.tracker.Get(chatID)
+		usage := bc.tracker.Get(chatID, threadID)
 		if usage.NumTurns > 0 {
 			lines = append(lines, fmt.Sprintf("💬 Sessão: **%d mensagens**, **%d tokens**, **$%.4f**", usage.NumTurns, usage.TotalTokens(), usage.CostUSD))
 		} else {
@@ -568,23 +574,25 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 		}
 	}
 
-	// Run log — latest persisted run status
+	// Run log — latest persisted run status and checkpoint
 	if bc.runLog != nil {
-		if runLine := statusRunLogLine(bc.runLog, chatID, threadID); runLine != "" {
-			lines = append(lines, runLine)
+		if runLines := statusRunLogSummary(bc.runLog, chatID, threadID); runLines != nil {
+			lines = append(lines, runLines...)
 		}
 	}
 
 	return strings.Join(lines, "\n"), nil
 }
 
-func statusRunLogLine(rl runlog.Store, chatID int64, threadID int) string {
+// statusRunLogSummary returns formatted lines describing the latest run state,
+// including status, checkpoint excerpt, and a "continua" hint when applicable.
+func statusRunLogSummary(rl runlog.Store, chatID int64, threadID int) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	record, err := rl.Latest(ctx, chatID, threadID)
 	if err != nil || record == nil {
-		return ""
+		return nil
 	}
 
 	emoji := "⬜"
@@ -609,8 +617,31 @@ func statusRunLogLine(rl runlog.Store, chatID int64, threadID int) string {
 		}
 	}
 
-	return fmt.Sprintf("%s Última execução: **%s** (%s)", emoji, record.Status, when)
+	var lines []string
+	lines = append(lines, fmt.Sprintf("%s Última execução: **%s** (%s)", emoji, record.Status, when))
+
+	// Checkpoint excerpt (redacted, rune-safe truncation)
+	if record.Checkpoint != "" {
+		excerpt := statusRedactSecrets(record.Checkpoint)
+		// Limit checkpoint display using rune-aware truncation to avoid
+		// splitting multi-byte UTF-8 characters.
+		runes := []rune(excerpt)
+		if len(runes) > 500 {
+			runes = runes[:500]
+			excerpt = string(runes) + "..."
+		}
+		lines = append(lines, fmt.Sprintf("📋 Checkpoint: `%s`", excerpt))
+	}
+
+	// Continuation hint for non-completed runs
+	if record.Status != runlog.RunCompleted {
+		lines = append(lines, "💡 Digite **\"continua\"** para retomar de onde parou.")
+	}
+
+	return lines
 }
+
+
 
 func (bc *BotController) currentWorkStatus(chatID int64, threadID int) (string, int) {
 	if bc == nil || bc.pipeline == nil {
@@ -773,8 +804,8 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int) string {
 	var usage session.Usage
 	if bc.tracker != nil {
-		usage = bc.tracker.Get(chatID)
-		bc.tracker.Clear(chatID)
+		usage = bc.tracker.Get(chatID, threadID)
+		bc.tracker.Clear(chatID, threadID)
 	}
 	if bc.sessions != nil {
 		bc.sessions.ClearSession(chatID, threadID)
@@ -860,6 +891,32 @@ func (bc *BotController) cmdMemoryCheckpoint(chatID int64, threadID int, text st
 		log.Printf("memory command: checkpoint written chat=%d layer=%s path=%s", chatID, result.Layer, result.Path)
 	}
 	return memoryuxpkg.FormatCheckpoint(result), nil
+}
+
+// Pre-compiled redaction regexes for status checkpoint output.
+var (
+	statusAPIKeyRE     = regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}`)
+	statusGHTokenRE    = regexp.MustCompile(`\bghp_[A-Za-z0-9]{36}`)
+	statusAWSKeyRE     = regexp.MustCompile(`\bAKIA[A-Z0-9]{16}`)
+	statusJWTRE        = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+`)
+	statusBearerRE     = regexp.MustCompile(`(?i)(Authorization:\s*(?:Bearer|Basic)\s+)\S+`)
+	statusPasswordRE   = regexp.MustCompile(`(?i)(password|secret|client_secret|api_key|access_token|refresh_token)\s*[=:]\s*\S+`)
+	statusPrivateKeyRE = regexp.MustCompile(`(?s)-----BEGIN (?:OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----.*?-----END (?:OPENSSH |RSA |DSA |EC |PGP )?PRIVATE KEY-----`)
+)
+
+// statusRedactSecrets applies credential redaction for status display.
+// Patterns mirror the pipeline redactor but are simpler (only for checkpoint
+// excerpts in /status output, not full prompt content).
+func statusRedactSecrets(s string) string {
+	result := s
+	result = statusAPIKeyRE.ReplaceAllString(result, "[API_KEY_REDACTED]")
+	result = statusGHTokenRE.ReplaceAllString(result, "[GH_TOKEN_REDACTED]")
+	result = statusAWSKeyRE.ReplaceAllString(result, "[AWS_KEY_REDACTED]")
+	result = statusJWTRE.ReplaceAllString(result, "[JWT_REDACTED]")
+	result = statusBearerRE.ReplaceAllString(result, "$1[REDACTED]")
+	result = statusPasswordRE.ReplaceAllString(result, "[CREDENTIAL_REDACTED]")
+	result = statusPrivateKeyRE.ReplaceAllString(result, "[PRIVATE_KEY_BLOCK_REDACTED]")
+	return result
 }
 
 // saveDefaultModel persists the default provider and model to the config file.

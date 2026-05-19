@@ -3,6 +3,8 @@ package dream
 import (
 	"strings"
 	"testing"
+
+	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
 )
 
 func TestParseNudgeJSON_ValidUpdates(t *testing.T) {
@@ -424,4 +426,86 @@ func quoteJoin(items []string) string {
 		quoted[i] = `"` + item + `"`
 	}
 	return strings.Join(quoted, ",")
+}
+
+func TestNudgeTemplates_JSONOnly(t *testing.T) {
+	// Verify both templates are JSON-only: no instructions to USE Write tool,
+	// and mention JSON output format.
+	for _, name := range []string{"prompts/nudge_global.tmpl", "prompts/nudge_project.tmpl"} {
+		data, err := nudgeTemplateFS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", name, err)
+		}
+		content := string(data)
+
+		// Must NOT contain instructions to USE the Write tool
+		if strings.Contains(content, "Use the Write tool") {
+			t.Errorf("%s must not instruct to 'Use the Write tool'", name)
+		}
+
+		// Must mention JSON output format
+		if !strings.Contains(content, "JSON") {
+			t.Errorf("%s must mention JSON output", name)
+		}
+		// Must mention 'updates' key
+		if !strings.Contains(content, "updates") {
+			t.Errorf("%s must mention 'updates' JSON key", name)
+		}
+		// Must say do not use tools
+		if !strings.Contains(content, "Do NOT use") {
+			t.Errorf("%s must contain 'Do NOT use' prohibition", name)
+		}
+	}
+}
+
+func TestNudgeRedactSecrets_RedactsAPIKeysInTranscript(t *testing.T) {
+	input := "**user:** my API key is sk-test1234567890abcdefghijklmnop\n**assistant:** I see that sk-test1234567890abcdefghijklmnop\n"
+	output := pipelinepkg.RedactSecrets(input)
+	if strings.Contains(output, "sk-test") {
+		t.Fatal("API key pattern not redacted in transcript")
+	}
+	if !strings.Contains(output, "API_KEY_REDACTED") && !strings.Contains(output, "REDACTED") {
+		t.Fatalf("expected redacted marker in output, got %q", output)
+	}
+}
+
+func TestNudgeRedactSecrets_RedactsAuthBearer(t *testing.T) {
+	input := "**user:** Authorization: Bearer token12345secret\n"
+	output := pipelinepkg.RedactSecrets(input)
+	if strings.Contains(output, "token12345secret") {
+		t.Fatal("Authorization Bearer token not redacted")
+	}
+}
+
+func TestNudgeRedactSecrets_RedactsPrivateKey(t *testing.T) {
+	input := "**assistant:** here is the key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n"
+	output := pipelinepkg.RedactSecrets(input)
+	if strings.Contains(output, "BEGIN RSA PRIVATE KEY") {
+		t.Fatal("private key block not redacted")
+	}
+	if !strings.Contains(output, "PRIVATE_KEY_BLOCK_REDACTED") {
+		t.Fatalf("expected private key redaction marker, got %q", output)
+	}
+}
+
+func TestNudgeRedactSecrets_RedactsPasswordLine(t *testing.T) {
+	// The line-based redactor detects "password=<value>" assignments
+	// and replaces the entire line. Sentence-style "the password is X"
+	// is not redacted (it's not a credential assignment).
+	input := "**user:** set password=supersecret123 for the db\n**assistant:** ok, secret=my-token stored\n"
+	output := pipelinepkg.RedactSecrets(input)
+	if !strings.Contains(output, "CREDENTIAL_REDACTED") {
+		t.Fatalf("password/secret value should be redacted, got: %q", output)
+	}
+	if strings.Contains(output, "supersecret123") || strings.Contains(output, "my-token") {
+		t.Fatal("secret values leaked after redaction")
+	}
+}
+
+func TestNudgeRedactSecrets_RedactsClientSecret(t *testing.T) {
+	input := `**assistant:** {"client_secret": "my-super-secret-value-12345"}`
+	output := pipelinepkg.RedactSecrets(input)
+	if strings.Contains(output, "my-super-secret-value") {
+		t.Fatal("client_secret value not redacted")
+	}
 }

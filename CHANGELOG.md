@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.15] - 2026-05-19
+
+### Corrigido
+- Auto-reset agora preserva `cwd` e project binding ao limpar apenas a sessão ativa.
+- Turno atual é registrado antes do reset automático, preservando continuidade para nudge/memória.
+- Uso de tokens agora é isolado por chat e tópico/thread.
+- Memória de projeto e tópico agora tem prioridade sobre memória global no prompt.
+- Checkpoints do run journal podem ser reinjetados no prompt para retomada após falhas, timeouts ou sessões frias.
+- NudgeBuffer agora usa Snapshot/Commit com token de versão, evitando descarte de mensagens novas.
+- Templates de nudge agora são JSON-only e não instruem uso de ferramentas desabilitadas.
+- `/status` exibe checkpoint de forma segura, com truncamento UTF-8 e redaction ampliada.
+
+### Segurança
+- Transcripts enviados ao nudge são redigidos antes de chamadas ao LLM.
+- `/memory checkpoint` sanitiza notas antes de persistir.
+- Arquivos `.md` symlinkados em diretórios de memória são ignorados.
+
 ## [0.7.14] - 2026-05-19
 
 ### Corrigido

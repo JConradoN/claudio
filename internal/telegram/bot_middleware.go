@@ -281,8 +281,9 @@ func (bc *BotController) handleResetCommand(c telebot.Context) error {
 
 func (bc *BotController) handleUsageCommand(c telebot.Context) error {
 	defer bc.confirmMessage(c.Message())
+	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	usage := bc.tracker.Get(c.Chat().ID)
+	usage := bc.tracker.Get(chatID, threadID)
 	if usage.NumTurns == 0 {
 		return SendTextWithThread(bc.bot, c.Chat(), "Nenhum uso registrado na sessão atual.", threadID)
 	}

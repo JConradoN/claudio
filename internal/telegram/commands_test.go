@@ -1,14 +1,17 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/config"
 	"github.com/igormaneschy/aurelia/internal/cron"
+	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
 
@@ -114,7 +117,7 @@ func TestCmdSessionReset(t *testing.T) {
 	sessions := session.NewStore()
 	tracker := session.NewTracker()
 	sessions.Set(42, 0, "sess-abc")
-	tracker.Add(42, 1000, 500, 1, 0.01)
+	tracker.Add(42, 0, 1000, 500, 1, 0.01)
 
 	bc := &BotController{
 		config:   &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
@@ -133,7 +136,7 @@ func TestCmdSessionReset(t *testing.T) {
 	}
 
 	// Tracker should be cleared
-	usage := tracker.Get(42)
+	usage := tracker.Get(42, 0)
 	if usage.NumTurns != 0 {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
@@ -339,7 +342,7 @@ func TestCmdStatus(t *testing.T) {
 	sessions.Set(42, 0, "sess-abc-12345678")
 	sessions.SetCwd(42, 0, "/repo/aurelia")
 	tracker := session.NewTracker()
-	tracker.Add(42, 1200, 300, 3, 0.0123)
+	tracker.Add(42, 0, 1200, 300, 3, 0.0123)
 
 	bc := &BotController{
 		config: &config.AppConfig{
@@ -361,7 +364,7 @@ func TestCmdStatus(t *testing.T) {
 	if !strings.Contains(reply, "1") { // 1 active job
 		t.Fatalf("expected active job count in status, got %q", reply)
 	}
-	if strings.Contains(reply, "sid=") || strings.Contains(reply, "sess-abc") || strings.Contains(reply, "warm") || strings.Contains(reply, "cold") {
+	if strings.Contains(reply, "sid=") || strings.Contains(reply, "sess-abc") {
 		t.Fatalf("status should not expose session internals, got %q", reply)
 	}
 	if !strings.Contains(reply, "/repo/aurelia") {
@@ -455,6 +458,87 @@ func TestCmdStatus_FallsBackToGroupCwd(t *testing.T) {
 	}
 }
 
+func TestStatusRunLogSummary_CheckpointIncluded(t *testing.T) {
+	t.Parallel()
+
+	rl := &fakeRunLog{
+		latest: &runlog.RunRecord{
+			ChatID:     42,
+			ThreadID:   0,
+			Status:     runlog.RunFailed,
+			Checkpoint: "Status: failed\nFerramentas: Read, Grep\nErro: network timeout",
+			StartedAt:  time.Now().Add(-5 * time.Minute),
+		},
+	}
+
+	lines := statusRunLogSummary(rl, 42, 0)
+	if lines == nil {
+		t.Fatal("expected non-nil lines")
+	}
+
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "failed") {
+		t.Fatalf("expected failed status, got %q", joined)
+	}
+	if !strings.Contains(joined, "Checkpoint") {
+		t.Fatalf("expected checkpoint in status, got %q", joined)
+	}
+	if !strings.Contains(joined, "continua") {
+		t.Fatalf("expected 'continua' hint for failed run, got %q", joined)
+	}
+}
+
+func TestStatusRunLogSummary_CompletedNoContinuationHint(t *testing.T) {
+	t.Parallel()
+
+	rl := &fakeRunLog{
+		latest: &runlog.RunRecord{
+			ChatID:     42,
+			ThreadID:   0,
+			Status:     runlog.RunCompleted,
+			Checkpoint: "Status: completed",
+			StartedAt:  time.Now().Add(-1 * time.Hour),
+		},
+	}
+
+	lines := statusRunLogSummary(rl, 42, 0)
+	if lines == nil {
+		t.Fatal("expected non-nil lines")
+	}
+
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "completed") {
+		t.Fatalf("expected completed status, got %q", joined)
+	}
+	if strings.Contains(joined, "continua") {
+		t.Fatalf("completed run should not show 'continua' hint, got %q", joined)
+	}
+}
+
+func TestStatusRunLogSummary_RedactsSecrets(t *testing.T) {
+	t.Parallel()
+
+	rl := &fakeRunLog{
+		latest: &runlog.RunRecord{
+			ChatID:     42,
+			ThreadID:   0,
+			Status:     runlog.RunFailed,
+			Checkpoint: "Status: failed\nAPI Key: sk-test1234567890abcdef",
+			StartedAt:  time.Now().Add(-5 * time.Minute),
+		},
+	}
+
+	lines := statusRunLogSummary(rl, 42, 0)
+	joined := strings.Join(lines, "\n")
+
+	if strings.Contains(joined, "sk-test") {
+		t.Fatal("checkpoint should redact secrets")
+	}
+	if !strings.Contains(joined, "REDACTED") {
+		t.Fatalf("expected redacted marker, got %q", joined)
+	}
+}
+
 // --- T10: list_agents tests ---
 
 func TestCmdListAgents_WithAgents(t *testing.T) {
@@ -518,6 +602,24 @@ func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// fakeRunLog implements runlog.Store for testing status checkpoint output.
+type fakeRunLog struct {
+	latest *runlog.RunRecord
+}
+
+func (f *fakeRunLog) Start(ctx context.Context, record runlog.RunRecord) error { return nil }
+func (f *fakeRunLog) Update(ctx context.Context, update runlog.RunUpdate) error { return nil }
+func (f *fakeRunLog) Complete(ctx context.Context, runID string, status runlog.RunStatus, checkpoint, errMsg string) error {
+	return nil
+}
+func (f *fakeRunLog) Latest(ctx context.Context, chatID int64, threadID int) (*runlog.RunRecord, error) {
+	if f.latest == nil || f.latest.ChatID != chatID || f.latest.ThreadID != threadID {
+		return nil, nil
+	}
+	return f.latest, nil
+}
+func (f *fakeRunLog) Close() error { return nil }
+
 // --- T11: list_models tests ---
 
 func TestCmdListModels_RequiresBridge(t *testing.T) {
@@ -574,7 +676,7 @@ func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
 	sessions.Set(42, 0, "general-session")
 	sessions.Set(42, 99, "topic-session")
 	sessions.SetCwd(42, 99, "/topic/repo")
-	tracker.Add(42, 100, 50, 1, 0.01)
+	tracker.Add(42, 99, 100, 50, 1, 0.01)
 
 	bc := &BotController{sessions: sessions, tracker: tracker}
 	msg := bc.resetCurrentModelSession(42, 99)
@@ -588,7 +690,7 @@ func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
 	if cwd := sessions.GetCwd(42, 99); cwd != "/topic/repo" {
 		t.Fatalf("topic cwd should be preserved, got %q", cwd)
 	}
-	if usage := tracker.Get(42); usage.NumTurns != 0 {
+	if usage := tracker.Get(42, 99); usage.NumTurns != 0 {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
 	if !strings.Contains(msg, "tópico") || !strings.Contains(msg, "1 mensagens") || !strings.Contains(msg, "150 tokens") {
@@ -644,7 +746,7 @@ func TestStopPreservesSession(t *testing.T) {
 	sessions := session.NewStore()
 	sessions.Set(42, 0, "sess-keep")
 	tracker := session.NewTracker()
-	tracker.Add(42, 500, 300, 3, 0.02)
+	tracker.Add(42, 0, 500, 300, 3, 0.02)
 
 	bc := &BotController{
 		sessions: sessions,
@@ -660,7 +762,7 @@ func TestStopPreservesSession(t *testing.T) {
 	}
 
 	// Tracker must still be intact
-	if usage := tracker.Get(42); usage.NumTurns != 3 {
+	if usage := tracker.Get(42, 0); usage.NumTurns != 3 {
 		t.Fatalf("cancelActiveRun modified tracker, want 3 turns, got %d", usage.NumTurns)
 	}
 }
