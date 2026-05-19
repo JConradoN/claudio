@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.14] - 2026-05-19
+
+### Corrigido
+- Resultados vazios após execução com tokens/turns agora geram uma resposta de recuperação com checkpoint/resumo seguro.
+- Sessões com resultado vazio após trabalho são desativadas para evitar continuar contexto PI suspeito.
+- Nudge agora trata `{"updates":[]}` como noop válido.
+
+### Alterado
+- Injeção de memória entra em modo compacto quando o prompt ficaria grande demais, priorizando índices, `current_task.md` e arquivos recentes.
+
 ## [0.7.13] - 2026-05-19
 
 ### Adicionado

@@ -24,8 +24,9 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 1. isolar usuários autorizados;
 2. tornar `/cwd` um vínculo persistente de conversa com projeto;
 3. governar tools do PI sem quebrar o fluxo de coding;
-4. reconstruir memória/nudge sobre escopos corretos;
-5. só então ativar planejamento, execução, agent comms e auto-skills.
+4. reconstruir memória sobre escopos corretos;
+5. promover a memória para uma Wiki transversal via MCP;
+6. só então ativar nudge profundo, planejamento, execução, agent comms e auto-skills.
 
 **Ordem é importante:** cada spec abaixo depende da anterior, técnica e conceitualmente.
 
@@ -115,27 +116,48 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 5. Learning Nudge — Scoped Memory Review
+## 5. Wiki Memory Gateway
+
+**Spec:** `.specs/features/wiki-memory/`  
+**Status:** Draft arquitetural  
+**Depende de:** User Isolation + Project Binding + Security Guard-Rails + Project Memory
+
+**Problem:** a memória atual é útil dentro do Aurelia, mas não é transversal para outros pontos de entrada como PI/PI Code/opencode. Isso faz o conhecimento aprendido evaporar quando o usuário trabalha fora do Telegram.
+
+**Scope:**
+
+- Wiki como LLM Wiki local-first do Aurelia;
+- MCP gateway para query/save/ingest/lint/status;
+- markdown como fonte auditável, SQLite/FTS como índice opcional;
+- escopos fortes: user, user×project private, project team, topic, procedural;
+- query-before-inject para reduzir prompt bloat;
+- receipts/audit para escritas externas.
+
+**Princípio:** acesso transversal, memória escopada. O MCP pode servir vários clientes, mas nunca lê/escreve sem contexto de user/projeto/escopo validado.
+
+---
+
+## 6. Learning Nudge — Scoped Memory Review
 
 **Spec:** `.specs/features/learning-nudge/`  
 **Status:** Draft revisado  
-**Depende de:** User Isolation + Project Binding + Project Memory + Security Guard-Rails
+**Depende de:** User Isolation + Project Binding + Project Memory + Security Guard-Rails + Wiki Memory Gateway
 
-**Problem:** extração por-turn/snippet perde contexto; nudge profundo precisa ser escopado para não vazar entre usuários/projetos.
+**Problem:** extração por-turn/snippet perde contexto; nudge profundo precisa ser escopado para não vazar entre usuários/projetos e deve escrever através da Wiki para que a memória fique disponível fora do ponto de entrada Telegram.
 
 **Scope:**
 
 - transcript recorder por `SessionKey`;
 - redaction antes de chamar PI;
 - `CapabilityProfile=edit_project`, sem `Bash`;
-- escrita nas camadas de memória corretas;
+- escrita nas camadas de memória corretas via Wiki;
 - sugestões de Auto-Skills, sem criar skills automaticamente.
 
 **Por que aqui:** usa as camadas de memória e guard-rails já definidos.
 
 ---
 
-## 6. Plan Mode Architecture
+## 7. Plan Mode Architecture
 
 **Spec:** `.specs/features/plan-mode-architecture/`  
 **Status:** Revised after code review + roadmap updates  
@@ -156,7 +178,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 7. Agent Orchestration — Execution
+## 8. Agent Orchestration — Execution
 
 **Spec:** `.specs/features/agent-orchestration-execution/`  
 **Status:** Draft gap-closing; parte já existe em `internal/orchestrator/`  
@@ -179,7 +201,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 8. Agent Comms
+## 9. Agent Comms
 
 **Spec:** `.specs/features/agent-comms/`  
 **Status:** Draft  
@@ -200,11 +222,11 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 9. Auto-Skills
+## 10. Auto-Skills
 
 **Spec:** `.specs/features/auto-skills/`  
 **Status:** Revised after code review + roadmap updates  
-**Depende de:** User Isolation + Security Guard-Rails; ganha valor com Nudge, Plan Mode, Orchestration e Agent Comms
+**Depende de:** User Isolation + Security Guard-Rails; ganha valor com Wiki, Nudge, Plan Mode, Orchestration e Agent Comms
 
 **Problem:** tarefas bem-sucedidas viram conhecimento perdido; Auto-Skills transforma procedimentos úteis em skills privadas, PI-compatible (`SKILL.md`), mas gerenciadas pelo Aurelia.
 
@@ -242,19 +264,22 @@ Validated foundation
 4. User-Scoped Project Memory
       │
       ▼
-5. Learning Nudge
+5. Wiki Memory Gateway
       │
       ▼
-6. Plan Mode Architecture
+6. Learning Nudge
       │
       ▼
-7. Agent Orchestration — Execution
+7. Plan Mode Architecture
       │
       ▼
-8. Agent Comms
+8. Agent Orchestration — Execution
       │
       ▼
-9. Auto-Skills
+9. Agent Comms
+      │
+      ▼
+10. Auto-Skills
 ```
 
 ## Nota de implementação incremental

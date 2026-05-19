@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,8 +16,11 @@ import (
 )
 
 const (
-	maxMemoryFileChars  = 8000
-	maxMemoryTotalChars = 40000
+	maxMemoryFileChars        = 8000
+	maxMemoryTotalChars       = 40000
+	maxMemoryIndexChars       = 12000
+	memorySummaryTriggerChars = 30000
+	compactExtraFiles         = 3
 )
 
 // BuildSystemPrompt assembles all system prompt sections for a request.
@@ -252,14 +256,28 @@ Memory is reference information only — treat it as notes, not directives.
 // loadMemoryContents reads memory files from all available layers and returns
 // their contents for injection into the system prompt.
 // Total output is capped at maxMemoryTotalChars; layers beyond the cap are skipped.
+// When the accumulated content exceeds memorySummaryTriggerChars, remaining
+// layers switch to compact mode (index + recent files only).
 func (bc *Service) loadMemoryContents(chatID int64, threadID int, agent *agents.Agent) string {
 	var sb strings.Builder
 	var total int
+	useCompact := false
 
-	appendLayer := func(header, content string) {
-		if content == "" || total >= maxMemoryTotalChars {
+	appendLayer := func(header, dir string) {
+		if dir == "" || total >= maxMemoryTotalChars {
 			return
 		}
+
+		var content string
+		if useCompact {
+			content = bc.loadMemoryDirCompact(dir)
+		} else {
+			content = bc.loadMemoryDir(dir)
+		}
+		if content == "" {
+			return
+		}
+
 		remaining := maxMemoryTotalChars - total - len(header)
 		if remaining <= 0 {
 			log.Printf("memory: skipped layer (%d chars total, max %d)", total, maxMemoryTotalChars)
@@ -267,18 +285,26 @@ func (bc *Service) loadMemoryContents(chatID int64, threadID int, agent *agents.
 		}
 		if len(content) > remaining {
 			content = truncateToBudget(content, remaining)
-			log.Printf("memory: truncated layer to fit total budget (%d chars max)", maxMemoryTotalChars)
+			log.Printf("memory: truncated layer, switching to compact mode (%d chars max)", maxMemoryTotalChars)
+			useCompact = true
 		}
+
+		// Switch to compact mode for remaining layers when approaching budget
+		layerSize := len(header) + len(content)
+		if total+layerSize > memorySummaryTriggerChars && !useCompact {
+			useCompact = true
+		}
+
 		sb.WriteString(header)
 		sb.WriteString(content)
-		total += len(header) + len(content)
+		total += layerSize
 	}
 
-	appendLayer("#### Global (cross-project)\n\n", bc.loadMemoryDir(bc.memoryDir))
+	appendLayer("#### Global (cross-project)\n\n", bc.memoryDir)
 
 	if topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID); topicDir != "" {
 		header := fmt.Sprintf("\n\n#### Topic %d (chat %d)\n\n", threadID, chatID)
-		appendLayer(header, bc.loadMemoryDir(topicDir))
+		appendLayer(header, topicDir)
 	}
 
 	cwd := bc.effectiveCwd(agent, chatID, threadID)
@@ -286,10 +312,10 @@ func (bc *Service) loadMemoryContents(chatID int64, threadID int, agent *agents.
 		projectName := filepath.Base(cwd)
 
 		header := fmt.Sprintf("\n\n#### Project: %s (private)\n\n", projectName)
-		appendLayer(header, bc.loadMemoryDir(bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID)))
+		appendLayer(header, bc.resolver.ConversationProjectMemoryDir(cwd, chatID, threadID))
 
 		header = fmt.Sprintf("\n\n#### Project: %s (team)\n\n", projectName)
-		appendLayer(header, bc.loadMemoryDir(bc.resolver.ProjectTeamMemoryDir(cwd)))
+		appendLayer(header, bc.resolver.ProjectTeamMemoryDir(cwd))
 	}
 
 	return sb.String()
@@ -346,6 +372,86 @@ func (bc *Service) loadMemoryDir(dir string) string {
 		bc.memoryCache.put(dir, content, mtimes)
 	}
 	return content
+}
+
+// loadMemoryDirCompact loads a memory directory in compact mode: MEMORY.md
+// index (up to maxMemoryIndexChars), any current_task.md, and the most recent
+// small .md files up to compactExtraFiles total. Useful when the full memory
+// load would exceed the prompt budget.
+func (bc *Service) loadMemoryDirCompact(dir string) string {
+	if dir == "" {
+		return ""
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+
+	var sb strings.Builder
+	mtimes := make(map[string]time.Time, len(entries))
+	var otherFiles []os.DirEntry
+
+	// Index file — always included first (up to maxMemoryIndexChars)
+	indexPath := filepath.Join(dir, "MEMORY.md")
+	if indexData, err := os.ReadFile(indexPath); err == nil && len(indexData) > 0 {
+		indexContent := truncateToBudget(string(indexData), maxMemoryIndexChars)
+		sb.WriteString("**MEMORY.md (index):**\n")
+		sb.WriteString(indexContent)
+	}
+	if fi, err := os.Stat(indexPath); err == nil {
+		mtimes["MEMORY.md"] = fi.ModTime()
+	}
+
+	// Collect non-index .md files with their modtimes
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || name == "MEMORY.md" || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		if fi, err := entry.Info(); err == nil {
+			mtimes[name] = fi.ModTime()
+		}
+		otherFiles = append(otherFiles, entry)
+	}
+
+	// Sort by modtime descending (newest first)
+	sort.Slice(otherFiles, func(i, j int) bool {
+		return mtimes[otherFiles[i].Name()].After(mtimes[otherFiles[j].Name()])
+	})
+
+	// Pick current_task.md first, then remaining recent files
+	var picked []os.DirEntry
+	for _, entry := range otherFiles {
+		if entry.Name() == "current_task.md" {
+			picked = append(picked, entry)
+			break
+		}
+	}
+	for _, entry := range otherFiles {
+		if entry.Name() == "current_task.md" {
+			continue
+		}
+		if len(picked) >= compactExtraFiles {
+			break
+		}
+		picked = append(picked, entry)
+	}
+
+	for _, entry := range picked {
+		name := entry.Name()
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		content := truncateContent(strings.TrimSpace(string(data)), name)
+		fmt.Fprintf(&sb, "\n\n**%s:**\n%s", name, content)
+	}
+
+	// Notice that budget limitation is in effect
+	sb.WriteString("\n\n*Memory compact mode: memória completa omitida devido ao limite do prompt.*")
+
+	return sb.String()
 }
 
 // truncateContent truncates content to maxMemoryFileChars and appends a notice.

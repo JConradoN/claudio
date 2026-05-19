@@ -3,7 +3,7 @@
 **Status:** Draft — revised for User Isolation  
 **Depende de:** `.specs/features/multi-user-profiles/`  
 **Depende de:** `.specs/features/project-binding/` para project slug/effective cwd persistente  
-**Complementa:** `.specs/features/learning-nudge/`, `.specs/features/plan-mode-architecture/`, `.specs/features/auto-skills/`
+**Complementa:** `.specs/features/wiki-memory/`, `.specs/features/learning-nudge/`, `.specs/features/plan-mode-architecture/`, `.specs/features/auto-skills/`
 
 ## Problem Statement
 
@@ -15,7 +15,7 @@ Aurelia precisa lembrar fatos globais, preferências pessoais e contexto de proj
 
 Isso conflita com **User Isolation**: dois usuários autorizados podem trabalhar no mesmo repositório, mas suas anotações pessoais, work log, decisões individuais e preferências de projeto não devem se misturar.
 
-A nova direção é separar claramente:
+A nova direção é separar claramente os escopos que serão usados pela Wiki / LLM Wiki local-first do Aurelia:
 
 1. **Aurelia global** — identidade da Aurelia, políticas e conhecimento compartilhado do deployment.
 2. **User global** — fatos e preferências pessoais do usuário, cross-project.
@@ -23,6 +23,8 @@ A nova direção é separar claramente:
 4. **Project team memory** — convenções e decisões compartilháveis do projeto, opcionalmente versionáveis no futuro.
 5. **Conversation/topic memory** — contexto compartilhado por tópico Telegram autorizado.
 6. **Procedural memory** — procedimentos reutilizáveis não ficam em arquivos genéricos de memória; viram Auto-Skills privadas em layout PI-compatible (`users/<id>/skills/<slug>/SKILL.md`) quando o usuário confirma.
+
+Esta spec define o **modelo de escopos e diretórios**. A spec `wiki-memory` promove esses escopos para uma camada transversal acessível via MCP, para que Aurelia, PI direto, PI Code/opencode e futuros agentes possam consultar a mesma memória sem violar isolamento.
 
 ## Goals
 
@@ -35,6 +37,7 @@ A nova direção é separar claramente:
 - [ ] Dream consolida cada camada sem vazar entre usuários
 - [ ] `/cwd` é um project binding persistente por conversa/thread, mas memória pessoal vem do sender
 - [ ] Migração single-user é explícita, idempotente e reversível em duas fases
+- [ ] Layout resultante é compatível com Wiki/MCP transversal sem expor memória privada por padrão
 
 ## Out of Scope
 
@@ -42,6 +45,7 @@ A nova direção é separar claramente:
 - Multi-tenant entre vários donos/deployments
 - Busca full-text em todo histórico de sessões
 - Provider externo de memória (Mem0, Honcho etc.)
+- Substituir markdown por banco proprietário de memória
 - Sincronização automática da team memory via git no MVP
 - UI web para editar memória
 
@@ -101,6 +105,8 @@ A nova direção é separar claramente:
 | Project team | `~/.aurelia/projects/<slug>/team/` | project shared | stack, padrões, ADRs resumidos |
 | Topic memory | `~/.aurelia/topics/chat_<id>/thread_<id>/` | conversation shared | decisões do tópico, contexto temporário |
 | Procedural skills | `~/.aurelia/users/<id>/skills/<slug>/SKILL.md` | user private | procedimentos reutilizáveis, workflows, runbooks |
+
+Essas camadas são o contrato de escopo para a Wiki. Qualquer gateway MCP ou cliente externo deve resolver operações contra uma dessas camadas e falhar fechado quando `user_id`, `project_slug`, `chat_id/thread_id` ou classificação de escopo forem insuficientes.
 
 ---
 
@@ -251,5 +257,6 @@ A nova direção é separar claramente:
 - [ ] Mesmo projeto tem private memory por user e team memory compartilhada
 - [ ] Prompt sem cwd não injeta memória de projeto
 - [ ] Dream/nudge não misturam camadas
+- [ ] Wiki/MCP pode consumir o mesmo layout sem bypass de isolamento
 - [ ] Migração single-user preserva dados e é dry-run friendly
 - [ ] `go build ./... && go vet ./... && go test ./...` limpo quando implementado

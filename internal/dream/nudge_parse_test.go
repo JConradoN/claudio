@@ -28,8 +28,11 @@ func TestParseNudgeJSON_ValidUpdates(t *testing.T) {
 func TestParseNudgeJSON_EmptyUpdates(t *testing.T) {
 	raw := `{"updates":[]}`
 	ext := parseNudgeJSON(raw)
-	if ext != nil {
-		t.Fatal("expected nil for empty updates")
+	if ext == nil {
+		t.Fatal("expected non-nil for empty updates (noop signal)")
+	}
+	if len(ext.Updates) != 0 {
+		t.Fatalf("expected 0 updates, got %d", len(ext.Updates))
 	}
 }
 
@@ -323,8 +326,31 @@ func TestParseNudgeJSONWithError_EmptyUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ext != nil {
-		t.Fatal("expected nil for empty updates")
+	if ext == nil {
+		t.Fatal("expected non-nil for empty updates (noop signal)")
+	}
+	if len(ext.Updates) != 0 {
+		t.Fatalf("expected 0 updates, got %d", len(ext.Updates))
+	}
+}
+
+// Regression: {"updates":[]} must be recorded as noop, not invalid.
+// The nudge prompt explicitly tells the model to return this when nothing
+// to save — treating it as invalid wastes budget and misdiagnoses the LLM.
+func TestParseNudgeJSON_EmptyUpdatesIsValid(t *testing.T) {
+	raw := `{"updates":[]}`
+	ext, err := parseNudgeJSONWithError(raw)
+	if err != nil {
+		t.Fatalf("expected no error for valid empty updates, got: %v", err)
+	}
+	if ext == nil {
+		t.Fatal("expected parsed result, not nil")
+	}
+	if ext.Updates == nil {
+		t.Fatal("expected non-nil Updates slice")
+	}
+	if len(ext.Updates) != 0 {
+		t.Fatalf("expected 0 updates, got %d", len(ext.Updates))
 	}
 }
 

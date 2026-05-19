@@ -92,8 +92,11 @@ func parseNudgeJSONWithError(raw string) (*nudgeExtraction, error) {
 		u.Facts = dedupeStrings(u.Facts)
 	}
 
+	// Return non-nil even for empty updates: {"updates":[]} is a valid noop
+	// signal from the model ("nothing to save"), not an error. The caller
+	// distinguishes noop vs invalid by checking ext.Updates length.
 	if len(ext.Updates) == 0 {
-		return nil, nil
+		return &ext, nil
 	}
 	return &ext, nil
 }

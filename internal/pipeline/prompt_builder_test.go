@@ -94,6 +94,146 @@ func TestBuildProjectDocsSection_UsesPersistedBinding(t *testing.T) {
 	}
 }
 
+func TestLoadMemoryContents_CompactModeIncludesIndexAndCurrentTask(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create MEMORY.md index
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("# Index\n- [Note 1](note1.md)\n- [Note 2](note2.md)"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Create current_task.md (should be included in compact mode)
+	if err := os.WriteFile(filepath.Join(dir, "current_task.md"), []byte("Working on feature X"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Create several large files that should be skipped in compact mode
+	for i := 0; i < 10; i++ {
+		content := strings.Repeat("x", 5000) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("large-%02d.md", i)), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
+	got := bc.loadMemoryDirCompact(dir)
+
+	if got == "" {
+		t.Fatal("expected non-empty compact output")
+	}
+
+	// Must include MEMORY.md index
+	if !strings.Contains(got, "MEMORY.md") {
+		t.Fatal("expected MEMORY.md index in compact output, got:", got)
+	}
+
+	// Must include current_task.md
+	if !strings.Contains(got, "current_task.md") {
+		t.Fatal("expected current_task.md in compact output, got:", got)
+	}
+
+	// Must include compact mode notice
+	if !strings.Contains(got, "compact") && !strings.Contains(got, "Compact") {
+		t.Fatal("expected compact mode notice, got:", got)
+	}
+
+	// Should NOT include most large files (at most compactExtraFiles non-index files)
+	if strings.Count(got, "**large-") > compactExtraFiles {
+		t.Fatalf("expected at most %d large files in compact output, got more", compactExtraFiles)
+	}
+}
+
+func TestLoadMemoryContents_CompactModeStaysUnderBudget(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create MEMORY.md index (within maxMemoryIndexChars)
+	indexContent := "# Index\n" + strings.Repeat("- entry\n", 100)
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(indexContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Create current_task.md
+	if err := os.WriteFile(filepath.Join(dir, "current_task.md"), []byte("Current task"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Create 20 large files (each 5KB)
+	for i := 0; i < 20; i++ {
+		content := strings.Repeat("x", 5000) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("note-%02d.md", i)), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
+	got := bc.loadMemoryDirCompact(dir)
+
+	// Compact mode should be well under maxMemoryTotalChars
+	if len(got) > maxMemoryTotalChars {
+		t.Fatalf("compact memory content length = %d, want <= %d", len(got), maxMemoryTotalChars)
+	}
+
+	// Compact mode should be under maxMemoryIndexChars + some margin for extras
+	// Index content + current_task + up to 3 extra files + notice
+	if !strings.Contains(got, "MEMORY.md") {
+		t.Fatal("expected MEMORY.md in compact output")
+	}
+	if !strings.Contains(got, "current_task.md") {
+		t.Fatal("expected current_task.md in compact output")
+	}
+}
+
+func TestLoadMemoryContents_TriggersCompactModeAtThreshold(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a global memory layer large enough to exceed memorySummaryTriggerChars (30KB).
+	// 30 files × 1000 chars each = 30KB, plus MEMORY.md = triggers compact mode for next layer
+	// while leaving ~9KB of budget for the topic layer compact output.
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("# Index\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		content := strings.Repeat("y", 1000) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file-%02d.md", i)), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create a topic layer that should use compact mode
+	topicDir := filepath.Join(dir, "topics", "chat_1", "thread_2")
+	if err := os.MkdirAll(topicDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(topicDir, "MEMORY.md"), []byte("# Topic Index\n- item"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(topicDir, "current_task.md"), []byte("Topic task"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Use small topic files (2000 chars each) so compact output fits within remaining
+	// budget and the compact mode notice survives truncation.
+	for i := 0; i < 10; i++ {
+		content := strings.Repeat("z", 2000)
+		if err := os.WriteFile(filepath.Join(topicDir, fmt.Sprintf("topic-%02d.md", i)), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
+	got := bc.loadMemoryContents(1, 2, nil)
+
+	// Total should be within budget
+	if len(got) > maxMemoryTotalChars {
+		t.Fatalf("memory content length = %d, want <= %d", len(got), maxMemoryTotalChars)
+	}
+
+	// Global layer appears in full
+	if !strings.Contains(got, "MEMORY.md") {
+		t.Fatal("expected global MEMORY.md in output")
+	}
+
+	// Topic layer should be in compact mode (has compact notice)
+	if !strings.Contains(got, "compact") && !strings.Contains(got, "Compact") {
+		t.Fatal("expected topic layer in compact mode with notice")
+	}
+}
+
 func TestLoadMemoryContents_IsolatesProjectPrivateByThread(t *testing.T) {
 	root := t.TempDir()
 	// PathResolver root is private; use AURELIA_HOME path through New for real resolver.

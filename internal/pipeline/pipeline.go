@@ -542,12 +542,33 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	s.recordUsage(chatID, threadID, ev)
 	finalText := strings.TrimSpace(assistantText.String())
 	if finalText == "" {
-		log.Printf("bridge: empty result chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d content_len=0",
-			chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
-		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
-		if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
-			log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
+		if emptyResultHadWork(ev) {
+			log.Printf("bridge: empty result after work chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d",
+				chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
+
+			// Deactivate session so next turn does not Continue into a suspect session
+			if s.sessions != nil {
+				s.sessions.Deactivate(chatID, threadID)
+			}
+
+			// Capture tool summary before completeRunLog cleans up the state
+			toolSummary := s.getRunToolSummary(chatID, threadID)
+
+			s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result after work")
+
+			recoveryMsg := buildEmptyResultRecoveryMessage(toolSummary)
+			if err := s.output.SendError(chatID, threadID, recoveryMsg); err != nil {
+				log.Printf("Failed to send recovery message to chat %d: %v", chatID, err)
+			}
+		} else {
+			log.Printf("bridge: empty result (no work) chat=%d thread=%d request=%s",
+				chatID, threadID, ev.RequestID)
+			s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
+			if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
+				log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
+			}
 		}
+
 		s.output.ConfirmMessage(chatID, messageID)
 		return OutcomeLLMError
 	}
