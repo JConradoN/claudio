@@ -19,6 +19,7 @@ import (
 // ProgressReporter reports bridge tool activity to the chat transport.
 type ProgressReporter interface {
 	ReportTool(toolName string)
+	ReportText(text string)
 	Delete()
 }
 

@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] - 2026-05-20
+
+### Adicionado
+- Timeout deslizante (idle timeout): substitui o timeout fixo de 10 minutos por
+  um teto máximo de 30 minutos + janela deslizante de 2 minutos sem eventos.
+  Se o bridge estiver produzindo eventos (text_delta, tool_use), o cronômetro
+  reseta — eliminando timeouts falsos em tarefas longas mas ativas.
+- Streaming de texto em tempo real: o texto gerado pelo modelo (eventos
+  `assistant`/text_delta) é enviado ao usuário durante o processamento via
+  edição da mensagem de progresso, eliminando o silêncio durante tarefas longas.
+- Métricas de progresso: a barra de progresso agora exibe o número de
+  ferramentas usadas, total aproximado de caracteres gerados, e um snippet
+  do texto sendo produzido (truncado a 400 caracteres).
+
+### Alterado
+- `bridgeExecutionTimeout` aumentado de 10 para 30 minutos.
+- Timeout do bridge JS (`timeoutMs`) aumentado de 10 para 30 minutos para
+  alinhamento com o timeout máximo do Go.
+- `handleContextOutcome` agora reconhece qualquer erro de contexto (`ctx.Err() != nil`),
+  não apenas `DeadlineExceeded`, cobrindo corretamente cancelamentos por idle timeout.
+
 ## [0.9.0] - 2026-05-20
 
 ### Adicionado

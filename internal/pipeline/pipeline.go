@@ -33,7 +33,8 @@ type runLogState struct {
 const (
 	classifyTimeout        = 5 * time.Second
 	classifyMinTextLen     = 10
-	bridgeExecutionTimeout = 10 * time.Minute
+	bridgeExecutionTimeout = 30 * time.Minute
+	idleBridgeTimeout      = 2 * time.Minute
 
 	bridgeConnectErrorMessage = "Falha ao conectar com o processador.\n\n" +
 		"Dica: verifique se o daemon está rodando. Se persistir, tente /new para reiniciar a sessão."
@@ -425,8 +426,27 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	progress := s.output.NewProgress(chatID, threadID)
 	defer progress.Delete()
 
-	ctx, cancel := context.WithTimeout(parentCtx, bridgeExecutionTimeout)
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+
+	// Max timeout goroutine — safety net after 30min
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("pipeline: panic in maxTimeout goroutine: %v", r)
+			}
+		}()
+		timer := time.NewTimer(bridgeExecutionTimeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			log.Printf("pipeline: max execution timeout (%s) reached chat=%d thread=%d",
+				bridgeExecutionTimeout, chatID, threadID)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	cancelDone := s.cancelBridgeOnContextDone(ctx, req.RequestID)
 	defer cancelDone()
 
@@ -448,6 +468,10 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 		}
 	} else {
 		ch, err = s.bridge.Execute(ctx, req)
+	}
+
+	if ch != nil {
+		ch = idleTimeoutWrapper(ctx, ch, idleBridgeTimeout, cancel)
 	}
 
 	var outcome Outcome
@@ -534,6 +558,10 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 		return
 	}
 
+	if ch != nil {
+		ch = idleTimeoutWrapper(ctx, ch, idleBridgeTimeout, cancel)
+	}
+
 	toolUseSignal := make(chan struct{}, 16)
 	go heartbeatMonitor(ctx.Done(), toolUseSignal, chatID, threadID, s.output)
 	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal)
@@ -572,7 +600,7 @@ func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Co
 		s.completeRunLog(chatID, threadID, runlog.RunCanceled, "", "cancelado pelo usuário")
 		return true
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	if ctx.Err() != nil {
 		log.Printf("pipeline: run timeout chat=%d thread=%d", chatID, threadID)
 		s.patchContinuityFailure(chatID, threadID, "timed_out", "timeout")
 		s.completeRunLog(chatID, threadID, runlog.RunTimedOut, "", "timeout")
@@ -658,7 +686,9 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			if toolName == "" {
 				toolName = "tool"
 			}
-			progress.ReportTool(toolName)
+			if progress != nil {
+				progress.ReportTool(toolName)
+			}
 			s.recordToolUse(chatID, threadID, toolName)
 			if toolUseSignal != nil {
 				select {
@@ -678,6 +708,9 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			}
 		case "assistant":
 			assistantText.WriteString(eventContent(ev))
+			if progress != nil {
+				progress.ReportText(assistantText.String())
+			}
 		case "result":
 			return s.handleResultEvent(chatID, threadID, messageID, ev, &assistantText, userText)
 		case "error":

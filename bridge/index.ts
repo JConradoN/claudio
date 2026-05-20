@@ -692,7 +692,7 @@ async function handleQuery(req: Request): Promise<void> {
     `query start — rid=${reqId} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
   );
 
-  const timeoutMs = 10 * 60 * 1000;
+  const timeoutMs = 30 * 60 * 1000;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let canceled = false;
   let terminalEmitted = false;
@@ -720,8 +720,8 @@ async function handleQuery(req: Request): Promise<void> {
 
   activeRequests.set(reqId, { cancel: cancelActive });
   timeout = setTimeout(() => {
-    redactedLog(`query timeout — rid=${reqId} no result after 10 minutes`);
-    cancelActive("query timeout: no result after 10 minutes");
+    redactedLog(`query timeout — rid=${reqId} no result after 30 minutes`);
+    cancelActive("query timeout: no result after 30 minutes");
   }, timeoutMs);
 
   try {

@@ -15,15 +15,16 @@ import (
 const progressEditInterval = 1500 * time.Millisecond
 
 type progressReporter struct {
-	bot       *telebot.Bot
-	chat      *telebot.Chat
-	msg       *telebot.Message
-	tools     []string
-	threadID  int
-	startTime time.Time
-	lastText  string
-	lastEdit  time.Time
-	mu        sync.Mutex
+	bot           *telebot.Bot
+	chat          *telebot.Chat
+	msg           *telebot.Message
+	tools         []string
+	streamingText string
+	threadID      int
+	startTime     time.Time
+	lastText      string
+	lastEdit      time.Time
+	mu            sync.Mutex
 }
 
 func newProgressReporter(bot *telebot.Bot, chat *telebot.Chat) *progressReporter {
@@ -72,6 +73,67 @@ func (p *progressReporter) ReportTool(toolName string) {
 	p.lastEdit = time.Now()
 }
 
+func (p *progressReporter) ReportText(text string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.streamingText = text
+
+	// Without a bot we cannot send anything — just update internal state.
+	if p.bot == nil {
+		return
+	}
+
+	display := p.buildDisplay()
+	if display == p.lastText {
+		return
+	}
+
+	// Throttle: don't edit more often than progressEditInterval
+	if p.msg != nil && time.Since(p.lastEdit) < progressEditInterval {
+		return
+	}
+
+	if p.msg == nil {
+		sent, err := p.bot.Send(p.chat, display, &telebot.SendOptions{ThreadID: p.threadID})
+		if err != nil {
+			log.Printf("Progress send error: %v", err)
+			return
+		}
+		p.msg = sent
+		p.lastText = display
+		p.lastEdit = time.Now()
+		return
+	}
+
+	_, err := p.bot.Edit(p.msg, display)
+	if err != nil {
+		log.Printf("Progress edit error: %v", err)
+		return
+	}
+	p.lastText = display
+	p.lastEdit = time.Now()
+}
+
+// buildDisplay returns the progress message text, including streaming text
+// snippet when present. Must be called while p.mu is held.
+func (p *progressReporter) buildDisplay() string {
+	text := progressText(p.tools, time.Since(p.startTime))
+	if p.streamingText != "" {
+		toolsCount := len(p.tools)
+		charCount := len([]rune(p.streamingText))
+		text += fmt.Sprintf("\n— %d ferramentas, ~%d caracteres —", toolsCount, charCount)
+		// Text snippet truncated to 400 runes
+		snippet := p.streamingText
+		runes := []rune(snippet)
+		if len(runes) > 400 {
+			snippet = string(runes[:400]) + "..."
+		}
+		text += "\n\n" + snippet
+	}
+	return text
+}
+
 func progressText(tools []string, elapsed time.Duration) string {
 	display := tools
 	if len(display) > 8 {
@@ -94,6 +156,7 @@ func formatProgressDuration(d time.Duration) string {
 func (p *progressReporter) Delete() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.streamingText = ""
 	if p.msg != nil {
 		_ = p.bot.Delete(p.msg)
 		p.msg = nil
