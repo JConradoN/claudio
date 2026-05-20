@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] - 2026-05-20
+
+### Added
+- User Isolation: runtime state now scoped per authorized Telegram user_id
+- TurnContext, SessionKey{chat,thread,user}, ConversationKey{chat,thread}
+- internal/users/ package: Profile (JSON), Resolver (paths), Store (CRUD)
+- migrate-multi-user CLI with --dry-run, --resume, --force, two-phase moves
+- Cron ownership: ListByOwner, GetByOwnerAndID, lifecycle by owner
+- Session/persona per-user: BuildPromptForUser with per-user USER.md
+- Memory/dream/nudge per-user: user-scoped dirs, per-SessionKey buffers
+- Onboarding flow: conversational name+bio, language detection (pt/en)
+- UserGate middleware: intercepts unprofiled users before commands/pipeline
+- /users command (owner-only): list authorized users
+- /forget-me command: self-deletion with inline confirmation
+- Owner-only guard on /model and global config commands
+- CancelAllForUser in pipeline for /forget-me cleanup
+
+### Changed
+- CWD remains shared per conversation (ConversationKey), not per-user
+- Topic memory stays global in ~/.aurelia/topics/
+- NudgeBuffer keyed by SessionKey (chat+thread+user)
+
 ## [0.10.0] - 2026-05-20
 
 ### Adicionado
