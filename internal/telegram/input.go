@@ -401,7 +401,7 @@ func (bc *BotController) flushAlbumAndProcess(chatID int64, albumID string) {
 
 	if len(images) == 0 && partialMsg != "" {
 		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, partialMsg, fa.threadID)
-		ReactToMessage(bc.bot, &telebot.Chat{ID: fa.chatID}, fa.messageID, "✅")
+		ReactToMessage(bc.bot, &telebot.Chat{ID: fa.chatID}, fa.messageID, "🎉")
 		return
 	}
 	if partialMsg != "" {

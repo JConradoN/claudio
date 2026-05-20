@@ -134,7 +134,7 @@ func (o telegramPipelineOutput) ConfirmMessage(chatID int64, messageID int) {
 	if o.bc == nil || o.bc.bot == nil || messageID == 0 {
 		return
 	}
-	ReactToMessage(o.bc.bot, &telebot.Chat{ID: chatID}, messageID, "✅")
+	ReactToMessage(o.bc.bot, &telebot.Chat{ID: chatID}, messageID, "🎉")
 }
 
 func (o telegramPipelineOutput) ExecuteApprovedPlan(chatID int64, messageID int, plan *orchestrator.Plan) {

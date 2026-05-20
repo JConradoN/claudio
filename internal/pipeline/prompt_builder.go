@@ -33,7 +33,6 @@ func (bc *Service) BuildSystemPrompt(userText string, agent *agents.Agent, chatI
 
 func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatID int64, messageID int, threadID int, userID int64) (string, error) {
 	var sections []string
-	var identityLen, personaLen, agentLen, orchLen, cronLen, telegramLen, continuityLen, lastRunLen, longTaskLen, projectDocsLen int
 
 	// Runtime identity — tells the model what provider and model it is running on
 	provider := bc.config.DefaultProvider
@@ -42,7 +41,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 		model = agent.Model
 	}
 	identitySection := fmt.Sprintf("# Runtime Identity\n\nYou are running via the Aurelia bridge over the PI SDK.\nProvider: %s\nModel: %s\nAlways answer accurately when asked what model you are.", provider, model)
-	identityLen = len(identitySection)
 	sections = append(sections, identitySection)
 
 	// Persona prompt
@@ -51,7 +49,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 		if err != nil {
 			log.Printf("Persona prompt error (non-fatal): %v", err)
 		} else if personaPrompt != "" {
-			personaLen = len(personaPrompt)
 			sections = append(sections, personaPrompt)
 		}
 	}
@@ -59,7 +56,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// Agent-specific prompt
 	if agent != nil && agent.Prompt != "" {
 		agentSection := "# Agent Instructions\n\n" + agent.Prompt
-		agentLen = len(agentSection)
 		sections = append(sections, agentSection)
 	}
 
@@ -69,18 +65,15 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	if bc.orchestrator != nil && looksLikePlanningIntent(userText) && bc.effectiveCwd(agent, chatID, threadID) != "" {
 		agentSummaries := bc.buildAgentSummaries()
 		orchSection := orchestrator.BuildOrchestratorPrompt("", agentSummaries)
-		orchLen = len(orchSection)
 		sections = append(sections, orchSection)
 	}
 
 	// Cron scheduling instructions
 	cronSection := bc.buildCronInstructions(chatID)
-	cronLen = len(cronSection)
 	sections = append(sections, cronSection)
 
 	// Telegram interaction instructions
 	telegramSection := bc.buildTelegramInstructions(chatID, messageID, threadID, agent, userID)
-	telegramLen = len(telegramSection)
 	sections = append(sections, telegramSection)
 
 	// Security Boundaries — capability profile and rules for tool usage.
@@ -96,7 +89,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// Placed before the last-run-state checkpoint section and memory sections,
 	// immediately after Telegram/cwd instructions (per spec priority order).
 	if continuitySection := bc.buildContinuitySection(chatID, threadID, userText); continuitySection != "" {
-		continuityLen = len(continuitySection)
 		sections = append(sections, continuitySection)
 	}
 
@@ -104,7 +96,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// the session is cold, or the user text looks like a continuation.
 	// Placed before memory so the model sees it as contextual guidance.
 	if lastRunSection := bc.buildLastRunStateSection(chatID, threadID, userText); lastRunSection != "" {
-		lastRunLen = len(lastRunSection)
 		sections = append(sections, lastRunSection)
 	}
 
@@ -115,13 +106,11 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 
 	// Long-task guidance — prompt the model to checkpoint when the task looks complex
 	if looksLikeLongTask(userText, bc.effectiveCwd(agent, chatID, threadID) != "") {
-		longTaskLen = len("# Long Task Guidance\n\n" + longTaskGuidance())
 		sections = append(sections, "# Long Task Guidance\n\n"+longTaskGuidance())
 	}
 
 	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
 	if projectSection := bc.buildProjectDocsSection(chatID, agent, threadID); projectSection != "" {
-		projectDocsLen = len(projectSection)
 		sections = append(sections, projectSection)
 	}
 
@@ -135,8 +124,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	}
 
 	result := strings.Join(sections, "\n\n")
-	log.Printf("system prompt breakdown: identity=%d persona=%d agent=%d orch=%d cron=%d telegram=%d continuity=%d last_run=%d memory=%d long_task=%d project_docs=%d total=%d chars",
-		identityLen, personaLen, agentLen, orchLen, cronLen, telegramLen, continuityLen, lastRunLen, len(memorySection), longTaskLen, projectDocsLen, len(result))
 
 	return result, nil
 }

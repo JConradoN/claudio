@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1] - 2026-05-20
+
+### Corrigido
+- Telegram reaction emojis agora usam apenas emojis permitidos (👀→👍, ✅→🎉),
+  eliminando erros REACTION_INVALID nos logs.
+- Log de divergência de conteúdo agora só dispara em diferenças significativas (>500 chars),
+  reduzindo ruído de streaming normal do SDK.
+
+### Removido
+- Logs verbosos de session store e system prompt breakdown (~2 linhas/mensagem) removidos.
+
 ## [0.8.0] - 2026-05-20
 
 ### Segurança

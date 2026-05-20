@@ -632,7 +632,6 @@ func (s *Service) handleSystemEvent(chatID int64, threadID int, ev bridge.Event)
 	if ev.SessionID == "" {
 		return
 	}
-	log.Printf("session store: chat=%d thread=%d sid=%s", chatID, threadID, shortSessionID(ev.SessionID))
 	s.sessions.Set(chatID, threadID, ev.SessionID)
 	s.patchContinuitySessionID(chatID, threadID, ev.SessionID)
 }
@@ -646,7 +645,16 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	if content != "" {
 		prior := assistantText.String()
 		if prior != "" && prior != content {
-			log.Printf("bridge: result.Content diverges from accumulated assistant text (%d vs %d chars)", len(prior), len(content))
+			diff := len(prior) - len(content)
+			if diff < 0 {
+				diff = -diff
+			}
+			// Só loga divergência significativa (>500 chars). Divergências pequenas
+			// são normais: o SDK pode consolidar texto entre tool_use/tool_result
+			// de forma diferente dos deltas de streaming.
+			if diff > 500 {
+				log.Printf("bridge: result.Content diverges from accumulated assistant text (%d vs %d chars, diff=%d)", len(prior), len(content), diff)
+			}
 		}
 		assistantText.Reset()
 		assistantText.WriteString(content)
