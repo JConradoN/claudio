@@ -34,13 +34,13 @@ func (b *NudgeBuffer) bumpVersion(key SessionKey) {
 	b.versions[key]++
 }
 
-// AddTurn records a user+assistant exchange for the given chat.
+// AddTurn records a user+assistant exchange for the given chat and user.
 // When the buffer exceeds maxNudgeBufferedMessages, the oldest messages are
 // dropped to stay within the limit.
-func (b *NudgeBuffer) AddTurn(chatID int64, threadID int, userMsg, assistantMsg string) {
+func (b *NudgeBuffer) AddTurn(chatID int64, threadID int, userID int64, userMsg, assistantMsg string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, userID)
 	b.messages[key] = append(b.messages[key],
 		NudgeMessage{Role: "user", Content: userMsg},
 		NudgeMessage{Role: "assistant", Content: assistantMsg},
@@ -61,21 +61,21 @@ func (b *NudgeBuffer) AddTurn(chatID int64, threadID int, userMsg, assistantMsg 
 	b.bumpVersion(key)
 }
 
-// TurnCount returns how many turns have been buffered for the chat.
-func (b *NudgeBuffer) TurnCount(chatID int64, threadID int) int {
+// TurnCount returns how many turns have been buffered for the chat and user.
+func (b *NudgeBuffer) TurnCount(chatID int64, threadID int, userID int64) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.turns[SessionKeyFor(chatID, threadID)]
+	return b.turns[SessionKeyFor(chatID, threadID, userID)]
 }
 
-// Snapshot returns a copy of all buffered messages for the chat thread
+// Snapshot returns a copy of all buffered messages for the chat thread and user
 // without clearing the buffer, plus a version token. Use Commit(token, count)
 // to remove processed messages only if the buffer has not been modified since
 // the snapshot was taken.
-func (b *NudgeBuffer) Snapshot(chatID int64, threadID int) ([]NudgeMessage, uint64) {
+func (b *NudgeBuffer) Snapshot(chatID int64, threadID int, userID int64) ([]NudgeMessage, uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, userID)
 	msgs := b.messages[key]
 	if len(msgs) == 0 {
 		return nil, b.versions[key]
@@ -91,10 +91,10 @@ func (b *NudgeBuffer) Snapshot(chatID int64, threadID int) ([]NudgeMessage, uint
 // the commit is silently skipped — the caller must snapshot again.
 // Count should be even (user+assistant pairs). If count is odd, the last message
 // of the partial pair is silently dropped.
-func (b *NudgeBuffer) Commit(chatID int64, threadID int, version uint64, count int) {
+func (b *NudgeBuffer) Commit(chatID int64, threadID int, userID int64, version uint64, count int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, userID)
 	if b.versions[key] != version {
 		// Buffer was modified since snapshot — do not commit stale data
 		return
@@ -118,12 +118,12 @@ func (b *NudgeBuffer) Commit(chatID int64, threadID int, version uint64, count i
 	b.bumpVersion(key)
 }
 
-// GetAndReset returns all buffered messages for the chat and resets the buffer.
+// GetAndReset returns all buffered messages for the chat and user and resets the buffer.
 // Prefer Snapshot + Commit for retry-safe semantics.
-func (b *NudgeBuffer) GetAndReset(chatID int64, threadID int) []NudgeMessage {
+func (b *NudgeBuffer) GetAndReset(chatID int64, threadID int, userID int64) []NudgeMessage {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, userID)
 	msgs := b.messages[key]
 	delete(b.messages, key)
 	delete(b.turns, key)

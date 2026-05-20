@@ -109,6 +109,64 @@ func (f *fakeCronStore) ListExecutionsByJob(ctx context.Context, jobID string) (
 	return result, nil
 }
 
+func (f *fakeCronStore) ListJobsByOwner(ctx context.Context, ownerUserID string) ([]CronJob, error) {
+	var result []CronJob
+	for _, job := range f.jobs {
+		if job.OwnerUserID == ownerUserID {
+			result = append(result, job)
+		}
+	}
+	return result, nil
+}
+
+func (f *fakeCronStore) GetJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) (*CronJob, error) {
+	for id, job := range f.jobs {
+		if id == jobID && job.OwnerUserID == ownerUserID {
+			copy := job
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeCronStore) DeleteJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error {
+	job, err := f.GetJobByOwnerAndID(ctx, ownerUserID, jobID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("cron job %s not found", jobID)
+	}
+	delete(f.jobs, jobID)
+	return nil
+}
+
+func (f *fakeCronStore) PauseJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error {
+	job, err := f.GetJobByOwnerAndID(ctx, ownerUserID, jobID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("cron job %s not found", jobID)
+	}
+	job.Active = false
+	f.jobs[jobID] = *job
+	return nil
+}
+
+func (f *fakeCronStore) ResumeJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error {
+	job, err := f.GetJobByOwnerAndID(ctx, ownerUserID, jobID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("cron job %s not found", jobID)
+	}
+	job.Active = true
+	f.jobs[jobID] = *job
+	return nil
+}
+
 type fakeCronRuntime struct {
 	results map[string]string
 	errors  map[string]error

@@ -122,7 +122,7 @@ func TestProgressiveSummaryAfterSuccessfulTurn(t *testing.T) {
 
 	// Turn 1: should NOT trigger summarization (interval=2, first turn)
 	// Summary should be PRESERVED from continuity, not overwritten by raw text.
-	svc.afterSuccessfulTurn(42, 0, "user text 1", "assistant response 1", "run-1")
+	svc.afterSuccessfulTurn(42, 0, "user text 1", "assistant response 1", "run-1", 100)
 	state, err := contStore.Get(ctx, 42, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestProgressiveSummaryAfterSuccessfulTurn(t *testing.T) {
 	// Turn 2: should trigger summarization, but bridge is nil so it degrades.
 	// The last turn's continuity still had the preserved summary, so on degrade
 	// the raw text is used as fallback.
-	svc.afterSuccessfulTurn(42, 0, "user text 2", "assistant response 2", "run-2")
+	svc.afterSuccessfulTurn(42, 0, "user text 2", "assistant response 2", "run-2", 100)
 	state, err = contStore.Get(ctx, 42, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestProgressiveSummaryDisabled(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		userText := "user text"
 		assistantText := "assistant response"
-		svc.afterSuccessfulTurn(42, 0, userText, assistantText, "run-x")
+		svc.afterSuccessfulTurn(42, 0, userText, assistantText, "run-x", 100)
 	}
 
 	ctx := t.Context()
@@ -199,7 +199,7 @@ func TestProgressiveSummaryNilContinuity(t *testing.T) {
 	}
 
 	// Should not panic despite nil continuity, nil bridge, nil dreamer
-	svc.afterSuccessfulTurn(42, 0, "user text", "assistant response", "run-id")
+	svc.afterSuccessfulTurn(42, 0, "user text", "assistant response", "run-id", 100)
 }
 
 // TestProgressiveSummaryCounterResetAfterDegrade verifies that even when bridge
@@ -215,8 +215,8 @@ func TestProgressiveSummaryCounterResetAfterDegrade(t *testing.T) {
 
 	// Turn 2 should trigger summarization attempt (nil bridge → degrades)
 	// After degrade, counter should NOT be reset
-	svc.afterSuccessfulTurn(42, 0, "u1", "a1", "r1") // turn 1, no trigger
-	svc.afterSuccessfulTurn(42, 0, "u2", "a2", "r2") // turn 2, trigger + degrade
+	svc.afterSuccessfulTurn(42, 0, "u1", "a1", "r1", 100) // turn 1, no trigger
+	svc.afterSuccessfulTurn(42, 0, "u2", "a2", "r2", 100) // turn 2, trigger + degrade
 
 	// Counter should still be at 2 (not reset since generateProgressiveSummary returned "")
 	sc := svc.summaryCounter

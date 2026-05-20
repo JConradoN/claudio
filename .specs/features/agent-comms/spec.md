@@ -1,8 +1,9 @@
 # Agent Comms — Comunicação Controlada entre Agentes
 
-**Status:** Draft  
+**Roadmap step:** 7  
+**Status:** 🔴 Draft  
 **Depende de:** `.specs/features/agent-orchestration-execution/` para workers, manifest e execução por waves  
-**Depende de:** `.specs/features/security-guard-rails/` para capability profiles, payload policy e audit  
+**Depende de:** `.specs/features/security-guard-rails/` (✅ done) para capability profiles, payload policy e audit  
 **Complementa:** `.specs/features/plan-mode-architecture/` e `.specs/features/auto-skills/`
 
 ## Problem Statement

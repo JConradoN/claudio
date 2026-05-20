@@ -73,7 +73,7 @@ func TestHandleResultEvent_EmptyContent_ReturnsLLMError(t *testing.T) {
 	ev := bridge.Event{Type: "result", Content: ""}
 	var assistantText strings.Builder
 
-	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello")
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello", 100)
 
 	if outcome != OutcomeLLMError {
 		t.Fatalf("expected OutcomeLLMError, got %v", outcome)
@@ -94,7 +94,7 @@ func TestHandleResultEvent_AssistantText_EmptyResult_ReturnsSuccess(t *testing.T
 	var assistantText strings.Builder
 	assistantText.WriteString("Resposta acumulada.")
 
-	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello")
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello", 100)
 
 	if outcome != OutcomeSuccess {
 		t.Fatalf("expected OutcomeSuccess, got %v", outcome)
@@ -114,7 +114,7 @@ func TestHandleResultEvent_ResultContent_ReturnsSuccess(t *testing.T) {
 	ev := bridge.Event{Type: "result", Content: "Resposta direta do modelo."}
 	var assistantText strings.Builder
 
-	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello")
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello", 100)
 
 	if outcome != OutcomeSuccess {
 		t.Fatalf("expected OutcomeSuccess, got %v", outcome)
@@ -156,7 +156,7 @@ func TestHandleResultEvent_TextContent_ReturnsSuccess(t *testing.T) {
 	ev := bridge.Event{Type: "result", Text: "Resposta via campo Text."}
 	var assistantText strings.Builder
 
-	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello")
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello", 100)
 
 	if outcome != OutcomeSuccess {
 		t.Fatalf("expected OutcomeSuccess, got %v", outcome)
@@ -173,7 +173,7 @@ func TestHandleResultEvent_StripsPlanBlockFromNormalReply(t *testing.T) {
 	ev := bridge.Event{Type: "result", Content: "Vou executar.\n\n```aurelia-plan\n{\"tasks\":[{\"id\":\"T1\",\"description\":\"secret\",\"prompt\":\"internal prompt\",\"needs_worktree\":false}]}\n```"}
 	var assistantText strings.Builder
 
-	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello")
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "hello", 100)
 
 	if outcome != OutcomeSuccess {
 		t.Fatalf("expected OutcomeSuccess, got %v", outcome)
@@ -194,7 +194,7 @@ func TestHandleResultEvent_InvalidPlanMarkerIsNotSentRaw(t *testing.T) {
 	ev := bridge.Event{Type: "result", Content: "Now emit plan.\n\n```aurelia-plan\n{not valid json with prompt: secret}\n```"}
 	var assistantText strings.Builder
 
-	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "pode iniciar")
+	outcome := s.handleResultEvent(1, 0, 100, ev, &assistantText, "pode iniciar", 100)
 
 	if outcome != OutcomeSuccess {
 		t.Fatalf("expected OutcomeSuccess, got %v", outcome)

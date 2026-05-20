@@ -1,8 +1,9 @@
 # Security Guard-Rails — Design (Fase 1 + 2)
 
 **Baseado na spec:** `.specs/features/security-guard-rails/spec.md`
-**Status:** Design
-**Escopo:** Fase 1 (Warn) + Fase 2 (Block) — Capability Profiles, PI tool_call hooks, Bash/Filesystem policy, audit logging, perfis mínimos.
+**Roadmap step:** Foundation (✅ 100% done)
+**Status:** Implemented (Fase 1 Warn + Fase 2 Block) — Capability Profiles, PI tool_call hooks, Bash/Filesystem policy, audit logging, perfis mínimos.
+**Implementado em:** v0.8.0 — 44 testes unitários
 
 ---
 

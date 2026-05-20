@@ -15,6 +15,7 @@ import (
 	memoryuxpkg "github.com/igormaneschy/aurelia/internal/memoryux"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runtime"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
@@ -64,6 +65,10 @@ func (bc *BotController) registerContentRoutes() {
 	bc.bot.Handle("/agents", bc.handleAgentsCommand)
 	bc.bot.Handle("/memory", bc.handleMemoryCommand)
 	bc.bot.Handle("/model", bc.handleModelCommand)
+	bc.bot.Handle("/users", bc.handleUsersCommand)
+	bc.bot.Handle("/forgetme", bc.handleForgetMeCommand)
+	bc.bot.Handle("\fforget_me_confirm", bc.handleForgetMeConfirm)
+	bc.bot.Handle("\fforget_me_cancel", bc.handleForgetMeCancel)
 	bc.bot.Handle(telebot.OnCallback, bc.handleModelCallback)
 	bc.bot.Handle(telebot.OnText, bc.handleText)
 	bc.bot.Handle(telebot.OnPhoto, bc.handlePhoto)
@@ -83,6 +88,8 @@ func (bc *BotController) registerSlashMenu() {
 		{Text: "memory", Description: "Ver status da memória e criar checkpoints"},
 		{Text: "model", Description: "Ver/trocar modelo ativo"},
 		{Text: "stop", Description: "Interromper processamento ativo (preserva sessão)"},
+		{Text: "users", Description: "Listar usuários autorizados (owner)"},
+		{Text: "forgetme", Description: "Apagar meus dados e recomeçar"},
 		{Text: "help", Description: "Mostrar comandos disponíveis"},
 	}
 	if err := bc.bot.SetCommands(commands); err != nil {
@@ -216,10 +223,10 @@ func (bc *BotController) handleCwdCommand(c telebot.Context) error {
 		}
 	}
 	// Invalidate memory cache — project changed, memory files may differ
-	bc.invalidateMemoryDirs(chatID, target.ThreadID, cwd)
+	bc.invalidateMemoryDirs(chatID, target.ThreadID, userID, cwd)
 	// If setting group-level from a topic, also invalidate the topic cache
 	if target.ThreadID == 0 && threadID != 0 {
-		bc.invalidateMemoryDirs(chatID, threadID, cwd)
+		bc.invalidateMemoryDirs(chatID, threadID, userID, cwd)
 	}
 
 	var msg string
@@ -250,7 +257,8 @@ func (bc *BotController) handleResetCommand(c telebot.Context) error {
 	defer bc.confirmMessage(c.Message())
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	reply, err := bc.resetCurrentSession(chatID, threadID, true)
+	userID := safeSenderID(c.Sender())
+	reply, err := bc.resetCurrentSession(chatID, threadID, true, userID)
 	if err != nil {
 		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
 	}
@@ -261,7 +269,7 @@ func (bc *BotController) handleUsageCommand(c telebot.Context) error {
 	defer bc.confirmMessage(c.Message())
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	usage := bc.tracker.Get(chatID, threadID)
+	usage := bc.tracker.Get(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: 0})
 	if usage.NumTurns == 0 {
 		return SendTextWithThread(bc.bot, c.Chat(), "Nenhum uso registrado na sessão atual.", threadID)
 	}
@@ -485,7 +493,8 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 
 	chatID := c.Chat().ID
 	threadID := callbackThreadID(c)
-	resetMsg := bc.resetCurrentModelSession(chatID, threadID)
+	userID := safeSenderID(c.Sender())
+	resetMsg := bc.resetCurrentModelSession(chatID, threadID, userID)
 
 	if err := bc.saveDefaultModel(provider, modelID); err != nil {
 		log.Printf("model callback persist: %v", err)
@@ -551,4 +560,64 @@ func callbackThreadID(c telebot.Context) int {
 		return 0
 	}
 	return cb.Message.ThreadID
+}
+
+func (bc *BotController) handleUsersCommand(c telebot.Context) error {
+	defer bc.confirmMessage(c.Message())
+	reply, err := bc.cmdUsers(c)
+	if err != nil {
+		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), c.Message().ThreadID)
+	}
+	return SendTextWithThread(bc.bot, c.Chat(), reply, c.Message().ThreadID)
+}
+
+func (bc *BotController) handleForgetMeCommand(c telebot.Context) error {
+	reply, err := bc.cmdForgetMe(c)
+	if err != nil {
+		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), c.Message().ThreadID)
+	}
+	if reply != "" {
+		return SendTextWithThread(bc.bot, c.Chat(), reply, c.Message().ThreadID)
+	}
+	return nil
+}
+
+func (bc *BotController) handleForgetMeConfirm(c telebot.Context) error {
+	senderID := safeSenderID(c.Sender())
+	_ = bc.bot.Respond(c.Callback(), &telebot.CallbackResponse{Text: "Apagando dados..."})
+
+	// Cancel active runs for this user
+	_ = bc.cancelActiveRunForUser(senderID)
+
+	// Delete cron jobs
+	if bc.cronHandler != nil {
+		ctx := context.Background()
+		jobs, _ := bc.cronHandler.service.ListJobsByOwner(ctx, fmt.Sprintf("%d", senderID))
+		for _, j := range jobs {
+			_ = bc.cronHandler.service.DeleteJobByOwner(ctx, fmt.Sprintf("%d", senderID), j.ID)
+		}
+	}
+
+	// Delete user data
+	if err := bc.userStore.Delete(senderID); err != nil {
+		return err
+	}
+
+	// Edit the original message to show confirmation
+	_, err := c.Bot().Send(c.Chat(), "Seus dados foram apagados. Próxima mensagem iniciará o onboarding.", &telebot.SendOptions{ThreadID: callbackThreadID(c)})
+	return err
+}
+
+func (bc *BotController) handleForgetMeCancel(c telebot.Context) error {
+	_ = bc.bot.Respond(c.Callback(), &telebot.CallbackResponse{Text: "Cancelado"})
+	_, err := c.Bot().Send(c.Chat(), "Operação cancelada. Seus dados foram preservados.", &telebot.SendOptions{ThreadID: callbackThreadID(c)})
+	return err
+}
+
+// cancelActiveRunForUser cancels all active runs for a given user across all chats/threads.
+func (bc *BotController) cancelActiveRunForUser(userID int64) bool {
+	if bc == nil || bc.pipeline == nil {
+		return false
+	}
+	return bc.pipeline.CancelAllForUser(userID)
 }

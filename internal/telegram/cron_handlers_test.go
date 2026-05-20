@@ -22,12 +22,20 @@ type fakeCronCommandService struct {
 		timestamp string
 		prompt    string
 	}
-	listCalls []struct {
-		chatID int64
+	listByOwnerCalls []string
+	pauseByOwnerCalls []struct {
+		userID string
+		jobID  string
 	}
-	pauseCalls  []string
-	resumeCalls []string
-	deleteCalls []string
+	resumeByOwnerCalls []struct {
+		userID string
+		jobID  string
+	}
+	deleteByOwnerCalls []struct {
+		userID string
+		jobID  string
+	}
+	deleteCalls []string // tracked for unscoped DeleteJob
 
 	jobs    []cron.CronJob
 	addErr  error
@@ -61,7 +69,14 @@ func (f *fakeCronCommandService) AddOnceJob(ctx context.Context, userID string, 
 }
 
 func (f *fakeCronCommandService) ListJobs(ctx context.Context, chatID int64) ([]cron.CronJob, error) {
-	f.listCalls = append(f.listCalls, struct{ chatID int64 }{chatID: chatID})
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.jobs, nil
+}
+
+func (f *fakeCronCommandService) ListJobsByOwner(ctx context.Context, ownerUserID string) ([]cron.CronJob, error) {
+	f.listByOwnerCalls = append(f.listByOwnerCalls, ownerUserID)
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -69,17 +84,39 @@ func (f *fakeCronCommandService) ListJobs(ctx context.Context, chatID int64) ([]
 }
 
 func (f *fakeCronCommandService) PauseJob(ctx context.Context, jobID string) error {
-	f.pauseCalls = append(f.pauseCalls, jobID)
+	return nil
+}
+
+func (f *fakeCronCommandService) PauseJobByOwner(ctx context.Context, ownerUserID, jobID string) error {
+	f.pauseByOwnerCalls = append(f.pauseByOwnerCalls, struct {
+		userID string
+		jobID  string
+	}{userID: ownerUserID, jobID: jobID})
 	return nil
 }
 
 func (f *fakeCronCommandService) ResumeJob(ctx context.Context, jobID string) error {
-	f.resumeCalls = append(f.resumeCalls, jobID)
+	return nil
+}
+
+func (f *fakeCronCommandService) ResumeJobByOwner(ctx context.Context, ownerUserID, jobID string) error {
+	f.resumeByOwnerCalls = append(f.resumeByOwnerCalls, struct {
+		userID string
+		jobID  string
+	}{userID: ownerUserID, jobID: jobID})
 	return nil
 }
 
 func (f *fakeCronCommandService) DeleteJob(ctx context.Context, jobID string) error {
 	f.deleteCalls = append(f.deleteCalls, jobID)
+	return nil
+}
+
+func (f *fakeCronCommandService) DeleteJobByOwner(ctx context.Context, ownerUserID, jobID string) error {
+	f.deleteByOwnerCalls = append(f.deleteByOwnerCalls, struct {
+		userID string
+		jobID  string
+	}{userID: ownerUserID, jobID: jobID})
 	return nil
 }
 
@@ -142,8 +179,8 @@ func TestCronCommandHandler_HandleText_ListJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleText() error = %v", err)
 	}
-	if len(service.listCalls) != 1 {
-		t.Fatalf("expected one list call, got %d", len(service.listCalls))
+	if len(service.listByOwnerCalls) != 1 || service.listByOwnerCalls[0] != "user-1" {
+		t.Fatalf("expected one listByOwner call for user-1, got %#v", service.listByOwnerCalls)
 	}
 	if !strings.Contains(reply, "job-a") || !strings.Contains(reply, "job-b") {
 		t.Fatalf("expected listed jobs in reply, got %q", reply)
@@ -166,14 +203,14 @@ func TestCronCommandHandler_HandleText_PauseResumeDelete(t *testing.T) {
 		t.Fatalf("delete HandleText() error = %v", err)
 	}
 
-	if len(service.pauseCalls) != 1 || service.pauseCalls[0] != "job-a" {
-		t.Fatalf("unexpected pause calls: %#v", service.pauseCalls)
+	if len(service.pauseByOwnerCalls) != 1 || service.pauseByOwnerCalls[0].jobID != "job-a" || service.pauseByOwnerCalls[0].userID != "user-1" {
+		t.Fatalf("unexpected pause calls: %#v", service.pauseByOwnerCalls)
 	}
-	if len(service.resumeCalls) != 1 || service.resumeCalls[0] != "job-a" {
-		t.Fatalf("unexpected resume calls: %#v", service.resumeCalls)
+	if len(service.resumeByOwnerCalls) != 1 || service.resumeByOwnerCalls[0].jobID != "job-a" || service.resumeByOwnerCalls[0].userID != "user-1" {
+		t.Fatalf("unexpected resume calls: %#v", service.resumeByOwnerCalls)
 	}
-	if len(service.deleteCalls) != 1 || service.deleteCalls[0] != "job-a" {
-		t.Fatalf("unexpected delete calls: %#v", service.deleteCalls)
+	if len(service.deleteByOwnerCalls) != 1 || service.deleteByOwnerCalls[0].jobID != "job-a" || service.deleteByOwnerCalls[0].userID != "user-1" {
+		t.Fatalf("unexpected delete calls: %#v", service.deleteByOwnerCalls)
 	}
 }
 

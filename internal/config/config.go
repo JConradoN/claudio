@@ -105,6 +105,22 @@ type AppConfig struct {
 	// SummaryInterval controls how many successful turns between progressive
 	// LLM summarization for continuity. 0 disables summarization (default 5).
 	SummaryInterval int `json:"summary_interval,omitempty"`
+
+	// DefaultOwnerUserID is the fallback user ID when none is explicitly provided.
+	DefaultOwnerUserID int64 `json:"default_owner_user_id,omitempty"`
+}
+
+// DefaultOwnerUserIDOrFallback returns the configured DefaultOwnerUserID, or the
+// first entry in TelegramAllowedUserIDs if DefaultOwnerUserID is zero and the
+// whitelist is non-empty, or 0 if neither is set.
+func (c *AppConfig) DefaultOwnerUserIDOrFallback() int64 {
+	if c.DefaultOwnerUserID != 0 {
+		return c.DefaultOwnerUserID
+	}
+	if len(c.TelegramAllowedUserIDs) > 0 {
+		return c.TelegramAllowedUserIDs[0]
+	}
+	return 0
 }
 
 // VisionFallback returns the configured vision model and provider for image inputs.
@@ -176,6 +192,8 @@ type fileConfig struct {
 	DiskScanEnabled bool                     `json:"disk_scan_enabled,omitempty"`
 	SecurityConfig  security.SecurityConfig `json:"security,omitempty"`
 	SummaryInterval int                      `json:"summary_interval,omitempty"`
+
+	DefaultOwnerUserID int64 `json:"default_owner_user_id,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -206,11 +224,15 @@ func Load(r *runtime.PathResolver) (*AppConfig, error) {
 			return nil, fmt.Errorf("decode app config: %w", err)
 		}
 
-		// Detect legacy format: if providers map is empty but legacy fields present
+		// Detect legacy format: if providers map is empty and the JSON contains
+		// legacy-specific field names (llm_provider, llm_model, or inline API keys).
 		if len(cfg.Providers) == 0 {
 			var legacy legacyFileConfig
-			if err := json.Unmarshal(data, &legacy); err == nil {
-				cfg = migrateLegacy(legacy)
+			if err := json.Unmarshal(data, &legacy); err == nil && legacy.LLMProvider != "" {
+				// Preserve any new-format fields not present in the legacy struct.
+				migrated := migrateLegacy(legacy)
+				migrated.DefaultOwnerUserID = cfg.DefaultOwnerUserID
+				cfg = migrated
 			}
 		}
 	}
@@ -305,6 +327,37 @@ func writeConfigFile(path string, cfg fileConfig) error {
 	return nil
 }
 
+// SetDefaultOwnerUserID reads the config file at r.AppConfig(), sets the
+// default_owner_user_id field, and writes it back atomically (temp + rename).
+// The enclosing directory must already exist (e.g. after runtime.Bootstrap).
+//
+// Uses raw JSON manipulation to avoid deserializing into fileConfig and
+// re-serializing with all-zero maps that could trigger legacy config detection.
+func SetDefaultOwnerUserID(r *runtime.PathResolver, userID int64) error {
+	path := r.AppConfig()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read app config: %w", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse app config: %w", err)
+	}
+	raw["default_owner_user_id"] = userID
+	data, err = json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode app config: %w", err)
+	}
+	data = append(data, '\n')
+
+	// Atomic write: temp file + rename to prevent partial writes on crash.
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("write app config: %w", err)
+	}
+	return os.Rename(tmpPath, path)
+}
+
 func toAppConfig(cfg fileConfig) *AppConfig {
 	// Normalize provider keys once so lookups don't need repeated normalization.
 	normalized := make(map[string]ProviderConfig, len(cfg.Providers))
@@ -332,5 +385,6 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		DiskScanEnabled:         cfg.DiskScanEnabled,
 		SecurityConfig:          cfg.SecurityConfig,
 		SummaryInterval:         cfg.SummaryInterval,
+		DefaultOwnerUserID:      cfg.DefaultOwnerUserID,
 	}
 }

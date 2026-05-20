@@ -1,7 +1,10 @@
 # User Isolation — Tasks
 
 **Design:** `.specs/features/multi-user-profiles/design.md`
-**Status:** Revised (decisões 1-17 aplicadas após review)
+**Roadmap step:** 1 — Sprint A
+**Status:** 🔴 A implementar (0%)
+**Depende de:** Nada (fundação do roadmap)
+**Desbloqueia:** Todo o resto (Orchestration, Plan Mode, Memory, Wiki, Nudge, Comms, Skills)
 
 ---
 

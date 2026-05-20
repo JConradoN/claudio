@@ -24,6 +24,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 	"github.com/igormaneschy/aurelia/internal/telegram"
+	"github.com/igormaneschy/aurelia/internal/users"
 	"github.com/igormaneschy/aurelia/pkg/stt"
 )
 
@@ -41,6 +42,8 @@ type app struct {
 	scheduler  *cron.Scheduler
 	cronCtx    context.Context
 	cronCancel context.CancelFunc
+
+	onboardingStore *users.OnboardingStore
 }
 
 var runClaudeAuthStatus = func() ([]byte, error) {
@@ -66,6 +69,10 @@ func bootstrapApp() (*app, error) {
 	}
 	if err := runtime.Bootstrap(resolver); err != nil {
 		return nil, fmt.Errorf("bootstrap instance directory: %w", err)
+	}
+
+	if err := checkMigrationLock(resolver); err != nil {
+		return nil, err
 	}
 
 	cfg, err := config.Load(resolver)
@@ -143,8 +150,28 @@ func bootstrapApp() (*app, error) {
 		return nil, fmt.Errorf("initialize continuity store: %w", err)
 	}
 
+	onboardingStore, err := users.NewOnboardingStoreFromFile(resolver.DBPath("onboarding.db"))
+	if err != nil {
+		if closeErr := continuityStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close continuity store: %v", closeErr)
+		}
+		if closeErr := runLogStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close runlog store: %v", closeErr)
+		}
+		if closeErr := bindings.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close project binding store: %v", closeErr)
+		}
+		if closeErr := cronStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close cron store: %v", closeErr)
+		}
+		return nil, fmt.Errorf("initialize onboarding store: %w", err)
+	}
+
 	transcriber, err := buildTranscriber(cfg)
 	if err != nil {
+		if closeErr := onboardingStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close onboarding store: %v", closeErr)
+		}
 		if closeErr := continuityStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close continuity store: %v", closeErr)
 		}
@@ -186,6 +213,9 @@ func bootstrapApp() (*app, error) {
 		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker, resolver, bindings,
 	)
 	if err != nil {
+		if closeErr := onboardingStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close onboarding store: %v", closeErr)
+		}
 		if closeErr := continuityStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close continuity store: %v", closeErr)
 		}
@@ -202,10 +232,14 @@ func bootstrapApp() (*app, error) {
 	}
 	bot.SetRunLog(runLogStore)
 	bot.SetContinuity(continuityStore)
+	bot.SetOnboardingStore(onboardingStore)
 
 	// Wire orchestrator — enables autonomous agent orchestration
 	cwd, err := os.Getwd()
 	if err != nil {
+		if closeErr := onboardingStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close onboarding store: %v", closeErr)
+		}
 		if closeErr := continuityStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close continuity store: %v", closeErr)
 		}
@@ -256,7 +290,8 @@ func bootstrapApp() (*app, error) {
 	if cfg.NudgeModel != "" {
 		dreamCfg.NudgeModel = cfg.NudgeModel
 	}
-	dreamer := dream.New(resolver.Memory(), resolver, br, dreamCfg)
+	userResolver := users.NewResolver(resolver.Root())
+	dreamer := dream.New(userResolver, resolver, br, dreamCfg)
 	bot.SetDreamer(dreamer)
 
 	// Wire project index for fast project lookup.
@@ -287,8 +322,11 @@ func bootstrapApp() (*app, error) {
 		}
 	}()
 
-	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider, exePath)
+	scheduler, err := setupCronScheduler(cronStore, br, agentReg, personaSvc, bot, resolver.Memory(), cfg.DefaultProvider, exePath, users.NewResolver(resolver.Root()))
 	if err != nil {
+		if closeErr := onboardingStore.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close onboarding store: %v", closeErr)
+		}
 		if closeErr := continuityStore.Close(); closeErr != nil {
 			log.Printf("Warning: failed to close continuity store: %v", closeErr)
 		}
@@ -307,19 +345,20 @@ func bootstrapApp() (*app, error) {
 	cronCtx, cronCancel := context.WithCancel(context.Background())
 
 	return &app{
-		config:     cfg,
-		resolver:   resolver,
-		bridge:     br,
-		agents:     agentReg,
-		cronStore:  cronStore,
-		bindings:   bindings,
-		runLog:     runLogStore,
-		continuity: continuityStore,
-		bot:        bot,
-		sessions:   sessions,
-		scheduler:  scheduler,
-		cronCtx:    cronCtx,
-		cronCancel: cronCancel,
+		config:          cfg,
+		resolver:        resolver,
+		bridge:          br,
+		agents:          agentReg,
+		cronStore:       cronStore,
+		bindings:        bindings,
+		runLog:          runLogStore,
+		continuity:      continuityStore,
+		bot:             bot,
+		sessions:        sessions,
+		scheduler:       scheduler,
+		cronCtx:         cronCtx,
+		cronCancel:      cronCancel,
+		onboardingStore: onboardingStore,
 	}, nil
 }
 
@@ -391,6 +430,7 @@ func setupCronScheduler(
 	memoryDir string,
 	defaultProvider string,
 	exePath string,
+	userResolver *users.Resolver,
 ) (*cron.Scheduler, error) {
 	if agentReg == nil {
 		return nil, nil
@@ -404,6 +444,9 @@ func setupCronScheduler(
 		defaultProvider,
 	)
 	cronRuntime.SetExePath(exePath)
+	if userResolver != nil {
+		cronRuntime.SetUserResolver(userResolver)
+	}
 
 	delivery := cron.NewTelegramDelivery(bot.ChatSender())
 	deliverFn := func(ctx context.Context, job cron.CronJob, result *cron.ExecutionResult, execErr error) error {
@@ -497,6 +540,11 @@ func (a *app) close() {
 	if a.continuity != nil {
 		if err := a.continuity.Close(); err != nil {
 			log.Printf("Warning: failed to close continuity store: %v", err)
+		}
+	}
+	if a.onboardingStore != nil {
+		if err := a.onboardingStore.Close(); err != nil {
+			log.Printf("Warning: failed to close onboarding store: %v", err)
 		}
 	}
 }

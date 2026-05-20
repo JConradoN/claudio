@@ -104,6 +104,28 @@ func (s *Service) ResumeJob(ctx context.Context, jobID string) error {
 	return s.store.UpdateJob(ctx, *job)
 }
 
+// ListJobsByOwner returns all cron jobs owned by the given user.
+func (s *Service) ListJobsByOwner(ctx context.Context, ownerUserID string) ([]CronJob, error) {
+	return s.store.ListJobsByOwner(ctx, ownerUserID)
+}
+
+// DeleteJobByOwner deletes a cron job scoped to the owner.
+// Returns a user-facing error ("not found") for privacy — does not reveal
+// that another user owns the job.
+func (s *Service) DeleteJobByOwner(ctx context.Context, ownerUserID, jobID string) error {
+	return s.store.DeleteJobByOwnerAndID(ctx, ownerUserID, jobID)
+}
+
+// PauseJobByOwner pauses a cron job scoped to the owner.
+func (s *Service) PauseJobByOwner(ctx context.Context, ownerUserID, jobID string) error {
+	return s.store.PauseJobByOwnerAndID(ctx, ownerUserID, jobID)
+}
+
+// ResumeJobByOwner resumes a cron job scoped to the owner.
+func (s *Service) ResumeJobByOwner(ctx context.Context, ownerUserID, jobID string) error {
+	return s.store.ResumeJobByOwnerAndID(ctx, ownerUserID, jobID)
+}
+
 func (s *Service) DeleteJob(ctx context.Context, jobID string) error {
 	fullID, err := s.store.ResolveJobID(ctx, jobID)
 	if err != nil {

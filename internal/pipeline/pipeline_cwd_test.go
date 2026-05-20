@@ -15,7 +15,7 @@ func TestBuildBridgeRequest_DisablesFileToolsInChatMode(t *testing.T) {
 		botCwd:   "/tmp/aurelia-daemon",
 	}
 
-	req := svc.buildBridgeRequest("oi", "system", nil, 42, 0)
+	req := svc.buildBridgeRequest("oi", "system", nil, 42, 0, 0)
 	for _, tool := range chatModeDisallowedTools {
 		if !slices.Contains(req.Options.DisallowedTools, tool) {
 			t.Fatalf("expected %s to be disallowed in chat mode, got %v", tool, req.Options.DisallowedTools)
@@ -32,7 +32,7 @@ func TestBuildBridgeRequest_AllowsFileToolsWhenCwdBound(t *testing.T) {
 		botCwd:   "/tmp/aurelia-daemon",
 	}
 
-	req := svc.buildBridgeRequest("oi", "system", nil, 42, 0)
+	req := svc.buildBridgeRequest("oi", "system", nil, 42, 0, 0)
 	if len(req.Options.DisallowedTools) != 0 {
 		t.Fatalf("expected no chat-mode disallowed tools when cwd is bound, got %v", req.Options.DisallowedTools)
 	}

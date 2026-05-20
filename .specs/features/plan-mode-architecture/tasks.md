@@ -1,7 +1,9 @@
 # Plan Mode Architecture — Tasks
 
 **Design:** `.specs/features/plan-mode-architecture/design.md`
-**Status:** Revised after code review
+**Roadmap step:** 3
+**Status:** 🔴 A implementar (parcial: detecção heurística existe)
+**Depende de:** User Isolation + Orchestration Cycle (ExecutionContext, handoff)
 
 > Depende de User Isolation entregar `TurnContext`, `SessionKey` e `UserGate`.
 > O handoff final depende da Orchestration spec entregar `ExecutionContext` e aceite/preflight do executor.

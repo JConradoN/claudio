@@ -34,6 +34,8 @@ const (
 	CmdSetModel
 	CmdMemoryStatus
 	CmdMemoryCheckpoint
+	CmdUsers
+	CmdForgetMe
 )
 
 // MatchedCommand represents a message that was identified as a system command.
@@ -116,6 +118,15 @@ var commandRules = []commandRule{
 		"memory checkpoint",
 		"checkpoint memoria", "checkpoint de memoria",
 	}, false},
+	// users (owner only)
+	{CmdUsers, []string{
+		"users", "usuarios", "lista usuarios", "lista usuários",
+	}, true},
+	// forget_me
+	{CmdForgetMe, []string{
+		"forget-me", "forget me", "apagar meus dados",
+		"deletar meus dados", "esquecer",
+	}, true},
 }
 
 // accentReplacer maps common Portuguese diacritics to ASCII. Shared with the
@@ -200,7 +211,8 @@ func looksNarrative(prefix string) bool {
 func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) error {
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	log.Printf("command: type=%d chat=%d thread=%d text=%q", cmd.Type, chatID, threadID, cmd.Text)
+	userID := safeSenderID(c.Sender())
+	log.Printf("command: type=%d chat=%d thread=%d user=%d text=%q", cmd.Type, chatID, threadID, userID, cmd.Text)
 	defer bc.confirmMessage(c.Message())
 
 	var reply string
@@ -208,7 +220,7 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 
 	switch cmd.Type {
 	case CmdSessionReset:
-		reply, err = bc.cmdSessionReset(chatID, threadID)
+		reply, err = bc.cmdSessionReset(chatID, threadID, userID)
 	case CmdCronList:
 		reply, err = bc.cmdCronList(chatID)
 	case CmdCronCancel:
@@ -222,11 +234,19 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 	case CmdListModels:
 		reply, err = bc.cmdListModels()
 	case CmdSetModel:
+		if !bc.isOwner(c) {
+			reply = "Permissão negada. Apenas o owner pode trocar o modelo."
+			break
+		}
 		reply, err = bc.cmdSetModel(c, cmd.Text)
 	case CmdMemoryStatus:
 		reply, err = bc.cmdMemoryStatus(c.Chat().ID, c.Message().ThreadID)
 	case CmdMemoryCheckpoint:
 		reply, err = bc.cmdMemoryCheckpoint(c.Chat().ID, c.Message().ThreadID, cmd.Text)
+	case CmdUsers:
+		reply, err = bc.cmdUsers(c)
+	case CmdForgetMe:
+		reply, err = bc.cmdForgetMe(c)
 	default:
 		return fmt.Errorf("unknown command type: %d", cmd.Type)
 	}
@@ -241,38 +261,38 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 
 // --- P1 handlers ---
 
-func (bc *BotController) cmdSessionReset(chatID int64, threadID int) (string, error) {
-	return bc.resetCurrentSession(chatID, threadID, true)
+func (bc *BotController) cmdSessionReset(chatID int64, threadID int, userID int64) (string, error) {
+	return bc.resetCurrentSession(chatID, threadID, true, userID)
 }
 
-func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalidate bool) (string, error) {
-	canceledActive := bc.cancelActiveRun(chatID, threadID)
+func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalidate bool, userID int64) (string, error) {
+	canceledActive := bc.cancelActiveRun(chatID, threadID, userID)
 	var usage session.Usage
 	if bc.tracker != nil {
-		usage = bc.tracker.Get(chatID, threadID)
+		usage = bc.tracker.Get(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID})
 	}
 	if bc.dreamer != nil && bc.sessions != nil {
 		cwd := bc.currentCwd(chatID, threadID)
-		bc.dreamer.FlushNudge(chatID, threadID, cwd, bc.nudgeBuffer)
+		bc.dreamer.FlushNudge(chatID, threadID, userID, cwd, bc.nudgeBuffer)
 		if invalidate {
-			bc.invalidateMemoryDirs(chatID, threadID, cwd)
+			bc.invalidateMemoryDirs(chatID, threadID, userID, cwd)
 		}
 	}
 	if bc.sessions != nil {
 		bc.sessions.ClearSession(chatID, threadID)
 	}
 	if bc.tracker != nil {
-		bc.tracker.Clear(chatID, threadID)
+		bc.tracker.Clear(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID})
 	}
-	log.Printf("command: session reset for chat=%d thread=%d", chatID, threadID)
+	log.Printf("command: session reset for chat=%d thread=%d user=%d", chatID, threadID, userID)
 	return formatResetSummary(usage, canceledActive), nil
 }
 
-func (bc *BotController) cancelActiveRun(chatID int64, threadID int) bool {
+func (bc *BotController) cancelActiveRun(chatID int64, threadID int, userID ...int64) bool {
 	if bc == nil || bc.pipeline == nil {
 		return false
 	}
-	return bc.pipeline.Cancel(chatID, threadID)
+	return bc.pipeline.Cancel(chatID, threadID, userID...)
 }
 
 func formatResetSummary(usage session.Usage, canceledActive bool) string {
@@ -566,7 +586,7 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 	}
 
 	if bc.tracker != nil {
-		usage := bc.tracker.Get(chatID, threadID)
+		usage := bc.tracker.Get(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: 0})
 		if usage.NumTurns > 0 {
 			lines = append(lines, fmt.Sprintf("💬 Sessão: **%d mensagens**, **%d tokens**, **$%.4f**", usage.NumTurns, usage.TotalTokens(), usage.CostUSD))
 		} else {
@@ -796,16 +816,22 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 		bc.refreshProviderEnv()
 	}
 
-	resetMsg := bc.resetCurrentModelSession(c.Chat().ID, c.Message().ThreadID)
+	userID := safeSenderID(c.Sender())
+	resetMsg := bc.resetCurrentModelSession(c.Chat().ID, c.Message().ThreadID, userID)
 
 	return fmt.Sprintf("✅ Modelo alterado para **%s** (provedor: **%s**)\n%s\nPróxima mensagem usará o novo modelo.", matched.ID, matched.Provider, resetMsg), nil
 }
 
-func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int) string {
+func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int, userID ...int64) string {
+	uid := int64(0)
+	if len(userID) > 0 {
+		uid = userID[0]
+	}
 	var usage session.Usage
 	if bc.tracker != nil {
-		usage = bc.tracker.Get(chatID, threadID)
-		bc.tracker.Clear(chatID, threadID)
+		key := session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: uid}
+		usage = bc.tracker.Get(key)
+		bc.tracker.Clear(key)
 	}
 	if bc.sessions != nil {
 		bc.sessions.ClearSession(chatID, threadID)
@@ -917,6 +943,65 @@ func statusRedactSecrets(s string) string {
 	result = statusPasswordRE.ReplaceAllString(result, "[CREDENTIAL_REDACTED]")
 	result = statusPrivateKeyRE.ReplaceAllString(result, "[PRIVATE_KEY_BLOCK_REDACTED]")
 	return result
+}
+
+// isOwner checks whether the sender is the designated owner user.
+func (bc *BotController) isOwner(c telebot.Context) bool {
+	senderID := safeSenderID(c.Sender())
+	if bc.config != nil && senderID == bc.config.DefaultOwnerUserIDOrFallback() {
+		return true
+	}
+	if bc.userStore == nil {
+		return false
+	}
+	profile, err := bc.userStore.Get(senderID)
+	return err == nil && profile != nil && profile.IsOwner
+}
+
+// cmdUsers lists all authorized users (owner only).
+func (bc *BotController) cmdUsers(c telebot.Context) (string, error) {
+	if !bc.isOwner(c) {
+		return "Permissão negada.", nil
+	}
+	profiles, err := bc.userStore.List()
+	if err != nil {
+		return "", err
+	}
+	var lines []string
+	lines = append(lines, "**Usuários autorizados**\n")
+	for _, p := range profiles {
+		status := "onboarded"
+		if p.OnboardedAt.IsZero() {
+			status = "pending"
+		}
+		lines = append(lines, fmt.Sprintf("- %s (id: %d, lang: %s, %s)", p.Name, p.UserID, p.Language, status))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// cmdForgetMe deletes the sender's data and sends a confirmation via inline buttons.
+func (bc *BotController) cmdForgetMe(c telebot.Context) (string, error) {
+	senderID := safeSenderID(c.Sender())
+	if senderID == 0 {
+		return "", fmt.Errorf("invalid sender")
+	}
+
+	// Check if user is the only one in whitelist
+	if len(bc.config.TelegramAllowedUserIDs) <= 1 {
+		return "Você é o único user configurado. Use o comando CLI para resetar.", nil
+	}
+
+	// Show confirmation inline buttons
+	markup := &telebot.ReplyMarkup{}
+	btnConfirm := markup.Data("Confirmar", "forget_me_confirm", fmt.Sprintf("%d", senderID))
+	btnCancel := markup.Data("Cancelar", "forget_me_cancel", fmt.Sprintf("%d", senderID))
+	markup.Inline(markup.Row(btnConfirm, btnCancel))
+
+	_, err := bc.bot.Send(c.Chat(), "Tem certeza que deseja apagar todos os seus dados?", &telebot.SendOptions{
+		ReplyMarkup: markup,
+		ThreadID:    c.Message().ThreadID,
+	})
+	return "", err
 }
 
 // saveDefaultModel persists the default provider and model to the config file.

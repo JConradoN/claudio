@@ -1,7 +1,9 @@
 # User Isolation — Design
 
 **Spec:** `.specs/features/multi-user-profiles/spec.md`
-**Status:** Revised (decisões 1-17 aplicadas após review)
+**Roadmap step:** 1 — P0 Foundation
+**Status:** 🔴 A implementar (0%)
+**Desbloqueia:** Tudo no roadmap (Orchestration, Plan Mode, Memory, Wiki, Nudge, Comms, Skills)
 
 > Directory name remains `multi-user-profiles`, but this design should be read as **User Isolation**. The whitelist remains the auth boundary; this feature isolates runtime state for already-authorized Telegram `user_id`s.
 

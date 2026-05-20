@@ -25,7 +25,7 @@ func TestContinuityAfterSuccessfulTurn(t *testing.T) {
 		runLog:     &fakeRunLogStore{},
 	}
 
-	svc.afterSuccessfulTurn(42, 0, "user text", "assistant response", "run-abc")
+	svc.afterSuccessfulTurn(42, 0, "user text", "assistant response", "run-abc", 100)
 
 	ctx := t.Context()
 	state, err := contStore.Get(ctx, 42, 0)
@@ -110,7 +110,7 @@ func TestContinuityAfterEmptyResult(t *testing.T) {
 	// Trigger empty result with work via handleResultEvent
 	var assistantText strings.Builder
 	ev := newFakeResultEvent("", 5, 1000, 200, 0.05)
-	outcome := svc.handleResultEvent(42, 0, 100, ev, &assistantText, "user intent")
+	outcome := svc.handleResultEvent(42, 0, 100, ev, &assistantText, "user intent", 100)
 
 	if outcome != OutcomeLLMError {
 		t.Fatalf("expected OutcomeLLMError, got %v", outcome)
@@ -192,7 +192,7 @@ func TestContinuityAfterAutoReset(t *testing.T) {
 		sessions:   ss,
 	}
 
-	svc.resetSessionAfterSuccessfulTurn(42, 0)
+	svc.resetSessionAfterSuccessfulTurn(42, 0, 100)
 
 	state, err := contStore.Get(ctx, 42, 0)
 	if err != nil {

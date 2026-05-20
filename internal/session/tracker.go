@@ -52,10 +52,9 @@ func NewTracker() *Tracker {
 }
 
 // Add accumulates token usage for a chat thread. Returns the updated total tokens.
-func (t *Tracker) Add(chatID int64, threadID int, inputTokens, outputTokens, numTurns int, costUSD float64) int {
+func (t *Tracker) Add(key SessionKey, inputTokens, outputTokens, numTurns int, costUSD float64) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
 	u, ok := t.usage[key]
 	if !ok {
 		u = &Usage{}
@@ -72,18 +71,17 @@ func (t *Tracker) Add(chatID int64, threadID int, inputTokens, outputTokens, num
 // Uses real input/output tokens when available (from SDK usage field),
 // falls back to turn-based estimation only when real tokens are zero.
 // Returns true if the session should be reset (threshold exceeded).
-func (t *Tracker) RecordUsage(chatID int64, threadID int, numTurns int, costUSD float64, maxTokens int, inputTokens int, outputTokens int) bool {
+func (t *Tracker) RecordUsage(key SessionKey, numTurns int, costUSD float64, maxTokens int, inputTokens int, outputTokens int) bool {
 	realTokens := inputTokens + outputTokens
 	if realTokens > 0 {
 		// Use real token counts from the SDK
-		totalTokens := t.Add(chatID, threadID, inputTokens, outputTokens, numTurns, costUSD)
+		totalTokens := t.Add(key, inputTokens, outputTokens, numTurns, costUSD)
 		return maxTokens > 0 && totalTokens >= maxTokens
 	}
 
 	// Fallback: estimate from turns when real tokens aren't provided
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
 	estimated := numTurns * estimatedTokensPerTurn
 	u, ok := t.usage[key]
 	if !ok {
@@ -98,10 +96,9 @@ func (t *Tracker) RecordUsage(chatID int64, threadID int, numTurns int, costUSD 
 }
 
 // Get returns the current usage for a chat thread.
-func (t *Tracker) Get(chatID int64, threadID int) Usage {
+func (t *Tracker) Get(key SessionKey) Usage {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	key := SessionKeyFor(chatID, threadID)
 	u := t.usage[key]
 	if u == nil {
 		return Usage{}
@@ -113,11 +110,11 @@ func (t *Tracker) Get(chatID int64, threadID int) Usage {
 // or above 80% of the maxTokens threshold. Returns (false, 0) when no usage
 // has been recorded or the threshold is disabled (maxTokens <= 0).
 // Useful for gentle user nudges rather than hard cutoffs.
-func (t *Tracker) WarningZone(chatID int64, threadID int, maxTokens int) (bool, int) {
+func (t *Tracker) WarningZone(key SessionKey, maxTokens int) (bool, int) {
 	if maxTokens <= 0 {
 		return false, 0
 	}
-	usage := t.Get(chatID, threadID)
+	usage := t.Get(key)
 	total := usage.TotalTokens()
 	if total == 0 {
 		return false, 0
@@ -127,9 +124,8 @@ func (t *Tracker) WarningZone(chatID int64, threadID int, maxTokens int) (bool, 
 }
 
 // Clear resets usage tracking for a chat thread.
-func (t *Tracker) Clear(chatID int64, threadID int) {
+func (t *Tracker) Clear(key SessionKey) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
 	delete(t.usage, key)
 }

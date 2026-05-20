@@ -1,7 +1,9 @@
 # Agent Orchestration — Execution Mode — Tasks
 
 **Design:** `.specs/features/agent-orchestration-execution/design.md`
-**Status:** Draft
+**Roadmap step:** 2 — Close Orchestration Cycle
+**Status:** 🟡 Tasks marcadas para Sprint B
+**Depende de:** User Isolation MVP (TurnContext/user_id) + Project Binding (✅ done)
 
 > Foundational components from the prior iteration are already implemented: plan parsing, wave ordering, basic worktrees, worker execution, validator, prompt builders, status reporter, `UpdateTasksStatus`, and git/PR helpers. This task list closes correctness and safety gaps before autonomous execution can commit.
 

@@ -57,6 +57,11 @@ type Store interface {
 	GetJob(ctx context.Context, jobID string) (*CronJob, error)
 	ResolveJobID(ctx context.Context, prefix string) (string, error)
 	ListJobsByChat(ctx context.Context, chatID int64) ([]CronJob, error)
+	ListJobsByOwner(ctx context.Context, ownerUserID string) ([]CronJob, error)
+	GetJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) (*CronJob, error)
+	DeleteJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error
+	PauseJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error
+	ResumeJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error
 	ListDueJobs(ctx context.Context, now time.Time, limit int) ([]CronJob, error)
 	RecordExecution(ctx context.Context, exec CronExecution) error
 	RecordExecutionTx(ctx context.Context, tx *sql.Tx, exec CronExecution) error

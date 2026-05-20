@@ -1,7 +1,7 @@
 # Persistent Project Binding — Specification
 
-**Status:** Draft  
-**Depende de:** `internal/session` separar `SessionKey` de `ConversationKey` conforme `.specs/features/multi-user-profiles/`  
+**Status:** ✅ **Implemented (v0.7.20+)** — 95% complete  
+**Depende de:** Nada (implementado independente; pendente apenas integração com User Isolation)  
 **Desbloqueia:** Plan Mode, Orchestration Execution, Project Memory, Learning Nudge
 
 ## Problem Statement

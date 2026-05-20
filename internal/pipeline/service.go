@@ -14,6 +14,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/security"
 	"github.com/igormaneschy/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/users"
 )
 
 // ProgressReporter reports bridge tool activity to the chat transport.
@@ -37,9 +38,9 @@ type Output interface {
 
 // Dreamer receives turn lifecycle notifications for memory/nudge updates.
 type Dreamer interface {
-	AfterTurn()
-	AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
-	FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
+	AfterTurn(userID int64)
+	AfterTurnNudge(chatID int64, threadID int, userID int64, cwd string, buffer *session.NudgeBuffer)
+	FlushNudge(chatID int64, threadID int, userID int64, cwd string, buffer *session.NudgeBuffer)
 }
 
 // Config contains dependencies needed by the business pipeline.
@@ -61,6 +62,8 @@ type Config struct {
 	Bindings     projectbinding.Store
 	RunLog       runlog.Store
 	Continuity   continuity.Store
+	UsersStore   *users.Store
+	UserResolver *users.Resolver
 }
 
 // Service owns the LLM/message pipeline independent from Telegram routing.
@@ -91,6 +94,8 @@ type Service struct {
 	continuity     continuity.Store
 	summaryCounter *summaryCounter
 	summaryInterval int
+	usersStore     *users.Store
+	userResolver   *users.Resolver
 }
 
 const defaultSummaryInterval = 5
@@ -121,6 +126,8 @@ func NewService(cfg Config) *Service {
 		continuity:      cfg.Continuity,
 		summaryCounter:  &summaryCounter{counts: make(map[continuity.ConversationKey]int)},
 		summaryInterval: defaultSummaryInterval,
+		usersStore:      cfg.UsersStore,
+		userResolver:    cfg.UserResolver,
 	}
 
 	if cfg.Bridge != nil {
@@ -140,19 +147,36 @@ func NewService(cfg Config) *Service {
 }
 
 // Cancel stops the active run for a chat thread and drops its queued message.
-func (s *Service) Cancel(chatID int64, threadID int) bool {
+func (s *Service) Cancel(chatID int64, threadID int, userID ...int64) bool {
 	if s == nil || s.runs == nil {
 		return false
 	}
-	return s.runs.cancel(runKey{chatID: chatID, threadID: threadID})
+	uid := int64(0)
+	if len(userID) > 0 {
+		uid = userID[0]
+	}
+	return s.runs.cancel(runKey{ChatID: chatID, ThreadID: threadID, UserID: uid})
+}
+
+// CancelAllForUser cancels all active runs for a given user across all chats/threads.
+// Returns true if at least one run was cancelled.
+func (s *Service) CancelAllForUser(userID int64) bool {
+	if s == nil || s.runs == nil {
+		return false
+	}
+	return s.runs.cancelAllForUser(userID)
 }
 
 // WorkStatus returns the active run description and queued message count.
-func (s *Service) WorkStatus(chatID int64, threadID int) (string, int) {
+func (s *Service) WorkStatus(chatID int64, threadID int, userID ...int64) (string, int) {
 	if s == nil || s.runs == nil {
 		return "", 0
 	}
-	return s.runs.status(runKey{chatID: chatID, threadID: threadID})
+	uid := int64(0)
+	if len(userID) > 0 {
+		uid = userID[0]
+	}
+	return s.runs.status(runKey{ChatID: chatID, ThreadID: threadID, UserID: uid})
 }
 
 // SetOrchestrator injects the orchestrator after construction.

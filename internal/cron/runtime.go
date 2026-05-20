@@ -3,8 +3,10 @@ package cron
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
@@ -20,6 +22,7 @@ type BridgeCronRuntime struct {
 	memoryDir       string
 	defaultProvider string
 	exePath         string // path to the aurelia binary for CLI instructions
+	userResolver    interface{ UserMdPath(userID int64) string }
 }
 
 // AgentRegistry resolves agent definitions by name.
@@ -30,6 +33,7 @@ type AgentRegistry interface {
 // PersonaBuilder builds the base system prompt from persona files.
 type PersonaBuilder interface {
 	BuildPrompt() (string, error)
+	BuildPromptForUser(userID int64, resolver interface{ UserMdPath(userID int64) string }, isOwner bool) (string, error)
 }
 
 // NewBridgeCronRuntime creates a runtime that executes jobs via Bridge
@@ -57,10 +61,29 @@ func (r *BridgeCronRuntime) SetExePath(path string) {
 	r.exePath = path
 }
 
+// SetUserResolver configures the user path resolver for per-user persona support.
+func (r *BridgeCronRuntime) SetUserResolver(ur interface{ UserMdPath(userID int64) string }) {
+	r.userResolver = ur
+}
+
 // ExecuteJob builds the system prompt with persona, agent, scheduling
 // instructions and global memory, then executes via Bridge.
 func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*ExecutionResult, error) {
-	basePrompt, err := r.persona.BuildPrompt()
+	var basePrompt string
+	var err error
+	if r.userResolver != nil && job.OwnerUserID != "" {
+		ownerNumeric, parseErr := parseInt64(job.OwnerUserID)
+		if parseErr == nil && ownerNumeric > 0 {
+			basePrompt, err = r.persona.BuildPromptForUser(ownerNumeric, r.userResolver, false)
+		} else {
+			if parseErr != nil {
+				log.Printf("cron: failed to parse OwnerUserID %q as int64 for job %s, using global persona", job.OwnerUserID, job.ID)
+			}
+			basePrompt, err = r.persona.BuildPrompt()
+		}
+	} else {
+		basePrompt, err = r.persona.BuildPrompt()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("build persona prompt: %w", err)
 	}
@@ -75,7 +98,7 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 	// Cron-spawned agents need the scheduling instructions to be able to
 	// create follow-up jobs (e.g. "remind me again in 1 hour"). Without
 	// this section the LLM would invent non-existent internal tools.
-	if cron := r.buildCronInstructions(job.TargetChatID); cron != "" {
+	if cron := r.buildCronInstructions(job.TargetChatID, job.OwnerUserID); cron != "" {
 		sections = append(sections, cron)
 	}
 
@@ -121,7 +144,9 @@ func (r *BridgeCronRuntime) ExecuteJob(ctx context.Context, job CronJob) (*Execu
 // buildCronInstructions mirrors the text injected by the telegram pipeline so
 // agents triggered by cron can schedule follow-up jobs. Returns empty when no
 // target chat is set (the --chat-id flag is required).
-func (r *BridgeCronRuntime) buildCronInstructions(targetChatID int64) string {
+// ownerUserID is included in the CLI example when non-empty, so follow-up jobs
+// inherit the original job's owner.
+func (r *BridgeCronRuntime) buildCronInstructions(targetChatID int64, ownerUserID string) string {
 	if targetChatID == 0 {
 		return ""
 	}
@@ -129,7 +154,12 @@ func (r *BridgeCronRuntime) buildCronInstructions(targetChatID int64) string {
 	if r.exePath != "" {
 		bin = r.exePath
 	}
-	chatFlag := fmt.Sprintf("--chat-id %d", targetChatID)
+	flags := fmt.Sprintf("--chat-id %d", targetChatID)
+	ownerSuffix := ""
+	if ownerUserID != "" {
+		flags = fmt.Sprintf("%s --owner-user-id %s", flags, ownerUserID)
+		ownerSuffix = " If scheduling for yourself, include --owner-user-id <your_user_id>."
+	}
 	return fmt.Sprintf(`## Scheduling Tasks
 
 Use the Aurelia cron CLI for ALL scheduling. Internal scheduling tools die with the session — only the CLI persists.
@@ -138,11 +168,11 @@ Use the Aurelia cron CLI for ALL scheduling. Internal scheduling tools die with 
 - One-time: `+"`%s cron once \"<ISO-timestamp>\" \"<prompt>\" %s`"+`
 - List: `+"`%s cron list %s`"+` | Delete: `+"`%s cron del <id>`"+`
 
-Cron prompts are ACTION instructions (not content). They run in isolated sessions with no history. The --chat-id flag is required.`,
-		bin, chatFlag,
-		bin, chatFlag,
-		bin, chatFlag,
-		bin,
+Cron prompts are ACTION instructions (not content). They run in isolated sessions with no history. The --chat-id flag is required.%s`,
+		bin, flags,
+		bin, flags,
+		bin, flags,
+		bin, ownerSuffix,
 	)
 }
 
@@ -187,6 +217,10 @@ func (r *BridgeCronRuntime) loadGlobalMemory() string {
 		return ""
 	}
 	return sb.String()
+}
+
+func parseInt64(s string) (int64, error) {
+	return strconv.ParseInt(s, 10, 64)
 }
 
 func cap8k(s string, n int) string {

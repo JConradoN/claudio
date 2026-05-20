@@ -1,5 +1,9 @@
 # User Isolation
 
+**Roadmap step:** 1 — P0 Foundation  
+**Depende de:** Nada (fundação do roadmap)  
+**Desbloqueia:** Orchestration Cycle, Plan Mode, Project Memory, Auto-Skills
+
 > Working directory name remains `multi-user-profiles` for compatibility with existing references, but the product framing is **User Isolation**: isolate data for each whitelisted Telegram `user_id`, not turn Aurelia into a multi-tenant platform.
 
 ## Problem Statement

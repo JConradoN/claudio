@@ -9,9 +9,9 @@ import (
 )
 
 func TestNudgeGuard_DifferentKeys_Concurrent(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{})
-	key1 := session.SessionKey{ChatID: 1, ThreadID: 0}
-	key2 := session.SessionKey{ChatID: 2, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{})
+	key1 := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
+	key2 := session.SessionKey{ChatID: 2, ThreadID: 0, UserID: 0}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -42,8 +42,8 @@ func TestNudgeGuard_DifferentKeys_Concurrent(t *testing.T) {
 }
 
 func TestNudgeGuard_SameKey_BlockedAfterAcquire(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{})
-	key := session.SessionKey{ChatID: 1, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{})
+	key := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
 
 	if !d.tryStartNudge(key) {
 		t.Fatal("expected first acquire to succeed")
@@ -58,8 +58,8 @@ func TestNudgeGuard_SameKey_BlockedAfterAcquire(t *testing.T) {
 }
 
 func TestNudgeGuard_SameKey_ReacquireAfterFinish(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{})
-	key := session.SessionKey{ChatID: 1, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{})
+	key := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
 
 	if !d.tryStartNudge(key) {
 		t.Fatal("expected first acquire to succeed")
@@ -74,8 +74,8 @@ func TestNudgeGuard_SameKey_ReacquireAfterFinish(t *testing.T) {
 }
 
 func TestNudgeRateLimit_AllowsFirstRun(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
-	key := session.SessionKey{ChatID: 1, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
+	key := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
 
 	if !d.nudgeRateOK(key) {
 		t.Fatal("expected first run to be allowed (no prior run)")
@@ -83,8 +83,8 @@ func TestNudgeRateLimit_AllowsFirstRun(t *testing.T) {
 }
 
 func TestNudgeRateLimit_BlocksAfterRecentRun(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
-	key := session.SessionKey{ChatID: 1, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
+	key := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key)
 	if d.nudgeRateOK(key) {
@@ -93,8 +93,8 @@ func TestNudgeRateLimit_BlocksAfterRecentRun(t *testing.T) {
 }
 
 func TestNudgeRateLimit_AllowsAfterInterval(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 1 * time.Millisecond})
-	key := session.SessionKey{ChatID: 1, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 1 * time.Millisecond})
+	key := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key)
 	time.Sleep(5 * time.Millisecond)
@@ -104,8 +104,8 @@ func TestNudgeRateLimit_AllowsAfterInterval(t *testing.T) {
 }
 
 func TestNudgeRateLimit_ZeroIntervalAlwaysAllows(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 0})
-	key := session.SessionKey{ChatID: 1, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 0})
+	key := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key)
 	if !d.nudgeRateOK(key) {
@@ -114,8 +114,8 @@ func TestNudgeRateLimit_ZeroIntervalAlwaysAllows(t *testing.T) {
 }
 
 func TestNudgeGC_RemovesStaleEntries(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 1 * time.Millisecond})
-	key := session.SessionKey{ChatID: 99, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 1 * time.Millisecond})
+	key := session.SessionKey{ChatID: 99, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key)
 	time.Sleep(5 * time.Millisecond)
@@ -128,8 +128,8 @@ func TestNudgeGC_RemovesStaleEntries(t *testing.T) {
 }
 
 func TestNudgeGC_KeepsRecentEntries(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
-	key := session.SessionKey{ChatID: 99, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
+	key := session.SessionKey{ChatID: 99, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key)
 	d.nudgeGC()
@@ -140,8 +140,8 @@ func TestNudgeGC_KeepsRecentEntries(t *testing.T) {
 }
 
 func TestNudgeGC_ZeroIntervalUsesDefault(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 0})
-	key := session.SessionKey{ChatID: 99, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 0})
+	key := session.SessionKey{ChatID: 99, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key)
 	d.nudgeGC()
@@ -153,9 +153,9 @@ func TestNudgeGC_ZeroIntervalUsesDefault(t *testing.T) {
 }
 
 func TestNudgeRateLimit_PerKeyTracking(t *testing.T) {
-	d := New("", nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
-	key1 := session.SessionKey{ChatID: 1, ThreadID: 0}
-	key2 := session.SessionKey{ChatID: 2, ThreadID: 0}
+	d := New(nil, nil, nil, DreamConfig{NudgeMinInterval: 10 * time.Minute})
+	key1 := session.SessionKey{ChatID: 1, ThreadID: 0, UserID: 0}
+	key2 := session.SessionKey{ChatID: 2, ThreadID: 0, UserID: 0}
 
 	d.nudgeRecordRun(key1)
 	if !d.nudgeRateOK(key2) {

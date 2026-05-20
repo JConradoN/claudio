@@ -1,7 +1,8 @@
 # Persistent Project Binding — Design
 
 **Spec:** `.specs/features/project-binding/spec.md`  
-**Status:** Draft
+**Roadmap step:** Foundation (✅ 95% done)  
+**Status:** Implemented — pendente apenas User Isolation integration
 
 ---
 

@@ -73,12 +73,12 @@ func TestRunSupervisorQueueInfo(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 7, threadID: 11}
-	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "primeiro"})
+	key := runKey{ChatID: 7, ThreadID: 11, UserID: 0}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "primeiro"})
 	if admission != admitStart || run == nil {
 		t.Fatalf("first admit = (%v, %v), want start", run, admission)
 	}
-	_, admission, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "segundo"})
+	_, admission, _ = rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "segundo"})
 	if admission != admitQueued {
 		t.Fatalf("second admission = %v, want queued", admission)
 	}
@@ -94,12 +94,12 @@ func TestRunSupervisorCancelStopsActiveAndDropsQueue(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 1, threadID: 2}
-	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	key := runKey{ChatID: 1, ThreadID: 2, UserID: 0}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "first"})
 	if admission != admitStart || run == nil {
 		t.Fatalf("first admit = (%v, %v), want start", run, admission)
 	}
-	_, admission, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "second"})
+	_, admission, _ = rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "second"})
 	if admission != admitQueued {
 		t.Fatalf("second admission = %v, want queued", admission)
 	}
@@ -118,7 +118,7 @@ func TestRunSupervisorStatusNoActive(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 999, threadID: 0}
+	key := runKey{ChatID: 999, ThreadID: 0, UserID: 0}
 
 	// No active run for this key — status should not panic and return empty.
 	desc, size := rs.status(key)
@@ -157,8 +157,8 @@ func TestRunSupervisorQueueUpToThree(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 5, threadID: 1}
-	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	key := runKey{ChatID: 5, ThreadID: 1, UserID: 0}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "first"})
 	if admission != admitStart || run == nil {
 		t.Fatalf("first admit = (%v, %v), want start", run, admission)
 	}
@@ -167,7 +167,7 @@ func TestRunSupervisorQueueUpToThree(t *testing.T) {
 	var admits []admissionKind
 	for i := 0; i < 3; i++ {
 		text := fmt.Sprintf("followup-%d", i+1)
-		_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: text})
+		_, adm, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: text})
 		admits = append(admits, adm)
 	}
 	for i, adm := range admits {
@@ -208,8 +208,8 @@ func TestRunSupervisorQueueFull(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 5, threadID: 2}
-	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	key := runKey{ChatID: 5, ThreadID: 2, UserID: 0}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "first"})
 	if admission != admitStart || run == nil {
 		t.Fatalf("first admit = (%v, %v), want start", run, admission)
 	}
@@ -217,14 +217,14 @@ func TestRunSupervisorQueueFull(t *testing.T) {
 	// Fill queue to capacity
 	for i := 0; i < maxQueueDepth; i++ {
 		text := fmt.Sprintf("fill-%d", i+1)
-		_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: text})
+		_, adm, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: text})
 		if adm != admitQueued {
 			t.Fatalf("fill %d admission = %v, want admitQueued", i+1, adm)
 		}
 	}
 
 	// 4th should be rejected
-	_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "too-many"})
+	_, adm, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "too-many"})
 	if adm != admitQueueFull {
 		t.Fatalf("4th admission = %v, want admitQueueFull", adm)
 	}
@@ -238,24 +238,24 @@ func TestRunSupervisorSupersedeClearsQueue(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 5, threadID: 3}
-	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	key := runKey{ChatID: 5, ThreadID: 3, UserID: 0}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "first"})
 	if admission != admitStart || run == nil {
 		t.Fatalf("first admit = (%v, %v), want start", run, admission)
 	}
 
 	// Queue two follow-ups
-	_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "queued-1"})
+	_, adm, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "queued-1"})
 	if adm != admitQueued {
 		t.Fatalf("queued-1 admission = %v, want admitQueued", adm)
 	}
-	_, adm, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "queued-2"})
+	_, adm, _ = rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "queued-2"})
 	if adm != admitQueued {
 		t.Fatalf("queued-2 admission = %v, want admitQueued", adm)
 	}
 
 	// Supersede should clear queue and replace with just the superseding message
-	_, adm, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "na verdade troque tudo"})
+	_, adm, _ = rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "na verdade troque tudo"})
 	if adm != admitSupersede {
 		t.Fatalf("supersede admission = %v, want admitSupersede", adm)
 	}
@@ -275,8 +275,8 @@ func TestRunSupervisorCancelClearsQueue(t *testing.T) {
 	t.Parallel()
 
 	rs := newRunSupervisor()
-	key := runKey{chatID: 5, threadID: 4}
-	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	key := runKey{ChatID: 5, ThreadID: 4, UserID: 0}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: "first"})
 	if admission != admitStart || run == nil {
 		t.Fatalf("first admit = (%v, %v), want start", run, admission)
 	}
@@ -284,7 +284,7 @@ func TestRunSupervisorCancelClearsQueue(t *testing.T) {
 	// Queue a few messages
 	for i := 0; i < 3; i++ {
 		text := fmt.Sprintf("queued-%d", i+1)
-		_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: text})
+		_, adm, _ := rs.admit(pipelineInput{chatID: key.ChatID, threadID: key.ThreadID, text: text})
 		if adm != admitQueued {
 			t.Fatalf("queued-%d admission = %v, want admitQueued", i+1, adm)
 		}

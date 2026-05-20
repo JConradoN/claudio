@@ -1,6 +1,6 @@
 # Security Guard-Rails — Capability Profiles & PI Tool Hooks
 
-**Status:** Draft  
+**Status:** ✅ **Implemented (v0.8.0)** — 100% complete  
 **Companion specs:** `.specs/features/agent-orchestration-execution/`, `.specs/features/agent-comms/`, `.specs/features/pi-resilience/`  
 **Related:** `SECURITY.md`
 

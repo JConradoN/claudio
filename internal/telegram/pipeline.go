@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"log"
 	"time"
 
 	"gopkg.in/telebot.v3"
@@ -9,6 +10,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
+	"github.com/igormaneschy/aurelia/internal/users"
 )
 
 const typingIndicatorInterval = 4 * time.Second
@@ -29,6 +31,38 @@ func (bc *BotController) processInputWithImages(c telebot.Context, text string, 
 		}
 	}
 
+	// UserGate: intercept users without profiles
+	if bc.userGate != nil {
+		switch bc.userGate.Check(senderID) {
+		case UserGateNeedsOnboarding:
+			greeting, err := bc.userGate.Begin(senderID, c.Chat().ID, c.Message().ThreadID, text)
+			if err != nil {
+				return err
+			}
+			defer bc.confirmMessage(c.Message())
+			return SendContextText(c, greeting)
+
+		case UserGateOnboarding:
+			reply, done, err := bc.userGate.Step(senderID, text)
+			if err != nil {
+				return err
+			}
+			defer bc.confirmMessage(c.Message())
+			if err := SendContextText(c, reply); err != nil {
+				return err
+			}
+			if done {
+				// Onboarding complete — re-process the user's original first message
+				firstMsg := bc.userGate.FirstMsg(senderID)
+				if err := bc.userGate.Complete(senderID); err != nil {
+					log.Printf("user_gate: complete error for user %d: %v", senderID, err)
+				}
+				return bc.processInputWithImages(c, firstMsg, images)
+			}
+			return nil
+		}
+	}
+
 	if cmd := MatchCommand(text); cmd != nil {
 		return bc.handleCommand(c, cmd)
 	}
@@ -45,20 +79,32 @@ func (bc *BotController) buildSystemPrompt(userText string, agent *agents.Agent,
 }
 
 func (bc *BotController) processBridgeEventsAsync(chat *telebot.Chat, ch <-chan bridge.Event, progress *progressReporter, userText string, messageID int) bridgeOutcome {
-	return bc.processBridgeEventsAsyncWithThread(chat, ch, progress, userText, messageID, 0)
+	return bc.processBridgeEventsAsyncWithThread(chat, ch, progress, userText, messageID, 0, 0)
 }
 
-func (bc *BotController) processBridgeEventsAsyncWithThread(chat *telebot.Chat, ch <-chan bridge.Event, progress *progressReporter, userText string, messageID int, threadID int) bridgeOutcome {
-	return bridgeOutcome(bc.ensurePipeline().ProcessBridgeEvents(chat.ID, threadID, messageID, ch, progress, userText, nil))
+func (bc *BotController) processBridgeEventsAsyncWithThread(chat *telebot.Chat, ch <-chan bridge.Event, progress *progressReporter, userText string, messageID int, threadID int, userID ...int64) bridgeOutcome {
+	uid := int64(0)
+	if len(userID) > 0 {
+		uid = userID[0]
+	}
+	return bridgeOutcome(bc.ensurePipeline().ProcessBridgeEvents(chat.ID, threadID, messageID, ch, progress, userText, nil, uid))
 }
 
-func (bc *BotController) invalidateMemoryDirs(chatID int64, threadID int, cwd string) {
-	bc.ensurePipeline().InvalidateMemoryDirs(chatID, threadID, cwd)
+func (bc *BotController) invalidateMemoryDirs(chatID int64, threadID int, userID int64, cwd string) {
+	bc.ensurePipeline().InvalidateMemoryDirs(chatID, threadID, userID, cwd)
 }
 
 func (bc *BotController) ensurePipeline() *pipelinepkg.Service {
 	if bc.pipeline != nil {
 		return bc.pipeline
+	}
+	var (
+		userStore    *users.Store
+		userResolver *users.Resolver
+	)
+	if bc.resolver != nil {
+		userResolver = users.NewResolver(bc.resolver.Root())
+		userStore = users.NewStore(userResolver)
 	}
 	bc.pipeline = pipelinepkg.NewService(pipelinepkg.Config{
 		AppConfig:    bc.config,
@@ -78,6 +124,8 @@ func (bc *BotController) ensurePipeline() *pipelinepkg.Service {
 		Bindings:     bc.bindings,
 		RunLog:       bc.runLog,
 		Continuity:   bc.continuity,
+		UsersStore:   userStore,
+		UserResolver: userResolver,
 	})
 	bc.nudgeBuffer = bc.pipeline.NudgeBuffer()
 	return bc.pipeline

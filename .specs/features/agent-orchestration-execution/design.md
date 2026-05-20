@@ -1,7 +1,9 @@
 # Agent Orchestration — Execution Mode — Design
 
 **Spec:** `.specs/features/agent-orchestration-execution/spec.md`
-**Status:** Draft (gap-closing iteration on already-shipped code)
+**Roadmap step:** 2 — Close Orchestration Cycle
+**Status:** 🟡 Parcial (scaffold ~40%, ciclo não fecha)
+**Depende de:** Project Binding (✅ done), User Isolation partial (TurnContext/user_id)
 
 ---
 

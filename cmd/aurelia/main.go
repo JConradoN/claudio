@@ -59,6 +59,11 @@ func main() {
 				log.Fatalf("Telegram command failed: %v", err)
 			}
 			return
+		case "migrate-multi-user":
+			if err := runMigrateMultiUser(os.Args[2:]); err != nil {
+				log.Fatalf("Migration failed: %v", err)
+			}
+			return
 		case "version":
 			fmt.Println(version.BuildInfo())
 			return

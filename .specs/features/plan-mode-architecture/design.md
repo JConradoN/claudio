@@ -1,7 +1,9 @@
 # Plan Mode Architecture — Design
 
 **Spec:** `.specs/features/plan-mode-architecture/spec.md`
+**Roadmap step:** 3
 **Status:** Revised after code review
+**Depende de:** User Isolation (TurnContext, SessionKey, UserGate) + Orchestration Cycle (ExecutionContext, handoff)
 
 ---
 

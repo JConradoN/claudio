@@ -22,6 +22,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/users"
 	"github.com/igormaneschy/aurelia/internal/version"
 	"github.com/igormaneschy/aurelia/pkg/stt"
 )
@@ -49,9 +50,9 @@ type BotController struct {
 	nudgeBuffer      *session.NudgeBuffer
 	botCwd           string // working directory of the aurelia daemon
 	dreamer          interface {
-		AfterTurn()
-		AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
-		FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
+		AfterTurn(userID int64)
+		AfterTurnNudge(chatID int64, threadID int, userID int64, cwd string, buffer *session.NudgeBuffer)
+		FlushNudge(chatID int64, threadID int, userID int64, cwd string, buffer *session.NudgeBuffer)
 	}
 	modelCache         []bridge.ModelInfo
 	modelCacheMu       sync.Mutex
@@ -64,6 +65,11 @@ type BotController struct {
 	continuity         continuity.Store
 	runLog             runlog.Store
 	pipeline           *pipelinepkg.Service
+
+	onboardingStore *users.OnboardingStore
+	userGate        *UserGate
+	userStore       *users.Store
+	userResolver    *users.Resolver
 }
 
 type albumBuffer struct {
@@ -154,21 +160,29 @@ func NewBotController(
 		allowedGroups:    allowedGroups,
 		bindings:         bindings,
 	}
+	if bc.resolver != nil {
+		bc.userResolver = users.NewResolver(bc.resolver.Root())
+		bc.userStore = users.NewStore(bc.userResolver)
+	}
+	userResolver := bc.userResolver
+	userStore := bc.userStore
 	bc.pipeline = pipelinepkg.NewService(pipelinepkg.Config{
-		AppConfig:  bc.config,
-		Bridge:     bc.bridge,
-		Agents:     bc.agents,
-		Persona:    bc.persona,
-		Sessions:   bc.sessions,
-		Tracker:    bc.tracker,
-		Resolver:   bc.resolver,
-		MemoryDir:  bc.memoryDir,
-		ExePath:    bc.exePath,
-		BotCwd:     bc.botCwd,
-		Output:     telegramPipelineOutput{bc: bc},
-		Bindings:   bc.bindings,
-		RunLog:     bc.runLog,
-		Continuity: bc.continuity,
+		AppConfig:    bc.config,
+		Bridge:       bc.bridge,
+		Agents:       bc.agents,
+		Persona:      bc.persona,
+		Sessions:     bc.sessions,
+		Tracker:      bc.tracker,
+		Resolver:     bc.resolver,
+		MemoryDir:    bc.memoryDir,
+		ExePath:      bc.exePath,
+		BotCwd:       bc.botCwd,
+		Output:       telegramPipelineOutput{bc: bc},
+		Bindings:     bc.bindings,
+		RunLog:       bc.runLog,
+		Continuity:   bc.continuity,
+		UsersStore:   userStore,
+		UserResolver: userResolver,
 	})
 	// nudgeBuffer is owned by the pipeline service; bot accesses via this alias
 	// so command handlers can flush it on reset/cancel.
@@ -205,6 +219,14 @@ func (bc *BotController) SetContinuity(cs continuity.Store) {
 	bc.ensurePipeline().SetContinuity(cs)
 }
 
+// SetOnboardingStore injects the onboarding store and creates the user gate.
+func (bc *BotController) SetOnboardingStore(os *users.OnboardingStore) {
+	bc.onboardingStore = os
+	if bc.userStore != nil && os != nil {
+		bc.userGate = NewUserGate(bc.userStore, os)
+	}
+}
+
 // SetProjectIndex injects a cached project name index for fast lookup.
 func (bc *BotController) SetProjectIndex(pi *runtime.ProjectIndex) {
 	bc.projectIndex = pi
@@ -213,9 +235,9 @@ func (bc *BotController) SetProjectIndex(pi *runtime.ProjectIndex) {
 
 // SetDreamer injects the dream system after construction.
 func (bc *BotController) SetDreamer(d interface {
-	AfterTurn()
-	AfterTurnNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
-	FlushNudge(chatID int64, threadID int, cwd string, buffer *session.NudgeBuffer)
+	AfterTurn(userID int64)
+	AfterTurnNudge(chatID int64, threadID int, userID int64, cwd string, buffer *session.NudgeBuffer)
+	FlushNudge(chatID int64, threadID int, userID int64, cwd string, buffer *session.NudgeBuffer)
 }) {
 	bc.dreamer = d
 	bc.ensurePipeline().SetDreamer(d)

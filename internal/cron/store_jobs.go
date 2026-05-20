@@ -161,6 +161,91 @@ func (s *SQLiteCronStore) ListJobsByChat(ctx context.Context, chatID int64) ([]C
 	return scanCronJobs(rows)
 }
 
+// ListJobsByOwner returns all cron jobs owned by the given user.
+func (s *SQLiteCronStore) ListJobsByOwner(ctx context.Context, ownerUserID string) ([]CronJob, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, owner_user_id, target_chat_id, schedule_type, cron_expr, run_at, prompt, active,
+		       last_run_at, next_run_at, last_status, last_error, created_at, updated_at
+		FROM cron_jobs
+		WHERE owner_user_id = ?
+		ORDER BY created_at ASC, id ASC
+	`, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("list cron jobs by owner: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return scanCronJobs(rows)
+}
+
+// GetJobByOwnerAndID gets a cron job by ID scoped to the owner.
+// Returns nil, nil if not found (preserves privacy).
+func (s *SQLiteCronStore) GetJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) (*CronJob, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, owner_user_id, target_chat_id, schedule_type, cron_expr, run_at, prompt, active,
+		       last_run_at, next_run_at, last_status, last_error, created_at, updated_at
+		FROM cron_jobs WHERE id = ? AND owner_user_id = ?
+	`, jobID, ownerUserID)
+	job, err := scanCronJob(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get cron job by owner: %w", err)
+	}
+	return job, nil
+}
+
+// DeleteJobByOwnerAndID deletes a cron job scoped to the owner.
+func (s *SQLiteCronStore) DeleteJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error {
+	fullID, err := s.ResolveJobID(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	job, err := s.GetJobByOwnerAndID(ctx, ownerUserID, fullID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("cron job %s not found", jobID)
+	}
+	return s.DeleteJob(ctx, fullID)
+}
+
+// PauseJobByOwnerAndID pauses a cron job scoped to the owner.
+func (s *SQLiteCronStore) PauseJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error {
+	fullID, err := s.ResolveJobID(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	job, err := s.GetJobByOwnerAndID(ctx, ownerUserID, fullID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("cron job %s not found", jobID)
+	}
+	job.Active = false
+	return s.UpdateJob(ctx, *job)
+}
+
+// ResumeJobByOwnerAndID resumes a cron job scoped to the owner.
+func (s *SQLiteCronStore) ResumeJobByOwnerAndID(ctx context.Context, ownerUserID, jobID string) error {
+	fullID, err := s.ResolveJobID(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	job, err := s.GetJobByOwnerAndID(ctx, ownerUserID, fullID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("cron job %s not found", jobID)
+	}
+	job.Active = true
+	return s.UpdateJob(ctx, *job)
+}
+
 func (s *SQLiteCronStore) ListDueJobs(ctx context.Context, now time.Time, limit int) ([]CronJob, error) {
 	if limit <= 0 {
 		limit = 20

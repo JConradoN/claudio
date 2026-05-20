@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 type pipelineInput struct {
@@ -19,10 +20,7 @@ type pipelineInput struct {
 	images    []bridge.ImageAttachment
 }
 
-type runKey struct {
-	chatID   int64
-	threadID int
-}
+type runKey = session.SessionKey
 
 type activeRun struct {
 	id        uint64
@@ -65,7 +63,7 @@ func (rs *runSupervisor) admit(input pipelineInput) (*activeRun, admissionKind, 
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	key := runKey{chatID: input.chatID, threadID: input.threadID}
+	key := runKey{ChatID: input.chatID, ThreadID: input.threadID, UserID: input.userID}
 	current := rs.active[key]
 	if current == nil {
 		return rs.startLocked(key, input), admitStart, nil
@@ -103,6 +101,31 @@ func (rs *runSupervisor) cancel(key runKey) bool {
 	current.cancel()
 	delete(rs.queued, key)
 	return true
+}
+
+// cancelAllForUser cancels all active runs for a given user across all chats/threads.
+// Returns true if at least one run was cancelled.
+func (rs *runSupervisor) cancelAllForUser(userID int64) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	cancelled := false
+	for key, run := range rs.active {
+		if key.UserID == userID {
+			run.cancel()
+			delete(rs.active, key)
+			delete(rs.queued, key)
+			cancelled = true
+		}
+	}
+	// Also clean up stale queued entries for this user
+	for key := range rs.queued {
+		if key.UserID == userID {
+			if _, active := rs.active[key]; !active {
+				delete(rs.queued, key)
+			}
+		}
+	}
+	return cancelled
 }
 
 func (rs *runSupervisor) activeDescription(key runKey) string {

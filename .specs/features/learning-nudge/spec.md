@@ -1,7 +1,8 @@
 # Learning Nudge — Scoped Memory Review
 
-**Status:** Draft — revised for PI, User Isolation and Guard-Rails  
-**Depende de:** `.specs/features/multi-user-profiles/`, `.specs/features/project-binding/`, `.specs/features/project-memory/`, `.specs/features/security-guard-rails/`, `.specs/features/wiki-memory/`  
+**Roadmap step:** 6  
+**Status:** 🔴 Draft revisado  
+**Depende de:** `.specs/features/multi-user-profiles/`, `.specs/features/project-binding/` (✅ done), `.specs/features/project-memory/`, `.specs/features/security-guard-rails/` (✅ done), `.specs/features/wiki-memory/`  
 **Complementa:** `.specs/features/auto-skills/`
 
 ## Problem Statement

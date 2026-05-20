@@ -39,6 +39,10 @@ func (f *fakePersona) BuildPrompt() (string, error) {
 	return f.prompt, f.err
 }
 
+func (f *fakePersona) BuildPromptForUser(_ int64, _ interface{ UserMdPath(userID int64) string }, _ bool) (string, error) {
+	return f.prompt, f.err
+}
+
 // --- tests ---
 
 func TestBridgeCronRuntime_ExecuteJob(t *testing.T) {

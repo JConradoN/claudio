@@ -34,14 +34,15 @@ func runCronCLI(args []string) error {
 
 	switch args[0] {
 	case "add":
-		// aurelia cron add "<cron-expr>" "<prompt>" [--chat-id <id>]
+		// aurelia cron add "<cron-expr>" "<prompt>" [--chat-id <id>] [--owner-user-id <id>]
 		if len(args) < 3 {
 			return printCronUsage()
 		}
 		expr := args[1]
 		prompt := args[2]
 		chatID := parseChatIDFlag(args[3:])
-		jobID, err := svc.AddRecurringJob(ctx, "", chatID, expr, prompt)
+		ownerUserID := parseOwnerUserIDFlag(args[3:])
+		jobID, err := svc.AddRecurringJob(ctx, ownerUserID, chatID, expr, prompt)
 		if err != nil {
 			return err
 		}
@@ -49,14 +50,15 @@ func runCronCLI(args []string) error {
 		return nil
 
 	case "once":
-		// aurelia cron once "<timestamp>" "<prompt>" [--chat-id <id>]
+		// aurelia cron once "<timestamp>" "<prompt>" [--chat-id <id>] [--owner-user-id <id>]
 		if len(args) < 3 {
 			return printCronUsage()
 		}
 		timestamp := args[1]
 		prompt := args[2]
 		chatID := parseChatIDFlag(args[3:])
-		jobID, err := svc.AddOnceJob(ctx, "", chatID, timestamp, prompt)
+		ownerUserID := parseOwnerUserIDFlag(args[3:])
+		jobID, err := svc.AddOnceJob(ctx, ownerUserID, chatID, timestamp, prompt)
 		if err != nil {
 			return err
 		}
@@ -65,7 +67,13 @@ func runCronCLI(args []string) error {
 
 	case "list":
 		chatID := parseChatIDFlag(args[1:])
-		jobs, err := svc.ListJobs(ctx, chatID)
+		ownerUserID := parseOwnerUserIDFlag(args[1:])
+		var jobs []cron.CronJob
+		if ownerUserID != "" {
+			jobs, err = svc.ListJobsByOwner(ctx, ownerUserID)
+		} else {
+			jobs, err = svc.ListJobs(ctx, chatID)
+		}
 		if err != nil {
 			return err
 		}
@@ -86,17 +94,29 @@ func runCronCLI(args []string) error {
 		if len(args) < 2 {
 			return printCronUsage()
 		}
+		ownerUserID := parseOwnerUserIDFlag(args[2:])
+		if ownerUserID != "" {
+			return svc.DeleteJobByOwner(ctx, ownerUserID, args[1])
+		}
 		return svc.DeleteJob(ctx, args[1])
 
 	case "pause":
 		if len(args) < 2 {
 			return printCronUsage()
 		}
+		ownerUserID := parseOwnerUserIDFlag(args[2:])
+		if ownerUserID != "" {
+			return svc.PauseJobByOwner(ctx, ownerUserID, args[1])
+		}
 		return svc.PauseJob(ctx, args[1])
 
 	case "resume":
 		if len(args) < 2 {
 			return printCronUsage()
+		}
+		ownerUserID := parseOwnerUserIDFlag(args[2:])
+		if ownerUserID != "" {
+			return svc.ResumeJobByOwner(ctx, ownerUserID, args[1])
 		}
 		return svc.ResumeJob(ctx, args[1])
 
@@ -115,6 +135,15 @@ func parseChatIDFlag(args []string) int64 {
 	return 0
 }
 
+func parseOwnerUserIDFlag(args []string) string {
+	for i, a := range args {
+		if a == "--owner-user-id" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func shortID(id string) string {
 	if len(id) > 8 {
 		return id[:8]
@@ -125,12 +154,12 @@ func shortID(id string) string {
 func printCronUsage() error {
 	usage := []string{
 		"Usage:",
-		"  aurelia cron add \"<cron-expr>\" \"<prompt>\" [--chat-id <id>]",
-		"  aurelia cron once \"<timestamp>\" \"<prompt>\" [--chat-id <id>]",
-		"  aurelia cron list [--chat-id <id>]",
-		"  aurelia cron del <job-id>",
-		"  aurelia cron pause <job-id>",
-		"  aurelia cron resume <job-id>",
+		"  aurelia cron add \"<cron-expr>\" \"<prompt>\" [--chat-id <id>] [--owner-user-id <id>]",
+		"  aurelia cron once \"<timestamp>\" \"<prompt>\" [--chat-id <id>] [--owner-user-id <id>]",
+		"  aurelia cron list [--chat-id <id>] [--owner-user-id <id>]",
+		"  aurelia cron del <job-id> [--owner-user-id <id>]",
+		"  aurelia cron pause <job-id> [--owner-user-id <id>]",
+		"  aurelia cron resume <job-id> [--owner-user-id <id>]",
 	}
 	fmt.Println(strings.Join(usage, "\n"))
 	return nil

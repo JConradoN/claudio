@@ -43,9 +43,22 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	identitySection := fmt.Sprintf("# Runtime Identity\n\nYou are running via the Aurelia bridge over the PI SDK.\nProvider: %s\nModel: %s\nAlways answer accurately when asked what model you are.", provider, model)
 	sections = append(sections, identitySection)
 
-	// Persona prompt
+	// Persona prompt — prefer per-user persona when userID and resolver are available
 	if bc.persona != nil {
-		personaPrompt, err := bc.persona.BuildPrompt()
+		var personaPrompt string
+		var err error
+		if bc.userResolver != nil && userID != 0 {
+			var isOwner bool
+			if bc.usersStore != nil {
+				profile, _ := bc.usersStore.Get(userID)
+				if profile != nil {
+					isOwner = profile.IsOwner
+				}
+			}
+			personaPrompt, err = bc.persona.BuildPromptForUser(userID, bc.userResolver, isOwner)
+		} else {
+			personaPrompt, err = bc.persona.BuildPrompt()
+		}
 		if err != nil {
 			log.Printf("Persona prompt error (non-fatal): %v", err)
 		} else if personaPrompt != "" {
@@ -830,7 +843,7 @@ Use the Aurelia cron CLI for ALL scheduling. Internal scheduling tools die with 
 - One-time: `+"`%s cron once \"<ISO-timestamp>\" \"<prompt>\" %s`"+`
 - List: `+"`%s cron list %s`"+` | Delete: `+"`%s cron del <id>`"+` | Pause/Resume: `+"`%s cron pause|resume <id>`"+`
 
-Cron prompts are ACTION instructions (not content). They run in isolated sessions with no history. The --chat-id flag is required.`,
+Cron prompts are ACTION instructions (not content). They run in isolated sessions with no history. The --chat-id flag is required. If scheduling for yourself, include --owner-user-id <your_user_id>.`,
 		bin, chatFlag,
 		bin, chatFlag,
 		bin, chatFlag,

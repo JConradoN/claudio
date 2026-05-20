@@ -13,9 +13,13 @@ type CronCommandService interface {
 	AddRecurringJob(ctx context.Context, userID string, chatID int64, expr, prompt string) (string, error)
 	AddOnceJob(ctx context.Context, userID string, chatID int64, timestamp, prompt string) (string, error)
 	ListJobs(ctx context.Context, chatID int64) ([]cron.CronJob, error)
+	ListJobsByOwner(ctx context.Context, ownerUserID string) ([]cron.CronJob, error)
 	PauseJob(ctx context.Context, jobID string) error
+	PauseJobByOwner(ctx context.Context, ownerUserID, jobID string) error
 	ResumeJob(ctx context.Context, jobID string) error
+	ResumeJobByOwner(ctx context.Context, ownerUserID, jobID string) error
 	DeleteJob(ctx context.Context, jobID string) error
+	DeleteJobByOwner(ctx context.Context, ownerUserID, jobID string) error
 }
 
 type CronCommandHandler struct {
@@ -39,7 +43,7 @@ func (h *CronCommandHandler) HandleText(ctx context.Context, userID string, chat
 
 	switch {
 	case rest == "list":
-		jobs, err := h.service.ListJobs(ctx, chatID)
+		jobs, err := h.service.ListJobsByOwner(ctx, userID)
 		if err != nil {
 			return "", err
 		}
@@ -69,7 +73,7 @@ func (h *CronCommandHandler) HandleText(ctx context.Context, userID string, chat
 		if jobID == "" {
 			return cronUsage(), nil
 		}
-		if err := h.service.PauseJob(ctx, jobID); err != nil {
+		if err := h.service.PauseJobByOwner(ctx, userID, jobID); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Job `%s` pausado.", jobID), nil
@@ -78,7 +82,7 @@ func (h *CronCommandHandler) HandleText(ctx context.Context, userID string, chat
 		if jobID == "" {
 			return cronUsage(), nil
 		}
-		if err := h.service.ResumeJob(ctx, jobID); err != nil {
+		if err := h.service.ResumeJobByOwner(ctx, userID, jobID); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Job `%s` retomado.", jobID), nil
@@ -87,7 +91,7 @@ func (h *CronCommandHandler) HandleText(ctx context.Context, userID string, chat
 		if jobID == "" {
 			return cronUsage(), nil
 		}
-		if err := h.service.DeleteJob(ctx, jobID); err != nil {
+		if err := h.service.DeleteJobByOwner(ctx, userID, jobID); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Job `%s` removido.", jobID), nil

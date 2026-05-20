@@ -117,7 +117,7 @@ func TestCmdSessionReset(t *testing.T) {
 	sessions := session.NewStore()
 	tracker := session.NewTracker()
 	sessions.Set(42, 0, "sess-abc")
-	tracker.Add(42, 0, 1000, 500, 1, 0.01)
+	tracker.Add(session.SessionKey{ChatID: 42, ThreadID: 0, UserID: 100}, 1000, 500, 1, 0.01)
 
 	bc := &BotController{
 		config:   &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
@@ -125,7 +125,7 @@ func TestCmdSessionReset(t *testing.T) {
 		tracker:  tracker,
 	}
 
-	reply, err := bc.cmdSessionReset(42, 0)
+	reply, err := bc.cmdSessionReset(42, 0, 100)
 	if err != nil {
 		t.Fatalf("cmdSessionReset() error = %v", err)
 	}
@@ -136,7 +136,7 @@ func TestCmdSessionReset(t *testing.T) {
 	}
 
 	// Tracker should be cleared
-	usage := tracker.Get(42, 0)
+	usage := tracker.Get(session.SessionKey{ChatID: 42, ThreadID: 0, UserID: 100})
 	if usage.NumTurns != 0 {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
@@ -159,7 +159,7 @@ func TestCmdSessionReset_EmptySessionUsesSimpleMessage(t *testing.T) {
 		tracker:  session.NewTracker(),
 	}
 
-	reply, err := bc.cmdSessionReset(42, 0)
+	reply, err := bc.cmdSessionReset(42, 0, 100)
 	if err != nil {
 		t.Fatalf("cmdSessionReset() error = %v", err)
 	}
@@ -342,7 +342,7 @@ func TestCmdStatus(t *testing.T) {
 	sessions.Set(42, 0, "sess-abc-12345678")
 	sessions.SetCwd(42, 0, "/repo/aurelia")
 	tracker := session.NewTracker()
-	tracker.Add(42, 0, 1200, 300, 3, 0.0123)
+	tracker.Add(session.SessionKey{ChatID: 42, ThreadID: 0, UserID: 0}, 1200, 300, 3, 0.0123)
 
 	bc := &BotController{
 		config: &config.AppConfig{
@@ -676,7 +676,7 @@ func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
 	sessions.Set(42, 0, "general-session")
 	sessions.Set(42, 99, "topic-session")
 	sessions.SetCwd(42, 99, "/topic/repo")
-	tracker.Add(42, 99, 100, 50, 1, 0.01)
+	tracker.Add(session.SessionKey{ChatID: 42, ThreadID: 99, UserID: 0}, 100, 50, 1, 0.01)
 
 	bc := &BotController{sessions: sessions, tracker: tracker}
 	msg := bc.resetCurrentModelSession(42, 99)
@@ -690,7 +690,7 @@ func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
 	if cwd := sessions.GetCwd(42, 99); cwd != "/topic/repo" {
 		t.Fatalf("topic cwd should be preserved, got %q", cwd)
 	}
-	if usage := tracker.Get(42, 99); usage.NumTurns != 0 {
+	if usage := tracker.Get(session.SessionKey{ChatID: 42, ThreadID: 99, UserID: 0}); usage.NumTurns != 0 {
 		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
 	if !strings.Contains(msg, "tópico") || !strings.Contains(msg, "1 mensagens") || !strings.Contains(msg, "150 tokens") {
@@ -746,7 +746,7 @@ func TestStopPreservesSession(t *testing.T) {
 	sessions := session.NewStore()
 	sessions.Set(42, 0, "sess-keep")
 	tracker := session.NewTracker()
-	tracker.Add(42, 0, 500, 300, 3, 0.02)
+	tracker.Add(session.SessionKey{ChatID: 42, ThreadID: 0, UserID: 0}, 500, 300, 3, 0.02)
 
 	bc := &BotController{
 		sessions: sessions,
@@ -762,7 +762,7 @@ func TestStopPreservesSession(t *testing.T) {
 	}
 
 	// Tracker must still be intact
-	if usage := tracker.Get(42, 0); usage.NumTurns != 3 {
+	if usage := tracker.Get(session.SessionKey{ChatID: 42, ThreadID: 0, UserID: 0}); usage.NumTurns != 3 {
 		t.Fatalf("cancelActiveRun modified tracker, want 3 turns, got %d", usage.NumTurns)
 	}
 }

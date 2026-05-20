@@ -18,6 +18,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/security"
+	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 // runLogState tracks per-run state for the run journal.
@@ -124,13 +125,13 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 		}
 		s.output.ConfirmMessage(chatID, messageID)
 	case admitStatus:
-		queueSize := s.runs.queueSize(runKey{chatID: chatID, threadID: threadID})
+		queueSize := s.runs.queueSize(runKey{ChatID: chatID, ThreadID: threadID, UserID: input.userID})
 		if _, err := s.output.SendText(chatID, threadID, queueStatusMessage(active, queueSize)); err != nil {
 			log.Printf("pipeline: SendText(admitStatus) failed for chat=%d: %v", chatID, err)
 		}
 		s.output.ConfirmMessage(chatID, messageID)
 	case admitQueued:
-		queueSize := s.runs.queueSize(runKey{chatID: chatID, threadID: threadID})
+		queueSize := s.runs.queueSize(runKey{ChatID: chatID, ThreadID: threadID, UserID: input.userID})
 		if _, err := s.output.SendText(chatID, threadID, queueAdmittedMessage(active, queueSize)); err != nil {
 			log.Printf("pipeline: SendText(admitQueued) failed for chat=%d: %v", chatID, err)
 		}
@@ -151,7 +152,7 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 	if run.ctx.Err() != nil {
 		return
 	}
-	if _, active := s.sessions.GetWithState(input.chatID, input.threadID); !active {
+	if _, active := s.sessions.GetSessionWithState(input.chatID, input.threadID, input.userID); !active {
 		s.autoDetectProject(input.chatID, input.threadID, userText)
 	}
 
@@ -169,12 +170,12 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 		return
 	}
 
-	req := s.buildBridgeRequest(userText, systemPrompt, agent, input.chatID, input.threadID)
+	req := s.buildBridgeRequest(userText, systemPrompt, agent, input.chatID, input.threadID, input.userID)
 	req.RequestID = fmt.Sprintf("run-%d", run.id)
 	req.Options.Images = input.images
 	s.applyVisionFallback(&req, input.images)
 
-	s.executeAsync(run.ctx, input.chatID, input.threadID, input.messageID, req, userText)
+	s.executeAsync(run.ctx, input.chatID, input.threadID, input.messageID, req, userText, input.userID)
 }
 
 func (s *Service) startQueuedAfter(run *activeRun) {
@@ -275,7 +276,7 @@ func (s *Service) classifyFunc() agents.ClassifyFunc {
 
 // buildBridgeRequest assembles the bridge.Request with agent overrides, session
 // resume, and working directory.
-func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agents.Agent, chatID int64, threadID int) bridge.Request {
+func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agents.Agent, chatID int64, threadID int, userID int64) bridge.Request {
 	req := bridge.Request{
 		Command: "query",
 		Prompt:  userText,
@@ -301,7 +302,7 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 		}
 	}
 
-	if sessionID, active := s.sessions.GetWithState(chatID, threadID); sessionID != "" {
+	if sessionID, active := s.sessions.GetSessionWithState(chatID, threadID, userID); sessionID != "" {
 		req.Options.Resume = sessionID
 		sidPreview := sessionID
 		if len(sidPreview) > 8 {
@@ -419,7 +420,7 @@ func appendUniqueTools(existing []string, additions ...string) []string {
 }
 
 // executeAsync runs bridge execution with typing/progress reporting.
-func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID int, messageID int, req bridge.Request, userText string) {
+func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID int, messageID int, req bridge.Request, userText string, userID int64) {
 	stopTyping := s.output.StartTyping(chatID, threadID)
 	defer stopTyping()
 
@@ -504,7 +505,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	} else {
 		toolUseSignal := make(chan struct{}, 16)
 		go heartbeatMonitor(ctx.Done(), toolUseSignal, chatID, threadID, s.output)
-		outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal)
+		outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal, userID)
 		if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
 			s.output.ConfirmMessage(chatID, messageID)
 			return
@@ -564,7 +565,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 
 	toolUseSignal := make(chan struct{}, 16)
 	go heartbeatMonitor(ctx.Done(), toolUseSignal, chatID, threadID, s.output)
-	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal)
+	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal, userID)
 	if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
 		s.output.ConfirmMessage(chatID, messageID)
 		return
@@ -671,7 +672,7 @@ func heartbeatMonitor(doneCh <-chan struct{}, toolUseSignal <-chan struct{}, cha
 // ProcessBridgeEvents reads bridge events and sends responses to the output.
 // toolUseSignal, if non-nil, receives a signal on every tool_use event so a
 // caller can monitor thinking gaps (heartbeat).
-func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int, ch <-chan bridge.Event, progress ProgressReporter, userText string, toolUseSignal chan<- struct{}) Outcome {
+func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int, ch <-chan bridge.Event, progress ProgressReporter, userText string, toolUseSignal chan<- struct{}, userID int64) Outcome {
 	var (
 		assistantText      strings.Builder
 		textSinceLastFlush strings.Builder
@@ -682,7 +683,7 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 	for ev := range ch {
 		switch ev.Type {
 		case "system":
-			s.handleSystemEvent(chatID, threadID, ev)
+			s.handleSystemEvent(chatID, threadID, ev, userID)
 			if ev.SessionID != "" {
 				s.updateRunLogSession(chatID, threadID, ev.SessionID)
 			}
@@ -733,7 +734,7 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 				lastStreamFlush = time.Now()
 			}
 		case "result":
-			return s.handleResultEvent(chatID, threadID, messageID, ev, &assistantText, userText)
+			return s.handleResultEvent(chatID, threadID, messageID, ev, &assistantText, userText, userID)
 		case "error":
 			return s.handleErrorEvent(chatID, threadID, messageID, ev)
 		default:
@@ -744,11 +745,11 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 	return OutcomeProcessDeath
 }
 
-func (s *Service) handleSystemEvent(chatID int64, threadID int, ev bridge.Event) {
+func (s *Service) handleSystemEvent(chatID int64, threadID int, ev bridge.Event, userID int64) {
 	if ev.SessionID == "" {
 		return
 	}
-	s.sessions.Set(chatID, threadID, ev.SessionID)
+	s.sessions.SetSession(chatID, threadID, userID, ev.SessionID)
 	s.patchContinuitySessionID(chatID, threadID, ev.SessionID)
 }
 
@@ -756,7 +757,7 @@ func eventContent(ev bridge.Event) string {
 	return bridge.EventContent(ev)
 }
 
-func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, ev bridge.Event, assistantText *strings.Builder, userText string) Outcome {
+func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, ev bridge.Event, assistantText *strings.Builder, userText string, userID int64) Outcome {
 	content := eventContent(ev)
 	if content != "" {
 		prior := assistantText.String()
@@ -776,12 +777,12 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		assistantText.WriteString(content)
 	}
 
-	needsReset := s.recordUsage(chatID, threadID, ev)
+	needsReset := s.recordUsage(chatID, threadID, ev, userID)
 	finalText := strings.TrimSpace(assistantText.String())
 
 	if finalText == "" {
 		toolSummary := s.getRunToolSummary(chatID, threadID)
-		return s.handleEmptyResult(chatID, threadID, messageID, ev, userText, toolSummary, needsReset)
+		return s.handleEmptyResult(chatID, threadID, messageID, ev, userText, toolSummary, needsReset, userID)
 	}
 
 	safeFinalText := sanitizeExecutionPlanForChat(finalText)
@@ -790,16 +791,16 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	successRunID := s.getRunID(chatID, threadID)
 	s.completeRunLog(chatID, threadID, runlog.RunCompleted, safeFinalText, "")
 
-	if ok, outcome := s.handlePlanExecution(chatID, threadID, messageID, finalText, safeFinalText, successRunID, userText, needsReset); ok {
+	if ok, outcome := s.handlePlanExecution(chatID, threadID, messageID, finalText, safeFinalText, successRunID, userText, needsReset, userID); ok {
 		return outcome
 	}
 
-	return s.handleNormalReply(chatID, threadID, messageID, safeFinalText, successRunID, userText, needsReset)
+	return s.handleNormalReply(chatID, threadID, messageID, safeFinalText, successRunID, userText, needsReset, userID)
 }
 
 // handleEmptyResult handles the case where the bridge returned no text.
 // It distinguishes between "worked but empty" (tokens consumed) and "no work at all".
-func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, ev bridge.Event, userText string, toolSummary string, needsReset bool) Outcome {
+func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, ev bridge.Event, userText string, toolSummary string, needsReset bool, userID int64) Outcome {
 	if emptyResultHadWork(ev) {
 		log.Printf("bridge: empty result after work chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d",
 			chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
@@ -828,7 +829,7 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 
 	// Even on empty results, flush remaining nudge buffer and reset if threshold was crossed
 	if needsReset {
-		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+		s.resetSessionAfterSuccessfulTurn(chatID, threadID, userID)
 	}
 	s.output.ConfirmMessage(chatID, messageID)
 	return OutcomeLLMError
@@ -837,29 +838,29 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 // handlePlanExecution checks whether the assistant output contains an execution
 // plan and, if so, starts the orchestrator. Returns (true, outcome) when a plan
 // was executed, or (false, OutcomeSuccess) to continue with normal reply.
-func (s *Service) handlePlanExecution(chatID int64, threadID int, messageID int, finalText string, safeFinalText string, successRunID string, userText string, needsReset bool) (bool, Outcome) {
+func (s *Service) handlePlanExecution(chatID int64, threadID int, messageID int, finalText string, safeFinalText string, successRunID string, userText string, needsReset bool, userID int64) (bool, Outcome) {
 	if !s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		return false, OutcomeSuccess
 	}
 
 	s.output.ConfirmMessage(chatID, messageID)
-	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID)
+	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID, userID)
 	if needsReset {
-		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+		s.resetSessionAfterSuccessfulTurn(chatID, threadID, userID)
 	}
 	return true, OutcomeSuccess
 }
 
 // handleNormalReply sends the assistant's text response to the chat as a
 // normal reply and finalizes the turn.
-func (s *Service) handleNormalReply(chatID int64, threadID int, messageID int, safeFinalText string, successRunID string, userText string, needsReset bool) Outcome {
+func (s *Service) handleNormalReply(chatID int64, threadID int, messageID int, safeFinalText string, successRunID string, userText string, needsReset bool, userID int64) Outcome {
 	if err := s.output.SendReply(chatID, threadID, safeFinalText); err != nil {
 		log.Printf("Failed to send reply to chat %d: %v", chatID, err)
 	}
 	s.output.ConfirmMessage(chatID, messageID)
-	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID)
+	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID, userID)
 	if needsReset {
-		s.resetSessionAfterSuccessfulTurn(chatID, threadID)
+		s.resetSessionAfterSuccessfulTurn(chatID, threadID, userID)
 	}
 	return OutcomeSuccess
 }
@@ -868,18 +869,19 @@ func (s *Service) handleNormalReply(chatID int64, threadID int, messageID int, s
 // Returns true if the session should be auto-reset.
 // The actual reset must be performed by the caller via resetSessionAfterSuccessfulTurn
 // AFTER the current turn has been saved to the nudge buffer, ensuring no context loss.
-func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) bool {
+func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event, userID int64) bool {
 	if s.config == nil || s.tracker == nil {
 		return false
 	}
 	if ev.CostUSD <= 0 && ev.NumTurns <= 0 {
 		return false
 	}
-	needsReset := s.tracker.RecordUsage(chatID, threadID, ev.NumTurns, ev.CostUSD, s.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens)
-	usage := s.tracker.Get(chatID, threadID)
-	log.Printf("session usage: chat=%d thread=%d %s (auto-reset=%t)", chatID, threadID, usage, needsReset)
-	if isNear, pct := s.tracker.WarningZone(chatID, threadID, s.config.MaxSessionTokens); isNear {
-		log.Printf("session warning zone: chat=%d thread=%d %d%% used", chatID, threadID, pct)
+	key := session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
+	needsReset := s.tracker.RecordUsage(key, ev.NumTurns, ev.CostUSD, s.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens)
+	usage := s.tracker.Get(key)
+	log.Printf("session usage: chat=%d thread=%d user=%d %s (auto-reset=%t)", chatID, threadID, userID, usage, needsReset)
+	if isNear, pct := s.tracker.WarningZone(key, s.config.MaxSessionTokens); isNear {
+		log.Printf("session warning zone: chat=%d thread=%d user=%d %d%% used", chatID, threadID, userID, pct)
 	}
 	return needsReset
 }
@@ -889,28 +891,28 @@ func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) bool 
 // has saved the current turn to the nudge buffer — otherwise the turn is lost.
 // Uses ClearSession to preserve cwd and project binding so the user does not
 // lose their working directory after an auto-reset.
-func (s *Service) resetSessionAfterSuccessfulTurn(chatID int64, threadID int) {
+func (s *Service) resetSessionAfterSuccessfulTurn(chatID int64, threadID int, userID int64) {
 	if s.config != nil {
-		log.Printf("session auto-reset: chat=%d thread=%d threshold=%d", chatID, threadID, s.config.MaxSessionTokens)
+		log.Printf("session auto-reset: chat=%d thread=%d user=%d threshold=%d", chatID, threadID, userID, s.config.MaxSessionTokens)
 	} else {
-		log.Printf("session auto-reset: chat=%d thread=%d", chatID, threadID)
+		log.Printf("session auto-reset: chat=%d thread=%d user=%d", chatID, threadID, userID)
 	}
 	// Patch continuity before clearing session — mark cold with reason
 	s.patchContinuitySessionCold(chatID, threadID, "auto-reset")
-	s.flushDreamer(chatID, threadID)
+	s.flushDreamer(chatID, threadID, userID)
 	s.sessions.ClearSession(chatID, threadID)
 	if s.tracker != nil {
-		s.tracker.Clear(chatID, threadID)
+		s.tracker.Clear(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID})
 	}
 }
 
-func (s *Service) flushDreamer(chatID int64, threadID int) {
+func (s *Service) flushDreamer(chatID int64, threadID int, userID int64) {
 	if s.dreamer == nil {
 		return
 	}
 	cwd := s.effectiveCwd(nil, chatID, threadID)
-	s.dreamer.FlushNudge(chatID, threadID, cwd, s.nudgeBuffer)
-	s.InvalidateMemoryDirs(chatID, threadID, cwd)
+	s.dreamer.FlushNudge(chatID, threadID, userID, cwd, s.nudgeBuffer)
+	s.InvalidateMemoryDirs(chatID, threadID, userID, cwd)
 }
 
 func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, finalText string) bool {
@@ -1047,7 +1049,7 @@ Updated summary (max 900 chars, no preamble):`,
 	return runeCap(summary, continuity.MaxAssistantSummary)
 }
 
-func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText string, finalText string, runID string) {
+func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText string, finalText string, runID string, userID int64) {
 	key := continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}
 
 	// Progressive summarization: on non-summary turns, re-read the existing
@@ -1093,11 +1095,11 @@ func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText strin
 	if s.dreamer == nil {
 		return
 	}
-	s.dreamer.AfterTurn()
+	s.dreamer.AfterTurn(userID)
 	cwd := s.effectiveCwd(nil, chatID, threadID)
-	s.nudgeBuffer.AddTurn(chatID, threadID, userText, finalText)
-	s.dreamer.AfterTurnNudge(chatID, threadID, cwd, s.nudgeBuffer)
-	s.InvalidateMemoryDirs(chatID, threadID, cwd)
+	s.nudgeBuffer.AddTurn(chatID, threadID, userID, userText, finalText)
+	s.dreamer.AfterTurnNudge(chatID, threadID, userID, cwd, s.nudgeBuffer)
+	s.InvalidateMemoryDirs(chatID, threadID, userID, cwd)
 }
 
 // --- Continuity lifecycle helpers ---

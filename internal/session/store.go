@@ -6,14 +6,26 @@ import (
 	"time"
 )
 
-// SessionKey uniquely identifies a session within a chat thread.
+// SessionKey uniquely identifies a session within a chat thread and user.
 // For private chats and non-forum groups, ThreadID is 0.
+// During transition, UserID is 0 for all existing call sites.
 type SessionKey struct {
 	ChatID   int64
 	ThreadID int // 0 for non-forum chats
+	UserID   int64
 }
 
 func (k SessionKey) String() string {
+	return fmt.Sprintf("%d:%d:%d", k.ChatID, k.ThreadID, k.UserID)
+}
+
+// ConversationKey identifies a conversation (chat + thread) without user scope.
+type ConversationKey struct {
+	ChatID   int64
+	ThreadID int
+}
+
+func (k ConversationKey) String() string {
 	return fmt.Sprintf("%d:%d", k.ChatID, k.ThreadID)
 }
 
@@ -21,8 +33,8 @@ func (k SessionKey) String() string {
 type Store struct {
 	mu       sync.RWMutex
 	sessions map[SessionKey]*entry
-	cwds     map[SessionKey]string
-	cwdSeen  map[SessionKey]time.Time
+	cwds     map[ConversationKey]string
+	cwdSeen  map[ConversationKey]time.Time
 }
 
 type entry struct {
@@ -35,20 +47,21 @@ type entry struct {
 func NewStore() *Store {
 	return &Store{
 		sessions: make(map[SessionKey]*entry),
-		cwds:     make(map[SessionKey]string),
-		cwdSeen:  make(map[SessionKey]time.Time),
+		cwds:     make(map[ConversationKey]string),
+		cwdSeen:  make(map[ConversationKey]time.Time),
 	}
 }
 
-// SessionKeyFor returns a SessionKey from chatID and optional threadID.
-func SessionKeyFor(chatID int64, threadID int) SessionKey {
-	return SessionKey{ChatID: chatID, ThreadID: threadID}
+// SessionKeyFor returns a SessionKey from chatID, threadID, and userID.
+// During transition, pass 0 for userID.
+func SessionKeyFor(chatID int64, threadID int, userID int64) SessionKey {
+	return SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
 }
 
 func (s *Store) Get(chatID int64, threadID int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, 0)
 	e := s.sessions[key]
 	if e == nil {
 		return ""
@@ -60,7 +73,7 @@ func (s *Store) Get(chatID int64, threadID int) string {
 func (s *Store) GetWithState(chatID int64, threadID int) (sessionID string, active bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, 0)
 	e := s.sessions[key]
 	if e == nil {
 		return "", false
@@ -72,7 +85,7 @@ func (s *Store) GetWithState(chatID int64, threadID int) (sessionID string, acti
 func (s *Store) Set(chatID int64, threadID int, sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, 0)
 	s.sessions[key] = &entry{sessionID: sessionID, active: true, lastSeen: time.Now()}
 }
 
@@ -80,21 +93,24 @@ func (s *Store) Set(chatID int64, threadID int, sessionID string) {
 func (s *Store) Clear(chatID int64, threadID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
-	delete(s.sessions, key)
-	delete(s.cwds, key)
-	delete(s.cwdSeen, key)
+	sk := SessionKeyFor(chatID, threadID, 0)
+	ck := ConversationKey{ChatID: chatID, ThreadID: threadID}
+	delete(s.sessions, sk)
+	delete(s.cwds, ck)
+	delete(s.cwdSeen, ck)
 }
 
 // ClearSession removes only the session ID for a specific chat thread.
 func (s *Store) ClearSession(chatID int64, threadID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, 0)
 	delete(s.sessions, key)
 }
 
-// ClearAll removes all sessions and cwds for a chat (all threads).
+// ClearAll removes all sessions and cwds for a chat (all threads, all users).
+// During transition (UserID=0) this matches existing behavior. When user isolation
+// is active, this clears ALL users' sessions for the given chat.
 func (s *Store) ClearAll(chatID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -128,7 +144,7 @@ func (s *Store) DeactivateAll() {
 func (s *Store) Deactivate(chatID int64, threadID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := SessionKeyFor(chatID, threadID, 0)
 	if e, ok := s.sessions[key]; ok {
 		e.active = false
 	}
@@ -141,9 +157,10 @@ func (s *Store) GC(maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
 	for key, e := range s.sessions {
 		if e.lastSeen.Before(cutoff) {
+			ck := ConversationKey{ChatID: key.ChatID, ThreadID: key.ThreadID}
 			delete(s.sessions, key)
-			delete(s.cwds, key)
-			delete(s.cwdSeen, key)
+			delete(s.cwds, ck)
+			delete(s.cwdSeen, ck)
 		}
 	}
 	for key, seen := range s.cwdSeen {
@@ -163,14 +180,14 @@ func (s *Store) GetCwd(chatID int64, threadID int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Try thread-specific cwd first
-	key := SessionKeyFor(chatID, threadID)
+	key := ConversationKey{ChatID: chatID, ThreadID: threadID}
 	if cwd, ok := s.cwds[key]; ok {
 		s.cwdSeen[key] = time.Now()
 		return cwd
 	}
 	// Fall back to general topic (thread=0) cwd
 	if threadID != 0 {
-		generalKey := SessionKeyFor(chatID, 0)
+		generalKey := ConversationKey{ChatID: chatID, ThreadID: 0}
 		if cwd, ok := s.cwds[generalKey]; ok {
 			s.cwdSeen[generalKey] = time.Now()
 			return cwd
@@ -182,7 +199,7 @@ func (s *Store) GetCwd(chatID int64, threadID int) string {
 func (s *Store) SetCwd(chatID int64, threadID int, cwd string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := ConversationKey{ChatID: chatID, ThreadID: threadID}
 	s.cwds[key] = cwd
 	s.cwdSeen[key] = time.Now()
 }
@@ -190,7 +207,59 @@ func (s *Store) SetCwd(chatID int64, threadID int, cwd string) {
 func (s *Store) ClearCwd(chatID int64, threadID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := SessionKeyFor(chatID, threadID)
+	key := ConversationKey{ChatID: chatID, ThreadID: threadID}
 	delete(s.cwds, key)
 	delete(s.cwdSeen, key)
+}
+
+// GetSession returns the session ID for a specific chat, thread, and user.
+func (s *Store) GetSession(chatID int64, threadID int, userID int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
+	e := s.sessions[key]
+	if e == nil {
+		return ""
+	}
+	e.lastSeen = time.Now()
+	return e.sessionID
+}
+
+// GetSessionWithState returns the session ID and active state for a specific chat, thread, and user.
+func (s *Store) GetSessionWithState(chatID int64, threadID int, userID int64) (sessionID string, active bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
+	e := s.sessions[key]
+	if e == nil {
+		return "", false
+	}
+	e.lastSeen = time.Now()
+	return e.sessionID, e.active
+}
+
+// SetSession creates or updates a session for a specific chat, thread, and user.
+func (s *Store) SetSession(chatID int64, threadID int, userID int64, sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
+	s.sessions[key] = &entry{sessionID: sessionID, active: true, lastSeen: time.Now()}
+}
+
+// ClearSessionForUser removes the session for a specific chat, thread, and user.
+func (s *Store) ClearSessionForUser(chatID int64, threadID int, userID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
+	delete(s.sessions, key)
+}
+
+// DeactivateSession marks a session as inactive for a specific chat, thread, and user.
+func (s *Store) DeactivateSession(chatID int64, threadID int, userID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
+	if e, ok := s.sessions[key]; ok {
+		e.active = false
+	}
 }

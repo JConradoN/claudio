@@ -17,6 +17,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/security"
 	"github.com/igormaneschy/aurelia/internal/session"
+	"github.com/igormaneschy/aurelia/internal/users"
 )
 
 // DreamConfig holds tuning parameters for the dreamer.
@@ -50,13 +51,15 @@ func DefaultConfig() DreamConfig {
 
 // Dreamer runs background memory consolidation and periodic nudge reviews.
 type Dreamer struct {
-	memoryDir string // global memory dir (~/.aurelia/memory)
-	resolver  *runtime.PathResolver
-	bridge    *bridge.Bridge
-	config    DreamConfig
+	userResolver *users.Resolver
+	resolver     *runtime.PathResolver
+	bridge       *bridge.Bridge
+	config       DreamConfig
 
-	turns   atomic.Int32
-	running atomic.Bool
+	turnsMu  sync.Mutex
+	turns    map[int64]*atomic.Int32 // userID → turn counter
+	runningMu sync.Mutex
+	running   map[int64]*atomic.Bool // userID → running flag
 
 	nudgeMu      sync.Mutex
 	nudgeRunning map[session.SessionKey]struct{}
@@ -64,12 +67,14 @@ type Dreamer struct {
 }
 
 // New creates a Dreamer.
-func New(memoryDir string, resolver *runtime.PathResolver, br *bridge.Bridge, cfg DreamConfig) *Dreamer {
+func New(userResolver *users.Resolver, resolver *runtime.PathResolver, br *bridge.Bridge, cfg DreamConfig) *Dreamer {
 	return &Dreamer{
-		memoryDir:    memoryDir,
+		userResolver: userResolver,
 		resolver:     resolver,
 		bridge:       br,
 		config:       cfg,
+		turns:        make(map[int64]*atomic.Int32),
+		running:      make(map[int64]*atomic.Bool),
 		nudgeRunning: make(map[session.SessionKey]struct{}),
 		nudgeLast:    make(map[session.SessionKey]time.Time),
 	}
@@ -77,30 +82,63 @@ func New(memoryDir string, resolver *runtime.PathResolver, br *bridge.Bridge, cf
 
 // AfterTurn is called after every successful user turn.
 // It checks gates and fires a background dream if conditions are met.
-func (d *Dreamer) AfterTurn() {
+func (d *Dreamer) AfterTurn(userID int64) {
 	if !d.config.Enabled {
 		return
 	}
 
-	turns := int(d.turns.Add(1))
+	turns := d.incrementTurns(userID)
 
 	// Gate: enough turns?
 	if turns < d.config.MinTurns {
 		return
 	}
 
+	memoryDir := d.userResolver.MemoryDir(userID)
+
 	// Gate: enough time since last dream?
-	last := lastDreamTime(d.memoryDir)
+	last := lastDreamTime(memoryDir)
 	if !last.IsZero() && time.Since(last) < d.config.MinInterval {
 		return
 	}
 
 	// Gate: not already running?
-	if !d.running.CompareAndSwap(false, true) {
+	if !d.tryStartDream(userID) {
 		return
 	}
 
-	go d.run()
+	go d.run(userID)
+}
+
+// incrementTurns increments and returns the turn counter for a user.
+func (d *Dreamer) incrementTurns(userID int64) int {
+	d.turnsMu.Lock()
+	defer d.turnsMu.Unlock()
+	uc, ok := d.turns[userID]
+	if !ok {
+		uc = &atomic.Int32{}
+		d.turns[userID] = uc
+	}
+	return int(uc.Add(1))
+}
+
+// tryStartDream acquires the dream run guard for a user.
+// Returns true if the guard was acquired, false if already running.
+func (d *Dreamer) tryStartDream(userID int64) bool {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	if _, ok := d.running[userID]; ok {
+		return false
+	}
+	d.running[userID] = &atomic.Bool{}
+	return true
+}
+
+// finishDream releases the dream run guard for a user.
+func (d *Dreamer) finishDream(userID int64) {
+	d.runningMu.Lock()
+	defer d.runningMu.Unlock()
+	delete(d.running, userID)
 }
 
 // hasMemoryFiles checks if the memory directory contains any .md files
@@ -120,46 +158,47 @@ func hasMemoryFiles(dir string) bool {
 	return false
 }
 
-func (d *Dreamer) run() {
+func (d *Dreamer) run(userID int64) {
 	start := time.Now()
-	defer d.running.Store(false)
+	memoryDir := d.userResolver.MemoryDir(userID)
+	defer d.finishDream(userID)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[dream] panic: %v", r)
-			d.recordDreamReceipt(start, nil, 0, 0, "panic", fmt.Sprintf("%v", r))
+			log.Printf("[dream] user=%d panic: %v", userID, r)
+			d.recordDreamReceipt(memoryDir, start, nil, 0, 0, "panic", fmt.Sprintf("%v", r))
 		}
 	}()
 
 	// Skip consolidation if there are no memory files to consolidate.
 	// Running on an empty directory causes the model to hallucinate content.
-	if !hasMemoryFiles(d.memoryDir) {
-		log.Println("[dream] skipped: no memory files to consolidate")
+	if !hasMemoryFiles(memoryDir) {
+		log.Printf("[dream] user=%d skipped: no memory files to consolidate", userID)
 		return
 	}
 
-	log.Println("[dream] starting memory consolidation...")
+	log.Printf("[dream] user=%d starting memory consolidation...", userID)
 	start = time.Now()
 
 	// Capture turns that triggered this run so we can subtract them later.
-	turnsAtStart := int(d.turns.Load())
+	turnsAtStart := d.getTurnCount(userID)
 
-	if err := acquireLock(d.memoryDir); err != nil {
-		log.Printf("[dream] skipped: %v", err)
+	if err := acquireLock(memoryDir); err != nil {
+		log.Printf("[dream] user=%d skipped: %v", userID, err)
 		return
 	}
-	defer releaseLock(d.memoryDir)
+	defer releaseLock(memoryDir)
 
 	// Load memory contents in Go (safe, size-capped, personas excluded)
-	memoryContent := loadMemoryForConsolidation(d.memoryDir)
+	memoryContent := loadMemoryForConsolidation(memoryDir)
 	if memoryContent == "" {
-		log.Println("[dream] no readable memory content, aborting")
+		log.Printf("[dream] user=%d no readable memory content, aborting", userID)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	consolidationPrompt := buildConsolidationPrompt(d.memoryDir, memoryContent)
+	consolidationPrompt := buildConsolidationPrompt(memoryDir, memoryContent)
 
 	req := bridge.Request{
 		Command: "query",
@@ -168,7 +207,7 @@ func (d *Dreamer) run() {
 			Provider:       d.config.Provider,
 			Model:          d.config.Model,
 			SystemPrompt:   systemConsolidationPrompt,
-			Cwd:            d.memoryDir,
+			Cwd:            memoryDir,
 			AllowedTools:   []string{},
 			NoUserSettings: true,
 			PersistSession: boolPtr(false),
@@ -176,7 +215,7 @@ func (d *Dreamer) run() {
 				Enabled:   true,
 				Profile:   string(security.ProfileEditProject),
 				Mode:      string(security.PolicyBlock),
-				Cwd:       d.memoryDir,
+				Cwd:       memoryDir,
 				AgentName: "dream",
 			},
 		},
@@ -184,13 +223,13 @@ func (d *Dreamer) run() {
 
 	ev, err := d.bridge.ExecuteSync(ctx, req)
 	if err != nil {
-		log.Printf("[dream] failed: %v", err)
-		d.recordDreamReceipt(start, nil, 0, 0, "error", err.Error())
+		log.Printf("[dream] user=%d failed: %v", userID, err)
+		d.recordDreamReceipt(memoryDir, start, nil, 0, 0, "error", err.Error())
 		return
 	}
 	if ev.Type == "error" {
-		log.Printf("[dream] bridge error: %s", ev.Message)
-		d.recordDreamReceipt(start, ev, 0, 0, "error", ev.Message)
+		log.Printf("[dream] user=%d bridge error: %s", userID, ev.Message)
+		d.recordDreamReceipt(memoryDir, start, ev, 0, 0, "error", ev.Message)
 		return
 	}
 
@@ -200,19 +239,19 @@ func (d *Dreamer) run() {
 	ext, parseErr := parseConsolidationJSONWithError(bridge.EventContent(*ev))
 	if ext == nil {
 		diag := memoryux.ModelOutputDiagnostic(bridge.EventContent(*ev), parseErr)
-		log.Printf("[dream] no valid consolidation actions from model output (%s)", diag)
+		log.Printf("[dream] user=%d no valid consolidation actions from model output (%s)", userID, diag)
 		receiptStatus = "invalid"
 		receiptErr = diag
 	} else {
 		total = len(ext.Actions)
-		writer, err := newSafeMemoryWriter(d.memoryDir, d)
+		writer, err := newSafeMemoryWriter(memoryDir, d)
 		if err != nil {
-			log.Printf("[dream] failed to create writer: %v", err)
+			log.Printf("[dream] user=%d failed to create writer: %v", userID, err)
 			receiptStatus = "error"
 			receiptErr = err.Error()
 		} else {
 			applied = applyConsolidationActions(writer, ext.Actions, 0, 0, "")
-			log.Printf("[dream] applied %d/%d consolidation actions", applied, total)
+			log.Printf("[dream] user=%d applied %d/%d consolidation actions", userID, applied, total)
 			if applied > 0 {
 				receiptStatus = "applied"
 			} else {
@@ -223,29 +262,46 @@ func (d *Dreamer) run() {
 
 	// Subtract the turns that were consumed by this run, preserving any
 	// turns that arrived while the dream was in progress.
-	for {
-		current := int(d.turns.Load())
-		newVal := current - turnsAtStart
-		if newVal < 0 {
-			newVal = 0
-		}
-		if int(d.turns.Load()) == current && d.turns.CompareAndSwap(int32(current), int32(newVal)) {
-			break
-		}
+	d.subtractTurns(userID, turnsAtStart)
+
+	touchLock(memoryDir)
+
+	d.recordDreamReceipt(memoryDir, start, ev, applied, total, receiptStatus, receiptErr)
+
+	log.Printf("[dream] user=%d completed in %s — cost=$%.4f turns=%d",
+		userID, time.Since(start).Round(time.Second), ev.CostUSD, ev.NumTurns)
+}
+
+// getTurnCount returns the current turn count for a user.
+func (d *Dreamer) getTurnCount(userID int64) int {
+	d.turnsMu.Lock()
+	defer d.turnsMu.Unlock()
+	uc, ok := d.turns[userID]
+	if !ok {
+		return 0
 	}
+	return int(uc.Load())
+}
 
-	touchLock(d.memoryDir)
-
-	d.recordDreamReceipt(start, ev, applied, total, receiptStatus, receiptErr)
-
-	log.Printf("[dream] completed in %s — cost=$%.4f turns=%d",
-		time.Since(start).Round(time.Second), ev.CostUSD, ev.NumTurns)
+// subtractTurns removes turnsAtStart from the user's turn counter.
+func (d *Dreamer) subtractTurns(userID int64, turnsAtStart int) {
+	d.turnsMu.Lock()
+	defer d.turnsMu.Unlock()
+	uc, ok := d.turns[userID]
+	if !ok {
+		return
+	}
+	current := int(uc.Load())
+	newVal := current - turnsAtStart
+	if newVal < 0 {
+		newVal = 0
+	}
+	uc.Store(int32(newVal))
 }
 
 // recordDreamReceipt writes a receipt for a dream consolidation run.
-// ChatID/ThreadID/CWD are zero/empty because dream is global.
 // Logs but does not propagate errors.
-func (d *Dreamer) recordDreamReceipt(start time.Time, ev *bridge.Event, applied, total int, status, errMsg string) {
+func (d *Dreamer) recordDreamReceipt(memoryDir string, start time.Time, ev *bridge.Event, applied, total int, status, errMsg string) {
 	r := memoryux.Receipt{
 		Time:     time.Now().UTC(),
 		Source:   "dream",
@@ -259,7 +315,7 @@ func (d *Dreamer) recordDreamReceipt(start time.Time, ev *bridge.Event, applied,
 		r.CostUSD = ev.CostUSD
 		r.Turns = ev.NumTurns
 	}
-	if err := memoryux.AppendReceipt(d.memoryDir, r); err != nil {
+	if err := memoryux.AppendReceipt(memoryDir, r); err != nil {
 		log.Printf("[dream] receipt error: %v", err)
 	}
 }
@@ -278,7 +334,10 @@ func (d *Dreamer) tryStartNudge(key session.SessionKey) bool {
 
 // memoryDirResolver implementation for Dreamer.
 func (d *Dreamer) TopicMemoryDir(chatID int64, threadID int) string {
-	return filepath.Join(d.memoryDir, "topics", fmt.Sprintf("chat_%d", chatID), fmt.Sprintf("thread_%d", threadID))
+	if d.userResolver == nil {
+		return ""
+	}
+	return filepath.Join(d.userResolver.TopicsDir(), fmt.Sprintf("chat_%d", chatID), fmt.Sprintf("thread_%d", threadID))
 }
 
 func (d *Dreamer) ProjectMemoryDir(cwd string, chatID int64, threadID int) string {

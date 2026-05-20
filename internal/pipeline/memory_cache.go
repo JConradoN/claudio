@@ -1,11 +1,14 @@
 package pipeline
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/igormaneschy/aurelia/internal/users"
 )
 
 // defaultMemoryCacheTTL is the period during which a cached entry is trusted
@@ -141,14 +144,19 @@ func (c *memoryCache) invalidate(dir string) {
 
 // InvalidateMemoryDirs clears cached entries for all memory directories that may
 // have been modified. Called after nudge/dream writes and CWD changes.
-func (bc *Service) InvalidateMemoryDirs(chatID int64, threadID int, cwd string) {
+func (bc *Service) InvalidateMemoryDirs(chatID int64, threadID int, userID int64, cwd string) {
 	if bc.memoryCache == nil {
 		return
 	}
 
-	bc.memoryCache.invalidate(bc.memoryDir)
+	// Invalidate user memory dir
+	if bc.userResolver != nil && userID != 0 {
+		bc.memoryCache.invalidate(bc.userResolver.MemoryDir(userID))
+	} else {
+		bc.memoryCache.invalidate(bc.memoryDir)
+	}
 
-	if topicDir := topicMemoryDir(bc.memoryDir, chatID, threadID); topicDir != "" {
+	if topicDir := topicMemoryDirFromResolver(chatID, threadID, bc.userResolver); topicDir != "" {
 		bc.memoryCache.invalidate(topicDir)
 	}
 
@@ -160,4 +168,12 @@ func (bc *Service) InvalidateMemoryDirs(chatID int64, threadID int, cwd string) 
 			bc.memoryCache.invalidate(teamDir)
 		}
 	}
+}
+
+// topicMemoryDirFromResolver returns the topic memory directory using the user resolver.
+func topicMemoryDirFromResolver(chatID int64, threadID int, userResolver *users.Resolver) string {
+	if threadID <= 0 || userResolver == nil {
+		return ""
+	}
+	return filepath.Join(userResolver.TopicsDir(), fmt.Sprintf("chat_%d", chatID), fmt.Sprintf("thread_%d", threadID))
 }

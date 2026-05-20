@@ -22,8 +22,9 @@ One persistent Go daemon, many projects, many agents.
 - **Cross-platform** — CI and development target macOS, Windows, and Linux
 - **No Docker** — Single binary deployment, no container orchestration
 
-## Current State
+## Current State (May 2026)
 
+### Core operational
 - Core loop working: Telegram → Agent routing → Bridge → PI SDK → Response
 - Persona system: IDENTITY.md + SOUL.md + USER.md assembled into system prompts
 - Cron scheduler: SQLite-backed, recurring and one-time jobs, Telegram delivery
@@ -31,8 +32,32 @@ One persistent Go daemon, many projects, many agents.
 - Session continuity: resume via session ID, auto-reset on token threshold
 - Agent registry: markdown-defined agents with model/tool/MCP overrides
 - Onboarding CLI: interactive setup for providers, tokens, and configuration
-- Vision model fallback: auto-switch to vision-capable model when images arrive
-- Bridge image format fixed for PI AI SDK ImageContent compatibility
-- Groq STT voice transcription verified and operational
-- Onboarding includes optional vision model configuration step
-- ~7.2K Go LOC + ~420 TS LOC, comprehensive test coverage
+- Vision model fallback + Groq STT + bridge image format (PI SDK compatible)
+
+### Recently completed (v0.7.16–v0.8.0)
+- **Security Guard-Rails** (100%): CapabilityProfile governance, PI tool_call hooks, policy engine, audit trail, fail-closed. 5 profiles: observe→privileged.
+- **Persistent Project Binding** (95%): SQLite-backed `/cwd` that survives restart, topic→group fallback, explicit clear, pipeline integration.
+- **Continuity Engine v1**: Persistent conversation state, progressive summarization, checkpoint/run journal.
+- **UX Polish**: Streaming text, idle timeout, live progress metrics, `/stop`, `/status`, queue system, Telegram ack flow.
+- **Bridge Resilience**: Circuit breaker, retry with backoff, translated error messages, scanner-based NDJSON with 10MB limit.
+- **Orchestrator scaffold** (~40%): Worktree management, wave execution, validate prompts, git helpers, tasks status — but the cycle doesn't close.
+
+### In progress
+- **~8.5K Go LOC + ~550 TS LOC**, comprehensive test coverage (200+ tests)
+- Continuity Engine with Progressive Summarization, thinking heartbeat
+- 3-message queue per chat/thread
+
+## Roadmap
+
+Ver `.specs/project/ROADMAP.md` para o sequenciamento completo. Resumo:
+
+```
+Sprint A → User Isolation MVP
+Sprint B → Close Orchestration Cycle (conectar scaffold existente)
+Sprint C → Plan Mode Architecture explícito
+Sprint D → User-Scoped Project Memory
+Sprint E → Wiki Memory Gateway (MCP)
+Sprint F → Learning Nudge escopado
+Sprint G → Agent Comms
+Sprint H → Auto-Skills
+```
