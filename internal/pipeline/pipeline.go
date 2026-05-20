@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/igormaneschy/aurelia/internal/agents"
@@ -40,6 +41,9 @@ const (
 		"Dica: se persistir, use /new para reiniciar a sessão."
 	bridgeTimeoutMessage = "Tempo limite atingido antes de concluir.\n\n" +
 		"A solicitação foi muito complexa. Tente dividir em partes menores."
+
+	heartbeatInterval  = 10 * time.Second
+	heartbeatThreshold = 15 * time.Second
 )
 
 func bridgeCooldownMessage(remaining time.Duration) string {
@@ -69,12 +73,22 @@ func queueStatusSuffix(queueSize int) string {
 	return fmt.Sprintf("\n📥 Fila: %d mensagens aguardando.", queueSize)
 }
 
-func queueAdmittedMessage(active *activeRun) string {
+func queueAdmittedMessage(active *activeRun, queueSize int) string {
 	description := strings.TrimSpace(active.description())
-	if description == "" {
-		return "📥 Sua mensagem é a próxima na fila."
+	ahead := queueSize - 1
+	var positionMsg string
+	switch {
+	case ahead <= 0:
+		positionMsg = "Sua mensagem será a próxima na fila."
+	case ahead == 1:
+		positionMsg = "📥 Fila: 1 mensagem à sua frente. Sua mensagem será processada em seguida."
+	default:
+		positionMsg = fmt.Sprintf("📥 Fila: %d mensagens à sua frente. Sua mensagem será processada em seguida.", ahead)
 	}
-	return "📥 Ainda estou processando: " + description + ". Sua mensagem será a próxima na fila."
+	if description == "" {
+		return "📥 " + positionMsg
+	}
+	return "📥 Ainda estou processando: " + description + ". " + positionMsg
 }
 
 // Process handles a user message after transport-level bootstrap and command checks.
@@ -115,14 +129,14 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 		}
 		s.output.ConfirmMessage(chatID, messageID)
 	case admitQueued:
-		if _, err := s.output.SendText(chatID, threadID, queueAdmittedMessage(active)); err != nil {
+		queueSize := s.runs.queueSize(runKey{chatID: chatID, threadID: threadID})
+		if _, err := s.output.SendText(chatID, threadID, queueAdmittedMessage(active, queueSize)); err != nil {
 			log.Printf("pipeline: SendText(admitQueued) failed for chat=%d: %v", chatID, err)
 		}
-	case admitReplacedQueued:
-		if _, err := s.output.SendText(chatID, threadID, "🔁 Atualizei a próxima instrução na fila."); err != nil {
-			log.Printf("pipeline: SendText(admitReplacedQueued) failed for chat=%d: %v", chatID, err)
+	case admitQueueFull:
+		if _, err := s.output.SendText(chatID, threadID, "📥 Já tenho 3 mensagens na fila. Aguarde um momento e reenvie depois."); err != nil {
+			log.Printf("pipeline: SendText(admitQueueFull) failed for chat=%d: %v", chatID, err)
 		}
-		s.output.ConfirmMessage(chatID, messageID)
 	}
 	return nil
 }
@@ -464,7 +478,9 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 			return
 		}
 	} else {
-		outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
+		toolUseSignal := make(chan struct{}, 16)
+		go heartbeatMonitor(ctx.Done(), toolUseSignal, chatID, threadID, s.output)
+		outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal)
 		if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
 			s.output.ConfirmMessage(chatID, messageID)
 			return
@@ -518,7 +534,9 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 		return
 	}
 
-	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText)
+	toolUseSignal := make(chan struct{}, 16)
+	go heartbeatMonitor(ctx.Done(), toolUseSignal, chatID, threadID, s.output)
+	outcome = s.ProcessBridgeEvents(chatID, threadID, messageID, ch, progress, userText, toolUseSignal)
 	if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID); handled {
 		s.output.ConfirmMessage(chatID, messageID)
 		return
@@ -586,8 +604,46 @@ func (s *Service) handleRetryOutcome(chatID int64, threadID int, messageID int, 
 	}
 }
 
+// heartbeatMonitor sends a "still thinking" update when no tool_use event
+// arrives within heartbeatThreshold. It resets on each tool_use event so the
+// user only sees the message when the model is thinking without tools.
+// Stopped by doneCh (e.g., ctx.Done()).
+func heartbeatMonitor(doneCh <-chan struct{}, toolUseSignal <-chan struct{}, chatID int64, threadID int, output Output) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("pipeline: panic in heartbeatMonitor: %v", r)
+		}
+	}()
+
+	lastTool := time.Now()
+	beatSent := false
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-doneCh:
+			return
+		case <-toolUseSignal:
+			lastTool = time.Now()
+			beatSent = false
+		case <-ticker.C:
+			if time.Since(lastTool) >= heartbeatThreshold && !beatSent {
+				elapsed := time.Since(lastTool).Round(time.Second)
+				msg := fmt.Sprintf("⏱️ %s — processando sem ferramentas ativas no momento", elapsed)
+				if _, err := output.SendText(chatID, threadID, msg); err != nil {
+					log.Printf("pipeline: heartbeat SendText failed for chat=%d: %v", chatID, err)
+				}
+				beatSent = true
+			}
+		}
+	}
+}
+
 // ProcessBridgeEvents reads bridge events and sends responses to the output.
-func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int, ch <-chan bridge.Event, progress ProgressReporter, userText string) Outcome {
+// toolUseSignal, if non-nil, receives a signal on every tool_use event so a
+// caller can monitor thinking gaps (heartbeat).
+func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int, ch <-chan bridge.Event, progress ProgressReporter, userText string, toolUseSignal chan<- struct{}) Outcome {
 	var assistantText strings.Builder
 
 	for ev := range ch {
@@ -604,6 +660,12 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			}
 			progress.ReportTool(toolName)
 			s.recordToolUse(chatID, threadID, toolName)
+			if toolUseSignal != nil {
+				select {
+				case toolUseSignal <- struct{}{}:
+				default:
+				}
+			}
 		case "tool_result":
 			// Append a truncated, redacted summary to the tool tracking state.
 			if s.runLog != nil {
@@ -762,6 +824,9 @@ func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event) bool 
 	needsReset := s.tracker.RecordUsage(chatID, threadID, ev.NumTurns, ev.CostUSD, s.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens)
 	usage := s.tracker.Get(chatID, threadID)
 	log.Printf("session usage: chat=%d thread=%d %s (auto-reset=%t)", chatID, threadID, usage, needsReset)
+	if isNear, pct := s.tracker.WarningZone(chatID, threadID, s.config.MaxSessionTokens); isNear {
+		log.Printf("session warning zone: chat=%d thread=%d %d%% used", chatID, threadID, pct)
+	}
 	return needsReset
 }
 
@@ -841,9 +906,135 @@ func sanitizeExecutionPlanForChat(text string) string {
 	return displayText + "\n\n[plano de execução interno omitido]"
 }
 
+// summaryCounter tracks the number of successful turns since the last
+// LLM-generated summary for a conversation. Stored in-memory only;
+// on daemon restart it resets to 0, triggering a fresh summary on the
+// next turn from existing continuity state.
+type summaryCounter struct {
+	mu     sync.Mutex
+	counts map[continuity.ConversationKey]int
+}
+
+// increment increments the turn counter and returns the new count and whether
+// we should generate a summary (turns >= interval).
+func (c *summaryCounter) increment(key continuity.ConversationKey, interval int) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counts[key]++
+	turns := c.counts[key]
+	return turns, turns >= interval
+}
+
+// reset resets the turn counter for a conversation after summarization.
+func (c *summaryCounter) reset(key continuity.ConversationKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.counts, key)
+}
+
+// runeCap returns the first n runes of s, preserving valid UTF-8.
+func runeCap(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	var count int
+	for i := range s {
+		if count >= n {
+			return s[:i]
+		}
+		count++
+	}
+	return s
+}
+
+// generateProgressiveSummary calls the LLM to merge the previous summary
+// with the latest exchange. Returns an updated summary string, or empty
+// string if summarization failed (caller falls back to raw text).
+func (s *Service) generateProgressiveSummary(ctx context.Context, previousSummary, userText, assistantText string) string {
+	if s.bridge == nil || s.config == nil {
+		return ""
+	}
+
+	// Cap inputs to keep prompt tokens manageable
+	cappedPrev := runeCap(previousSummary, 2000)
+	cappedUser := runeCap(userText, 2000)
+	cappedAssistant := runeCap(assistantText, 2000)
+
+	prompt := fmt.Sprintf(`Merge the previous summary with the latest user message and assistant response into ONE updated summary that captures all important context, decisions, and open items.
+
+Previous summary: %s
+Latest user message: %s
+Latest assistant response: %s
+
+Updated summary (max 900 chars, no preamble):`,
+		cappedPrev, cappedUser, cappedAssistant)
+
+	sumCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	result, err := s.bridge.ExecuteSync(sumCtx, bridge.Request{
+		Command: "query",
+		Prompt:  prompt,
+		Options: bridge.RequestOptions{
+			SystemPrompt: "You are a conversation summarizer. Output ONLY the requested summary, no preamble, no explanation. Maximum 900 characters, in the same language as the conversation (Portuguese).",
+			Provider:     s.config.DefaultProvider,
+			Model:        s.config.DefaultModel,
+		},
+	})
+
+	if err != nil {
+		log.Printf("summary: failed to generate progressive summary: %v", err)
+		return ""
+	}
+
+	// Redact BEFORE truncation (per redaction-before-truncation.md) so
+	// secrets straddling the boundary aren't sliced in half.
+	summary := redactSecrets(strings.TrimSpace(result.Content))
+	return runeCap(summary, continuity.MaxAssistantSummary)
+}
+
 func (s *Service) afterSuccessfulTurn(chatID int64, threadID int, userText string, finalText string, runID string) {
-	// Patch continuity with successful turn state
-	s.patchContinuityAfterSuccess(chatID, threadID, userText, finalText, runID)
+	key := continuity.ConversationKey{ChatID: chatID, ThreadID: threadID}
+
+	// Progressive summarization: on non-summary turns, re-read the existing
+	// summary from continuity so LastAssistantSummary accumulates across
+	// intervals instead of being overwritten by the latest raw text.
+	finalSummary := finalText
+	if s.summaryInterval > 0 {
+		turns, shouldSummarize := s.summaryCounter.increment(key, s.summaryInterval)
+		if shouldSummarize {
+			log.Printf("summary: generating progressive summary for chat=%d thread=%d after %d turns", chatID, threadID, turns)
+
+			if s.continuity != nil {
+				readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer readCancel()
+
+				state, err := s.continuity.Get(readCtx, chatID, threadID)
+				if err == nil && state != nil && state.LastAssistantSummary != "" {
+					// Use background context (not readCtx) so generateProgressiveSummary
+					// can derive its own 10s timeout — a 5s parent would truncate it.
+					merged := s.generateProgressiveSummary(context.Background(), state.LastAssistantSummary, userText, finalText)
+					if merged != "" {
+						finalSummary = merged
+						s.summaryCounter.reset(key)
+						log.Printf("summary: progressive summary generated (%d chars) for chat=%d thread=%d", len(merged), chatID, threadID)
+					}
+				}
+			}
+		} else if s.continuity != nil {
+			// Preserve accumulated summary across non-summary turns
+			// so subsequent intervals build on the previous summary.
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			state, err := s.continuity.Get(ctx, chatID, threadID)
+			if err == nil && state != nil && state.LastAssistantSummary != "" {
+				finalSummary = state.LastAssistantSummary
+			}
+		}
+	}
+
+	// Patch continuity with the (potentially summarized) assistant text
+	s.patchContinuityAfterSuccess(chatID, threadID, userText, finalSummary, runID)
 
 	if s.dreamer == nil {
 		return
@@ -996,6 +1187,63 @@ func (s *Service) patchContinuitySessionID(chatID int64, threadID int, sessionID
 	if err != nil {
 		log.Printf("continuity: failed to patch session ID chat=%d thread=%d: %v", chatID, threadID, err)
 	}
+}
+
+// continuitySnapshot captures the current continuity state for fallback recovery.
+// Returns a compact, redacted summary string, or empty if unavailable.
+// All field values are redacted for defense-in-depth, escaped to prevent
+// delimiter injection, and the total is capped at MaxContinuityBlockChars.
+func (s *Service) continuitySnapshot(ctx context.Context, chatID int64, threadID int) string {
+	if s.continuity == nil {
+		return ""
+	}
+	getCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	state, err := s.continuity.Get(getCtx, chatID, threadID)
+	if err != nil || state == nil {
+		return ""
+	}
+
+	var parts []string
+	if state.LastUserIntent != "" {
+		parts = append(parts, "Last user intent: "+redactSecrets(state.LastUserIntent))
+	}
+	if state.LastAssistantSummary != "" {
+		parts = append(parts, "Last assistant summary: "+redactSecrets(state.LastAssistantSummary))
+	}
+	if state.LastRunStatus != "" {
+		parts = append(parts, "Last run status: "+redactSecrets(state.LastRunStatus))
+	}
+	if state.LastTools != "" {
+		parts = append(parts, "Tools used: "+redactSecrets(state.LastTools))
+	}
+	if state.CWD != "" {
+		parts = append(parts, "Working directory: "+redactSecrets(state.CWD))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	body := strings.Join(parts, "\n")
+
+	// Cap the total block size (rune-aware to avoid splitting multi-byte chars).
+	if utf8.RuneCountInString(body) > continuity.MaxContinuityBlockChars {
+		for utf8.RuneCountInString(body) > continuity.MaxContinuityBlockChars {
+			body = body[:len(body)-1]
+		}
+		// Walk back to valid rune boundary.
+		for len(body) > 0 && body[len(body)-1]&0xC0 == 0x80 {
+			body = body[:len(body)-1]
+		}
+	}
+
+	// Escape delimiter-sensitive characters to prevent injection of
+	// closing </fallback_context_untrusted> tags.
+	body = continuity.EscapeUntrusted(body)
+
+	return body
 }
 
 func (s *Service) handleErrorEvent(chatID int64, threadID int, messageID int, ev bridge.Event) Outcome {

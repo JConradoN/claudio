@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestQueueMessagesIncludeActiveContext(t *testing.T) {
 	t.Parallel()
 
 	active := &activeRun{prompt: "gerando relatório", startedAt: time.Now().Add(-2 * time.Minute)}
-	queued := queueAdmittedMessage(active)
+	queued := queueAdmittedMessage(active, 1)
 	if !strings.Contains(queued, "gerando relatório") || !strings.Contains(queued, "próxima") {
 		t.Fatalf("queued message should include active context and position, got %q", queued)
 	}
@@ -149,5 +150,161 @@ func TestRunSupervisorSupersedeCancelsAndReplacesQueue(t *testing.T) {
 	nextRun, nextInput := rs.finish(run)
 	if nextRun == nil || nextInput == nil || nextInput.text != "na verdade faça só teste" {
 		t.Fatalf("finish next = (%v, %v), want supersede input", nextRun, nextInput)
+	}
+}
+
+func TestRunSupervisorQueueUpToThree(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 5, threadID: 1}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	if admission != admitStart || run == nil {
+		t.Fatalf("first admit = (%v, %v), want start", run, admission)
+	}
+
+	// Queue 3 follow-ups
+	var admits []admissionKind
+	for i := 0; i < 3; i++ {
+		text := fmt.Sprintf("followup-%d", i+1)
+		_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: text})
+		admits = append(admits, adm)
+	}
+	for i, adm := range admits {
+		if adm != admitQueued {
+			t.Fatalf("followup %d admission = %v, want admitQueued", i+1, adm)
+		}
+	}
+
+	if got := rs.queueSize(key); got != 3 {
+		t.Fatalf("queueSize() = %d, want 3", got)
+	}
+
+	// Verify FIFO order by finishing and checking each dequeued text
+	expected := []string{"followup-1", "followup-2", "followup-3"}
+	for i, want := range expected {
+		nextRun, nextInput := rs.finish(run)
+		if nextRun == nil || nextInput == nil {
+			t.Fatalf("finish iteration %d returned nil, want %q", i, want)
+		}
+		if nextInput.text != want {
+			t.Fatalf("finish iteration %d text = %q, want %q", i, nextInput.text, want)
+		}
+		run = nextRun // advance to the newly started run
+	}
+
+	// All items dequeued — finish should return nil
+	finalRun, finalInput := rs.finish(run)
+	if finalRun != nil || finalInput != nil {
+		t.Fatalf("finish after draining queue = (%v, %v), want (nil, nil)", finalRun, finalInput)
+	}
+
+	if got := rs.queueSize(key); got != 0 {
+		t.Fatalf("queueSize() after drain = %d, want 0", got)
+	}
+}
+
+func TestRunSupervisorQueueFull(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 5, threadID: 2}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	if admission != admitStart || run == nil {
+		t.Fatalf("first admit = (%v, %v), want start", run, admission)
+	}
+
+	// Fill queue to capacity
+	for i := 0; i < maxQueueDepth; i++ {
+		text := fmt.Sprintf("fill-%d", i+1)
+		_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: text})
+		if adm != admitQueued {
+			t.Fatalf("fill %d admission = %v, want admitQueued", i+1, adm)
+		}
+	}
+
+	// 4th should be rejected
+	_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "too-many"})
+	if adm != admitQueueFull {
+		t.Fatalf("4th admission = %v, want admitQueueFull", adm)
+	}
+
+	if got := rs.queueSize(key); got != maxQueueDepth {
+		t.Fatalf("queueSize() after full rejection = %d, want %d", got, maxQueueDepth)
+	}
+}
+
+func TestRunSupervisorSupersedeClearsQueue(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 5, threadID: 3}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	if admission != admitStart || run == nil {
+		t.Fatalf("first admit = (%v, %v), want start", run, admission)
+	}
+
+	// Queue two follow-ups
+	_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "queued-1"})
+	if adm != admitQueued {
+		t.Fatalf("queued-1 admission = %v, want admitQueued", adm)
+	}
+	_, adm, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "queued-2"})
+	if adm != admitQueued {
+		t.Fatalf("queued-2 admission = %v, want admitQueued", adm)
+	}
+
+	// Supersede should clear queue and replace with just the superseding message
+	_, adm, _ = rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "na verdade troque tudo"})
+	if adm != admitSupersede {
+		t.Fatalf("supersede admission = %v, want admitSupersede", adm)
+	}
+
+	if got := rs.queueSize(key); got != 1 {
+		t.Fatalf("queueSize() after supersede = %d, want 1", got)
+	}
+
+	// Finish should give us the superseding message, not queued-1
+	nextRun, nextInput := rs.finish(run)
+	if nextRun == nil || nextInput == nil || nextInput.text != "na verdade troque tudo" {
+		t.Fatalf("finish after supersede = (%v, %q), want supersede message", nextRun, nextInput.text)
+	}
+}
+
+func TestRunSupervisorCancelClearsQueue(t *testing.T) {
+	t.Parallel()
+
+	rs := newRunSupervisor()
+	key := runKey{chatID: 5, threadID: 4}
+	run, admission, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: "first"})
+	if admission != admitStart || run == nil {
+		t.Fatalf("first admit = (%v, %v), want start", run, admission)
+	}
+
+	// Queue a few messages
+	for i := 0; i < 3; i++ {
+		text := fmt.Sprintf("queued-%d", i+1)
+		_, adm, _ := rs.admit(pipelineInput{chatID: key.chatID, threadID: key.threadID, text: text})
+		if adm != admitQueued {
+			t.Fatalf("queued-%d admission = %v, want admitQueued", i+1, adm)
+		}
+	}
+
+	if got := rs.queueSize(key); got != 3 {
+		t.Fatalf("queueSize() before cancel = %d, want 3", got)
+	}
+
+	if !rs.cancel(key) {
+		t.Fatal("cancel should report active run")
+	}
+
+	if got := rs.queueSize(key); got != 0 {
+		t.Fatalf("queueSize() after cancel = %d, want 0", got)
+	}
+
+	// Further finish should not start a queued item
+	nextRun, nextInput := rs.finish(run)
+	if nextRun != nil || nextInput != nil {
+		t.Fatalf("finish after cancel = (%v, %v), want (nil, nil)", nextRun, nextInput)
 	}
 }

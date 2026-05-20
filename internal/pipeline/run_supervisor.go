@@ -42,20 +42,22 @@ const (
 	admitSupersede
 	admitStatus
 	admitQueued
-	admitReplacedQueued
+	admitQueueFull
 )
+
+const maxQueueDepth = 3
 
 type runSupervisor struct {
 	mu     sync.Mutex
 	nextID uint64
 	active map[runKey]*activeRun
-	queued map[runKey]pipelineInput
+	queued map[runKey][]pipelineInput
 }
 
 func newRunSupervisor() *runSupervisor {
 	return &runSupervisor{
 		active: make(map[runKey]*activeRun, 16),
-		queued: make(map[runKey]pipelineInput, 16),
+		queued: make(map[runKey][]pipelineInput, 16),
 	}
 }
 
@@ -78,14 +80,14 @@ func (rs *runSupervisor) admit(input pipelineInput) (*activeRun, admissionKind, 
 		return nil, admitStatus, current
 	case concurrentSupersede:
 		current.cancel()
-		rs.queued[key] = input
+		rs.queued[key] = []pipelineInput{input}
 		return nil, admitSupersede, current
 	default:
-		_, existed := rs.queued[key]
-		rs.queued[key] = input
-		if existed {
-			return nil, admitReplacedQueued, current
+		queue := rs.queued[key]
+		if len(queue) >= maxQueueDepth {
+			return nil, admitQueueFull, current
 		}
+		rs.queued[key] = append(queue, input)
 		return nil, admitQueued, current
 	}
 }
@@ -116,10 +118,7 @@ func (rs *runSupervisor) queueSize(key runKey) int {
 func (rs *runSupervisor) status(key runKey) (string, int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	queueSize := 0
-	if _, ok := rs.queued[key]; ok {
-		queueSize = 1
-	}
+	queueSize := len(rs.queued[key])
 	run := rs.active[key]
 	if run == nil {
 		return "", queueSize
@@ -142,13 +141,21 @@ func (rs *runSupervisor) finish(run *activeRun) (*activeRun, *pipelineInput) {
 	}
 	delete(rs.active, run.key)
 
-	queued, ok := rs.queued[run.key]
-	if !ok {
+	queue, ok := rs.queued[run.key]
+	if !ok || len(queue) == 0 {
+		delete(rs.queued, run.key)
 		return nil, nil
 	}
-	delete(rs.queued, run.key)
-	next := rs.startLocked(run.key, queued)
-	return next, &queued
+
+	nextInput := queue[0]
+	if len(queue) == 1 {
+		delete(rs.queued, run.key)
+	} else {
+		rs.queued[run.key] = queue[1:]
+	}
+
+	next := rs.startLocked(run.key, nextInput)
+	return next, &nextInput
 }
 
 func (rs *runSupervisor) startLocked(key runKey, input pipelineInput) *activeRun {

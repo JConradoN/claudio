@@ -88,7 +88,11 @@ type Service struct {
 	runLogMu       sync.Mutex
 	runLogStates   map[string]*runLogState
 	continuity     continuity.Store
+	summaryCounter *summaryCounter
+	summaryInterval int
 }
+
+const defaultSummaryInterval = 5
 
 // NewService builds a pipeline service with explicit dependencies.
 func NewService(cfg Config) *Service {
@@ -111,9 +115,11 @@ func NewService(cfg Config) *Service {
 		projectIndex:  cfg.ProjectIndex,
 		bindings:      cfg.Bindings,
 		runs:          newRunSupervisor(),
-		runLog:        cfg.RunLog,
-		runLogStates:  make(map[string]*runLogState),
-		continuity:    cfg.Continuity,
+		runLog:          cfg.RunLog,
+		runLogStates:    make(map[string]*runLogState),
+		continuity:      cfg.Continuity,
+		summaryCounter:  &summaryCounter{counts: make(map[continuity.ConversationKey]int)},
+		summaryInterval: defaultSummaryInterval,
 	}
 
 	if cfg.Bridge != nil {
@@ -122,6 +128,11 @@ func NewService(cfg Config) *Service {
 			rbCfg.OpenRouterAPIKey = cfg.AppConfig.ProviderAPIKey("openrouter")
 		}
 		s.resilient = NewResilientBridge(cfg.Bridge, rbCfg)
+		s.resilient.ContinuitySnapshot = s.continuitySnapshot
+	}
+
+	if s.config != nil && s.config.SummaryInterval > 0 {
+		s.summaryInterval = s.config.SummaryInterval
 	}
 
 	return s

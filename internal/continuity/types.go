@@ -61,3 +61,11 @@ const (
 // RetentionThreshold is the maximum age of a ConversationState we consider
 // fresh enough for automatic prompt injection (7 days).
 const RetentionThreshold = 7 * 24 * time.Hour
+
+// FreshThreshold is the boundary for "hot" state — the session is likely still
+// warm and continuity can be skipped to save tokens.
+const FreshThreshold = 5 * time.Minute
+
+// StaleThreshold is the boundary for "stale" state — continuity recovery
+// context is unlikely to be useful beyond this point.
+const StaleThreshold = 6 * time.Hour

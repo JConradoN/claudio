@@ -44,7 +44,9 @@ func defaultModelForProvider(provider string) string {
 
 const (
 	defaultMaxIterations    = 500
-	defaultMaxSessionTokens = 100000
+	// PI SDK auto-compacts sessions near model context limits (~180K for 200K
+	// window models); this threshold is a safety net only, not primary management.
+	defaultMaxSessionTokens = 180000
 	defaultMaxImageBytes    = 10 * 1024 * 1024
 	defaultSessionTTLHours  = 168
 	defaultLLMProvider      = "kimi"
@@ -99,6 +101,10 @@ type AppConfig struct {
 
 	// SecurityConfig governs capability profiles, tool policies, and audit mode.
 	SecurityConfig security.SecurityConfig `json:"security,omitempty"`
+
+	// SummaryInterval controls how many successful turns between progressive
+	// LLM summarization for continuity. 0 disables summarization (default 5).
+	SummaryInterval int `json:"summary_interval,omitempty"`
 }
 
 // VisionFallback returns the configured vision model and provider for image inputs.
@@ -169,6 +175,7 @@ type fileConfig struct {
 	LogFormat       string `json:"log_format,omitempty"`
 	DiskScanEnabled bool                     `json:"disk_scan_enabled,omitempty"`
 	SecurityConfig  security.SecurityConfig `json:"security,omitempty"`
+	SummaryInterval int                      `json:"summary_interval,omitempty"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -324,5 +331,6 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		LogFormat:               cfg.LogFormat,
 		DiskScanEnabled:         cfg.DiskScanEnabled,
 		SecurityConfig:          cfg.SecurityConfig,
+		SummaryInterval:         cfg.SummaryInterval,
 	}
 }

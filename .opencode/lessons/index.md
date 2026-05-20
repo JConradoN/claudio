@@ -25,3 +25,7 @@
 ## Change 3-sprint-remediation (2026-05-19)
 - [pattern] scanner-over-readbytes
 - [pattern] panic-cleanup-stale-pointers
+
+## Change ux-session-improvements (2026-05-20)
+- [pattern] pi-sdk-session-compaction
+- [process] parallel-delegation-batching

@@ -20,6 +20,11 @@ type ResilientBridge struct {
 	bridge    BridgeExecutor
 	breakers  *circuitBreakerRegistry
 	config    ResilientConfig
+
+	// ContinuitySnapshot is called before fallback to capture current context.
+	// Returns a compact summary string to inject into the fallback prompt.
+	// The summary is already redacted, escaped, and capped. May be nil.
+	ContinuitySnapshot func(ctx context.Context, chatID int64, threadID int) string
 }
 
 // ResilientConfig configures retry and fallback behavior.
@@ -72,6 +77,11 @@ func (rb *ResilientBridge) Execute(
 	provider := req.Options.Provider
 	model := req.Options.Model
 
+	// Extract chat/thread from security context for fallback snapshot injection.
+	// Must be captured once per Execute call and passed explicitly to tryFallback
+	// to avoid data races (ResilientBridge is shared across goroutines).
+	chatID, threadID := extractChatThread(req)
+
 	// 1. Circuit breaker open → skip directly to fallback.
 	if rb.breakers.ShouldSkip(provider) {
 		if msg := rb.breakers.NotifyMessage(provider); msg != "" && onNotify != nil {
@@ -84,7 +94,7 @@ func (rb *ResilientBridge) Execute(
 				onNotify(msg)
 			}()
 		}
-		return rb.tryFallback(ctx, req, onNotify)
+		return rb.tryFallback(ctx, req, onNotify, chatID, threadID)
 	}
 
 	// 2. Try primary provider with retries.
@@ -129,7 +139,7 @@ func (rb *ResilientBridge) Execute(
 		}
 	}
 
-	return rb.tryFallback(ctx, req, onNotify)
+	return rb.tryFallback(ctx, req, onNotify, chatID, threadID)
 }
 
 // executeWithRetry attempts the request up to MaxRetries with exponential backoff.
@@ -244,11 +254,12 @@ func proxyChannel(prefix []bridge.Event, src <-chan bridge.Event) <-chan bridge.
 }
 
 // tryFallback attempts the request with the fallback provider.
-func (rb *ResilientBridge) tryFallback(ctx context.Context, req bridge.Request, onNotify func(string)) ExecuteResult {
+// chatID and threadID are extracted from the request security context by the
+// caller (Execute) and passed explicitly instead of stored on the struct to
+// avoid data races — ResilientBridge is shared across goroutines.
+func (rb *ResilientBridge) tryFallback(ctx context.Context, req bridge.Request, onNotify func(string), chatID int64, threadID int) ExecuteResult {
 	if rb.config.OpenRouterAPIKey == "" {
-		if onNotify != nil {
-			onNotify(OpenRouterNotConfiguredMessage())
-		}
+		safeNotify(onNotify, OpenRouterNotConfiguredMessage())
 		return ExecuteResult{Err: fmt.Errorf("fallback unavailable: OpenRouter not configured")}
 	}
 
@@ -259,26 +270,47 @@ func (rb *ResilientBridge) tryFallback(ctx context.Context, req bridge.Request, 
 	fallbackReq.Options.Resume = ""
 	fallbackReq.Options.Continue = false
 
-	if onNotify != nil {
-		onNotify(FallbackMessage(req.Options.Provider))
-	}
+	safeNotify(onNotify, FallbackMessage(req.Options.Provider))
 
 	log.Printf("resilience: falling back to %s/%s", rb.config.FallbackProvider, rb.config.FallbackModel)
 
+	// Inject continuity snapshot into fallback system prompt before executing.
+	// Protected with defer/recover so a panic in the callback does not abort
+	// the fallback attempt.
+	if rb.ContinuitySnapshot != nil && chatID != 0 {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("resilient_bridge: panic in ContinuitySnapshot: %v", r)
+				}
+			}()
+			snapshot := rb.ContinuitySnapshot(ctx, chatID, threadID)
+			if snapshot != "" {
+				snapshotBlock := "\n\n## Previous Session Context (recovered)\n\n" +
+					"The following is recovered context from the previous session that was interrupted. " +
+					"Use it to continue the task.\n\n" +
+					"<fallback_context_untrusted>\n" + snapshot + "\n</fallback_context_untrusted>"
+
+				if fallbackReq.Options.SystemPrompt != "" {
+					fallbackReq.Options.SystemPrompt += snapshotBlock
+				} else {
+					fallbackReq.Options.SystemPrompt = snapshotBlock
+				}
+				log.Printf("resilience: injected continuity snapshot into fallback prompt (chat=%d thread=%d)", chatID, threadID)
+			}
+		}()
+	}
+
 	evCh, err := rb.bridge.Execute(ctx, fallbackReq)
 	if err != nil {
-		if onNotify != nil {
-			onNotify(FinalErrorMessage())
-		}
+		safeNotify(onNotify, FinalErrorMessage())
 		return ExecuteResult{Err: fmt.Errorf("fallback failed: %w", err)}
 	}
 
 	// Validate the fallback channel.
 	validated, valErr := rb.validateChannel(ctx, evCh)
 	if valErr != nil {
-		if onNotify != nil {
-			onNotify(FinalErrorMessage())
-		}
+		safeNotify(onNotify, FinalErrorMessage())
 		return ExecuteResult{Err: fmt.Errorf("fallback failed: %w", valErr)}
 	}
 
@@ -288,4 +320,29 @@ func (rb *ResilientBridge) tryFallback(ctx context.Context, req bridge.Request, 
 // BreakerState returns the circuit breaker state for a provider (for status/debug).
 func (rb *ResilientBridge) BreakerState(provider string) CircuitState {
 	return rb.breakers.get(provider).State()
+}
+
+// safeNotify calls onNotify with panic recovery. Used for all user-facing
+// notifications that are not critical to the execution flow.
+func safeNotify(onNotify func(string), msg string) {
+	if onNotify == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("resilient_bridge: panic in onNotify: %v", r)
+		}
+	}()
+	onNotify(msg)
+}
+
+// extractChatThread reads ChatID and ThreadID from the request's security
+// context, or returns zero values when no security context is present.
+// Must be called once per Execute invocation and the results passed explicitly
+// to tryFallback to avoid data races on ResilientBridge shared state.
+func extractChatThread(req bridge.Request) (chatID int64, threadID int) {
+	if req.Options.Security != nil {
+		return req.Options.Security.ChatID, req.Options.Security.ThreadID
+	}
+	return 0, 0
 }

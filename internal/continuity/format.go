@@ -78,3 +78,34 @@ func IsRecent(state *ConversationState) bool {
 	}
 	return time.Since(state.UpdatedAt) <= RetentionThreshold
 }
+
+// FreshnessLevel indicates how fresh the continuity state is.
+type FreshnessLevel int
+
+const (
+	FreshnessHot    FreshnessLevel = iota // updated within last 5min
+	FreshnessWarm                         // within retention but not hot
+	FreshnessStale                        // older than retention
+)
+
+// Freshness returns how fresh the state is, based on UpdatedAt.
+func Freshness(state *ConversationState) FreshnessLevel {
+	if state == nil {
+		return FreshnessStale
+	}
+	age := time.Since(state.UpdatedAt)
+	switch {
+	case age <= FreshThreshold:
+		return FreshnessHot
+	case age <= RetentionThreshold:
+		return FreshnessWarm
+	default:
+		return FreshnessStale
+	}
+}
+
+// IsFresh returns true when the continuity state is FreshnessHot
+// (updated within the last 5 minutes).
+func IsFresh(state *ConversationState) bool {
+	return Freshness(state) == FreshnessHot
+}

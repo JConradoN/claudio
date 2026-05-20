@@ -202,3 +202,78 @@ func TestIsRecent_Boundary(t *testing.T) {
 		t.Fatal("expected IsRecent false for state just over retention threshold")
 	}
 }
+
+func TestFreshness_Hot(t *testing.T) {
+	// Updated just now
+	state := &ConversationState{UpdatedAt: time.Now()}
+	if level := Freshness(state); level != FreshnessHot {
+		t.Fatalf("expected FreshnessHot for current time, got %d", level)
+	}
+
+	// Just under fresh threshold
+	state2 := &ConversationState{UpdatedAt: time.Now().Add(-FreshThreshold + time.Second)}
+	if level := Freshness(state2); level != FreshnessHot {
+		t.Fatalf("expected FreshnessHot for state just under fresh threshold, got %d", level)
+	}
+}
+
+func TestFreshness_Warm(t *testing.T) {
+	// Just over fresh threshold
+	state := &ConversationState{UpdatedAt: time.Now().Add(-FreshThreshold - time.Minute)}
+	if level := Freshness(state); level != FreshnessWarm {
+		t.Fatalf("expected FreshnessWarm for state just over fresh threshold, got %d", level)
+	}
+
+	// Just under retention threshold
+	state2 := &ConversationState{UpdatedAt: time.Now().Add(-RetentionThreshold + time.Minute)}
+	if level := Freshness(state2); level != FreshnessWarm {
+		t.Fatalf("expected FreshnessWarm for state just under retention threshold, got %d", level)
+	}
+}
+
+func TestFreshness_Stale(t *testing.T) {
+	// Just over retention threshold
+	state := &ConversationState{UpdatedAt: time.Now().Add(-RetentionThreshold - time.Minute)}
+	if level := Freshness(state); level != FreshnessStale {
+		t.Fatalf("expected FreshnessStale for state just over retention threshold, got %d", level)
+	}
+
+	// Very old state
+	state2 := &ConversationState{UpdatedAt: time.Now().Add(-30 * 24 * time.Hour)}
+	if level := Freshness(state2); level != FreshnessStale {
+		t.Fatalf("expected FreshnessStale for 30-day old state, got %d", level)
+	}
+}
+
+func TestFreshness_NilState_ReturnsStale(t *testing.T) {
+	if level := Freshness(nil); level != FreshnessStale {
+		t.Fatalf("expected FreshnessStale for nil state, got %d", level)
+	}
+}
+
+func TestIsFresh_ReturnsTrueForHot(t *testing.T) {
+	state := &ConversationState{UpdatedAt: time.Now()}
+	if !IsFresh(state) {
+		t.Fatal("expected IsFresh true for current time")
+	}
+}
+
+func TestIsFresh_ReturnsFalseForWarm(t *testing.T) {
+	state := &ConversationState{UpdatedAt: time.Now().Add(-FreshThreshold - time.Minute)}
+	if IsFresh(state) {
+		t.Fatal("expected IsFresh false for warm state")
+	}
+}
+
+func TestIsFresh_ReturnsFalseForStale(t *testing.T) {
+	state := &ConversationState{UpdatedAt: time.Now().Add(-RetentionThreshold - time.Minute)}
+	if IsFresh(state) {
+		t.Fatal("expected IsFresh false for stale state")
+	}
+}
+
+func TestIsFresh_NilState_ReturnsFalse(t *testing.T) {
+	if IsFresh(nil) {
+		t.Fatal("expected IsFresh false for nil state")
+	}
+}

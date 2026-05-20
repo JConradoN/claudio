@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-05-20
+
+### Adicionado
+- Progressive Summarization na Continuity Engine: a cada 5 turns, o LLM gera
+  um resumo acumulado da conversa armazenado no `ConversationState`, substituindo
+  o truncamento determinístico. Configurável via `summary_interval` (0 = desliga).
+- Thinking heartbeat: quando o modelo processa sem ferramentas por >15s, envia
+  "⏱️ Xm Xs — processando sem ferramentas ativas no momento" como feedback visual.
+
+### Alterado
+- Fila de mensagens agora aceita até 3 mensagens enfileiradas por chat/thread
+  (antes: apenas 1, com sobrescrita silenciosa). Mensagens excedentes recebem
+  aviso explícito. FIFO preservado.
+- Continuity freshness: continuity block só é injetado quando necessário,
+  economizando ~500-1000 tokens/turn em sessões ativas. Hot <5min + sessão ativa
+  = skip; cold >7d = skip; continuation explícita = sempre injeta.
+- Alinhamento com PI SDK: `MaxSessionTokens` aumentado de 100K para 180K, pois
+  o PI SDK já gerencia compactação automática. Auto-reset agora é safety net.
+- Fallback context transfer: antes de trocar para provedor secundário, captura
+  resumo da continuidade e injeta no system prompt do fallback para minimizar
+  perda de contexto.
+- Warning zone adicionada ao tracker (log quando sessão atinge 80%+ do threshold)
+  para futuros nudges informativos.
+
+### Corrigido
+- N/A (nenhum bug corrigido nesta versão; todas as mudanças são melhorias)
+
 ## [0.8.1] - 2026-05-20
 
 ### Corrigido

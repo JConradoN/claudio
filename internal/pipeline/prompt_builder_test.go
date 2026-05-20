@@ -524,6 +524,256 @@ func TestIsContinuation(t *testing.T) {
 	}
 }
 
+// TestBuildContinuitySection_HotActive_Skips verifies that continuity is NOT
+// injected when state is hot (<5min) and the session is active (saves tokens).
+func TestBuildContinuitySection_HotActive_Skips(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Hot active test",
+		LastAssistantSummary: "Recent work",
+		LastRunStatus:        "completed",
+		UpdatedAt:            time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss := session.NewStore()
+	ss.Set(42, 0, "sid-hot-active")
+	svc := &Service{continuity: contStore, sessions: ss}
+
+	got := svc.buildContinuitySection(42, 0, "bom dia")
+	if got != "" {
+		t.Fatal("expected empty continuity for hot+active session, got non-empty block")
+	}
+}
+
+// TestBuildContinuitySection_HotCold_Injects verifies that continuity IS
+// injected when state is hot (<5min) but the session is cold (just died).
+func TestBuildContinuitySection_HotCold_Injects(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Hot cold test",
+		LastAssistantSummary: "Recent work, session died",
+		LastRunStatus:        "failed",
+		SessionCold:          true,
+		UpdatedAt:            time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss := session.NewStore()
+	// Session key exists but no session was Set → GetWithState returns ("", false)
+	svc := &Service{continuity: contStore, sessions: ss}
+
+	got := svc.buildContinuitySection(42, 0, "bom dia")
+	if got == "" {
+		t.Fatal("expected continuity for hot+cold session, got empty")
+	}
+	if !strings.Contains(got, "Hot cold test") {
+		t.Fatalf("expected ActiveGoal in continuity output, got %q", got)
+	}
+}
+
+// TestBuildContinuitySection_WarmCold_Injects verifies that continuity IS
+// injected when state is warm (>5min but within retention) and session is cold.
+func TestBuildContinuitySection_WarmCold_Injects(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Warm cold test",
+		LastAssistantSummary: "Work from 10min ago",
+		LastRunStatus:        "completed",
+		SessionCold:          true,
+		UpdatedAt:            time.Now().Add(-10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss := session.NewStore()
+	svc := &Service{continuity: contStore, sessions: ss}
+
+	got := svc.buildContinuitySection(42, 0, "bom dia")
+	if got == "" {
+		t.Fatal("expected continuity for warm+cold session, got empty")
+	}
+	if !strings.Contains(got, "Warm cold test") {
+		t.Fatalf("expected ActiveGoal in continuity output, got %q", got)
+	}
+}
+
+// TestBuildContinuitySection_WarmActive_Skips verifies that continuity is NOT
+// injected when state is warm and session is active.
+func TestBuildContinuitySection_WarmActive_Skips(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Warm active test",
+		LastAssistantSummary: "Work from 10min ago",
+		LastRunStatus:        "completed",
+		UpdatedAt:            time.Now().Add(-10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss := session.NewStore()
+	ss.Set(42, 0, "sid-warm-active")
+	svc := &Service{continuity: contStore, sessions: ss}
+
+	got := svc.buildContinuitySection(42, 0, "bom dia")
+	if got != "" {
+		t.Fatal("expected empty continuity for warm+active session, got non-empty block")
+	}
+}
+
+// TestBuildContinuitySection_Stale_Skips verifies that continuity is NOT
+// injected when state is stale (>7 days), regardless of session activity.
+func TestBuildContinuitySection_Stale_Skips(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Stale test",
+		LastAssistantSummary: "Very old work",
+		LastRunStatus:        "completed",
+		UpdatedAt:            time.Now().Add(-10 * 24 * time.Hour), // 10 days
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss := session.NewStore()
+	svc := &Service{continuity: contStore, sessions: ss}
+
+	// Even with inactive session, stale state should not inject
+	got := svc.buildContinuitySection(42, 0, "bom dia")
+	if got != "" {
+		t.Fatal("expected empty continuity for stale state, got non-empty block")
+	}
+
+	// Also verify with continuation text (continuation should still trigger)
+	got2 := svc.buildContinuitySection(42, 0, "continua")
+	if got2 == "" {
+		t.Fatal("expected continuity for stale state with continuation text")
+	}
+}
+
+// TestBuildContinuitySection_ContinuationAlwaysInjects verifies that
+// continuation text always triggers injection regardless of freshness or
+// session state.
+func TestBuildContinuitySection_ContinuationAlwaysInjects(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Continuation test",
+		LastAssistantSummary: "Any work",
+		LastRunStatus:        "completed",
+		UpdatedAt:            time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ss := session.NewStore()
+	ss.Set(42, 0, "sid-continuation")
+
+	// With hot + active — normally skipped, but continuation overrides
+	svc := &Service{continuity: contStore, sessions: ss}
+	got := svc.buildContinuitySection(42, 0, "continua a análise")
+	if got == "" {
+		t.Fatal("expected continuity for continuation text, got empty")
+	}
+	if !strings.Contains(got, "Continuation test") {
+		t.Fatalf("expected ActiveGoal in continuity output, got %q", got)
+	}
+}
+
+// TestBuildContinuitySection_NoState_Skips verifies that when no continuity
+// state exists, the section is empty regardless of other factors.
+func TestBuildContinuitySection_NoState_Skips(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ss := session.NewStore()
+	ss.Set(42, 0, "sid-no-state")
+	svc := &Service{continuity: contStore, sessions: ss}
+
+	got := svc.buildContinuitySection(42, 0, "continua")
+	if got != "" {
+		t.Fatal("expected empty continuity when no state exists, got non-empty")
+	}
+}
+
+// TestBuildContinuitySection_NilStore_ReturnsEmpty verifies nil continuity
+// store produces no section.
+func TestBuildContinuitySection_NilStore_ReturnsEmpty(t *testing.T) {
+	svc := &Service{continuity: nil, sessions: session.NewStore()}
+	got := svc.buildContinuitySection(42, 0, "hello")
+	if got != "" {
+		t.Fatal("expected empty continuity when store is nil")
+	}
+}
+
+// TestBuildContinuitySection_NilSessions_DefaultsCold verifies that a nil
+// sessions store defaults to "inactive", which means continuity is injected
+// for hot+cold and warm+cold — the conservative fallback.
+func TestBuildContinuitySection_NilSessions_DefaultsCold(t *testing.T) {
+	contStore := newContinuityTestStore(t)
+	defer contStore.Close()
+
+	ctx := t.Context()
+	err := contStore.Upsert(ctx, continuity.ConversationState{
+		ChatID:               42,
+		ThreadID:             0,
+		ActiveGoal:           "Nil sessions test",
+		LastAssistantSummary: "Recent work",
+		LastRunStatus:        "completed",
+		UpdatedAt:            time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// sessions is nil — defaults to inactive (cold)
+	svc := &Service{continuity: contStore, sessions: nil}
+
+	got := svc.buildContinuitySection(42, 0, "bom dia")
+	if got == "" {
+		t.Fatal("expected continuity when sessions is nil (defaults to cold), got empty")
+	}
+	if !strings.Contains(got, "Nil sessions test") {
+		t.Fatalf("expected ActiveGoal in continuity output, got %q", got)
+	}
+}
+
 func TestBuildSystemPrompt_ContinuityOrdering(t *testing.T) {
 	// Set up continuity store with recent state
 	contDir := t.TempDir()

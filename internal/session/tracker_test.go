@@ -169,6 +169,77 @@ func TestTracker_ClearIsolatesByThread(t *testing.T) {
 	}
 }
 
+func TestTracker_WarningZone_NoUsage(t *testing.T) {
+	tr := NewTracker()
+	isNear, pct := tr.WarningZone(1, 0, 180000)
+	if isNear {
+		t.Fatal("expected isNear=false when no usage recorded")
+	}
+	if pct != 0 {
+		t.Fatalf("expected pct=0 when no usage recorded, got %d", pct)
+	}
+}
+
+func TestTracker_WarningZone_DisabledThreshold(t *testing.T) {
+	tr := NewTracker()
+	tr.Add(1, 0, 10000, 5000, 3, 0.15)
+	isNear, pct := tr.WarningZone(1, 0, 0)
+	if isNear {
+		t.Fatal("expected isNear=false when threshold is disabled (maxTokens=0)")
+	}
+	if pct != 0 {
+		t.Fatalf("expected pct=0 when threshold disabled, got %d", pct)
+	}
+}
+
+func TestTracker_WarningZone_At85Percent(t *testing.T) {
+	tr := NewTracker()
+	// 85% of 180000 = 153000
+	tr.Add(1, 0, 100000, 53000, 10, 0.50)
+	isNear, pct := tr.WarningZone(1, 0, 180000)
+	if !isNear {
+		t.Fatal("expected isNear=true at 85% usage")
+	}
+	if pct != 85 {
+		t.Fatalf("expected pct=85, got %d", pct)
+	}
+}
+
+func TestTracker_WarningZone_At40Percent(t *testing.T) {
+	tr := NewTracker()
+	// 40% of 180000 = 72000
+	tr.Add(1, 0, 50000, 22000, 5, 0.25)
+	isNear, pct := tr.WarningZone(1, 0, 180000)
+	if isNear {
+		t.Fatal("expected isNear=false at 40% usage")
+	}
+	if pct != 40 {
+		t.Fatalf("expected pct=40, got %d", pct)
+	}
+}
+
+func TestTracker_WarningZone_ThreadIsolation(t *testing.T) {
+	tr := NewTracker()
+	tr.Add(1, 10, 100000, 53000, 10, 0.50) // 85% — warning
+	tr.Add(1, 20, 1000, 500, 1, 0.05)      // <1% — not warning
+
+	isNear10, pct10 := tr.WarningZone(1, 10, 180000)
+	if !isNear10 {
+		t.Fatal("expected thread 10 to be in warning zone")
+	}
+	if pct10 != 85 {
+		t.Fatalf("expected thread 10 pct=85, got %d", pct10)
+	}
+
+	isNear20, pct20 := tr.WarningZone(1, 20, 180000)
+	if isNear20 {
+		t.Fatal("expected thread 20 not to be in warning zone")
+	}
+	if pct20 != 0 {
+		t.Fatalf("expected thread 20 pct=0, got %d", pct20)
+	}
+}
+
 func TestTracker_RecordUsage_ThreadsDoNotShareBudget(t *testing.T) {
 	tr := NewTracker()
 	// Thread 10: accumulate up to threshold

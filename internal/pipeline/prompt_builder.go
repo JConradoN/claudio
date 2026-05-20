@@ -696,12 +696,35 @@ func (bc *Service) buildContinuitySection(chatID int64, threadID int, userText s
 		return ""
 	}
 
-	// Always include if state exists and is recent, or if user text looks like continuation
-	if !continuity.IsRecent(state) && !isContinuation(userText) {
-		return ""
+	// Always inject if user text looks like continuation
+	if isContinuation(userText) {
+		return continuity.FormatContinuitySection(state, RedactSecrets)
 	}
 
-	return continuity.FormatContinuitySection(state, RedactSecrets)
+	// Determine session activity. Default to inactive when sessions store is
+	// unavailable (should not happen in practice, but nil-safe).
+	sessionIsActive := false
+	if bc.sessions != nil {
+		_, sessionIsActive = bc.sessions.GetWithState(chatID, threadID)
+	}
+
+	switch freshness := continuity.Freshness(state); {
+	case freshness == continuity.FreshnessHot && sessionIsActive:
+		// Hot + active: session PI still warm, skip continuity to save tokens
+		return ""
+
+	case freshness == continuity.FreshnessHot && !sessionIsActive:
+		// Hot + cold: session just died, inject for recovery
+		return continuity.FormatContinuitySection(state, RedactSecrets)
+
+	case freshness == continuity.FreshnessWarm && !sessionIsActive:
+		// Warm + cold: inject for cold recovery
+		return continuity.FormatContinuitySection(state, RedactSecrets)
+
+	default:
+		// Warm + active, stale, or nil state: don't inject
+		return ""
+	}
 }
 
 // accentReplacerForContinuation strips common Portuguese diacritics for

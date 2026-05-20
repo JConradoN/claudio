@@ -109,6 +109,23 @@ func (t *Tracker) Get(chatID int64, threadID int) Usage {
 	return *u
 }
 
+// WarningZone returns (true, percentUsed) when the session's token usage is at
+// or above 80% of the maxTokens threshold. Returns (false, 0) when no usage
+// has been recorded or the threshold is disabled (maxTokens <= 0).
+// Useful for gentle user nudges rather than hard cutoffs.
+func (t *Tracker) WarningZone(chatID int64, threadID int, maxTokens int) (bool, int) {
+	if maxTokens <= 0 {
+		return false, 0
+	}
+	usage := t.Get(chatID, threadID)
+	total := usage.TotalTokens()
+	if total == 0 {
+		return false, 0
+	}
+	pct := total * 100 / maxTokens
+	return pct >= 80, pct
+}
+
 // Clear resets usage tracking for a chat thread.
 func (t *Tracker) Clear(chatID int64, threadID int) {
 	t.mu.Lock()
