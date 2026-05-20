@@ -28,7 +28,7 @@ func TestLoadMemoryContents_RespectsTotalCap(t *testing.T) {
 	}
 
 	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
-	got := bc.loadMemoryContents(1, 0, nil)
+	got := bc.loadMemoryContents(1, 0, 0, nil)
 
 	if len(got) > maxMemoryTotalChars {
 		t.Fatalf("memory content length = %d, want <= %d", len(got), maxMemoryTotalChars)
@@ -221,7 +221,7 @@ func TestLoadMemoryContents_TriggersCompactModeAtThreshold(t *testing.T) {
 	}
 
 	bc := &Service{memoryDir: dir, memoryCache: newMemoryCache(), sessions: session.NewStore()}
-	got := bc.loadMemoryContents(1, 2, nil)
+	got := bc.loadMemoryContents(1, 2, 0, nil)
 
 	// Total should be within budget
 	if len(got) > maxMemoryTotalChars {
@@ -277,7 +277,7 @@ func TestLoadMemoryContents_ProjectPrivateSurvivesWhenGlobalIsHuge(t *testing.T)
 	sessions := session.NewStore()
 	sessions.SetCwd(42, 0, cwd)
 	bc := &Service{resolver: resolver, sessions: sessions, memoryDir: globalDir, memoryCache: newMemoryCache()}
-	got := bc.loadMemoryContents(42, 0, nil)
+	got := bc.loadMemoryContents(42, 0, 0, nil)
 
 	// Project private current_task.md must survive even when global is huge
 	if !strings.Contains(got, "High-priority task") {
@@ -315,7 +315,7 @@ func TestLoadMemoryContents_IsolatesProjectPrivateByThread(t *testing.T) {
 	sessions := session.NewStore()
 	sessions.SetCwd(42, 10, cwd)
 	bc := &Service{resolver: resolver, sessions: sessions, memoryCache: newMemoryCache()}
-	got := bc.loadMemoryContents(42, 10, nil)
+	got := bc.loadMemoryContents(42, 10, 0, nil)
 	if !strings.Contains(got, "thread ten private") {
 		t.Fatalf("expected thread 10 memory, got %q", got)
 	}

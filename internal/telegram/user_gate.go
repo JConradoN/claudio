@@ -25,13 +25,14 @@ const (
 // UserGate intercepts messages from users without profiles and routes them
 // through the conversational onboarding flow before they can interact normally.
 type UserGate struct {
-	store   *users.Store
-	obStore *users.OnboardingStore
+	store       *users.Store
+	obStore     *users.OnboardingStore
+	ownerUserID int64
 }
 
 // NewUserGate creates a UserGate.
-func NewUserGate(store *users.Store, obStore *users.OnboardingStore) *UserGate {
-	return &UserGate{store: store, obStore: obStore}
+func NewUserGate(store *users.Store, obStore *users.OnboardingStore, ownerUserID int64) *UserGate {
+	return &UserGate{store: store, obStore: obStore, ownerUserID: ownerUserID}
 }
 
 // Check determines what state the user is in relative to the gate.
@@ -99,7 +100,7 @@ func (g *UserGate) Step(userID int64, reply string) (string, bool, error) {
 		// Save profile
 		profile := &users.Profile{
 			UserID: userID, Name: state.Name, Language: state.Language,
-			IsOwner: false, OnboardedAt: time.Now(), LastSeenAt: time.Now(),
+			IsOwner: userID == g.ownerUserID, OnboardedAt: time.Now(), LastSeenAt: time.Now(),
 		}
 		if err := g.store.Save(profile); err != nil {
 			return "", false, fmt.Errorf("save profile: %w", err)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 // CanonicalIdentityService loads persona files and builds a system prompt.
@@ -80,6 +81,27 @@ func (s *CanonicalIdentityService) BuildPromptForUser(userID int64, resolver int
 		userBytes = []byte(fmt.Sprintf("---\nuser_id: %d\nname: User\nlanguage: pt\n---\n\n# User\n\nUser id: %d\n", userID, userID))
 	}
 
+	// Fallback: if per-user USER.md is a stub (just "User id: <N>" with no bio),
+	// append the global USER.md content for richer persona context.
+	if len(userBytes) > 0 {
+		body := extractUserMdBody(userBytes)
+		if isStubUserMd(body) {
+			globalUserBytes, gErr := os.ReadFile(s.userPath)
+			if gErr == nil && len(globalUserBytes) > 0 {
+				globalBody := extractUserMdBody(globalUserBytes)
+				if globalBody != "" {
+					// Append as legacy preferences note
+					combined := string(userBytes)
+					if !strings.HasSuffix(combined, "\n") {
+						combined += "\n"
+					}
+					combined += "\n# Legacy Preferences\n\n" + globalBody + "\n"
+					userBytes = []byte(combined)
+				}
+			}
+		}
+	}
+
 	config, identityBody, err := parseIdentityFrontmatter(identityBytes)
 	if err != nil {
 		return "", fmt.Errorf("build prompt for user: %w", err)
@@ -108,4 +130,36 @@ func (s *CanonicalIdentityService) BuildPromptForUser(userID int64, resolver int
 	}
 
 	return prompt, nil
+}
+
+// extractUserMdBody returns the body of a USER.md file after the YAML frontmatter.
+func extractUserMdBody(data []byte) string {
+	content := string(data)
+	// Remove frontmatter between --- markers
+	if strings.HasPrefix(content, "---") {
+		idx := strings.Index(content[3:], "---")
+		if idx >= 0 {
+			content = content[idx+6:] // skip closing ---
+		}
+	}
+	return strings.TrimSpace(content)
+}
+
+// isStubUserMd returns true if the body is just an auto-generated "User id: <number>" stub.
+// Stub formats (both without meaningful bio content):
+//   - "# User Profile\n\nUser id: <number>"  (from writeUserMd with empty bio)
+//   - "# User\n\nUser id: <number>"           (from BuildPromptForUser fallback)
+func isStubUserMd(body string) bool {
+	if body == "" {
+		return true
+	}
+	trimmed := strings.TrimSpace(body)
+	if strings.HasPrefix(trimmed, "# User Profile") || strings.HasPrefix(trimmed, "# User") {
+		// Check if after the header there's only "User id: <N>"
+		lines := strings.SplitN(trimmed, "\n", 3)
+		if len(lines) >= 2 && strings.Contains(lines[len(lines)-1], "User id") {
+			return true
+		}
+	}
+	return false
 }

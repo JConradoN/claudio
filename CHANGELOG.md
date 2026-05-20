@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.1] - 2026-05-20
+
+### Fixed
+- Pipeline memory split: per-user memory layer added to loadMemoryContents,
+  bridging nudge writes (~/.aurelia/users/<id>/memory/) with pipeline reads
+- isOwner detection: UserGate now compares userID against config's
+  DefaultOwnerUserID instead of hardcoded false
+- Per-user USER.md stub fallback: when the per-user USER.md is an
+  auto-generated stub, the rich global USER.md content is appended as
+  "Legacy Preferences"
+- migrate-multi-user --force flag: was defined but never actually
+  bypassed conflict detection; now properly overwrites destination files
+
+### Changed
+- PromptBuilder.buildMemoryInstructions and loadMemoryContents accept
+  userID int64 parameter for per-user memory loading
+- NewUserGate accepts ownerUserID int64 for dynamic owner detection
+- BotController wires ownerUserID from config.DefaultOwnerUserIDOrFallback()
+
 ## [0.11.0] - 2026-05-20
 
 ### Added

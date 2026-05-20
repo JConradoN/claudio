@@ -390,6 +390,55 @@ func TestMigration_RecoversFromInterruptedLock(t *testing.T) {
 	}
 }
 
+func TestMigration_ForceOverwritesExistingDestination(t *testing.T) {
+	resolver := newTestResolver(t)
+	writeTestConfig(t, resolver, []int64{12345})
+
+	root := resolver.Root()
+	srcPath := filepath.Join(root, "memory", "conflict.md")
+	dstPath := filepath.Join(root, "users", "12345", "memory", "conflict.md")
+
+	// Create source file.
+	touchFile(t, srcPath)
+
+	// Pre-create destination with different content to trigger conflict.
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o700); err != nil {
+		t.Fatalf("mkdir dst: %v", err)
+	}
+	if err := os.WriteFile(dstPath, []byte("old-content"), 0o600); err != nil {
+		t.Fatalf("write dst: %v", err)
+	}
+
+	// --force should remove destination and overwrite.
+	if err := runMigration(resolver, 12345, false, false, true); err != nil {
+		t.Fatalf("force migration: %v", err)
+	}
+
+	// Source should be gone (moved).
+	if _, err := os.Stat(srcPath); !os.IsNotExist(err) {
+		t.Fatal("expected source file to be removed after force migration")
+	}
+
+	// Destination should exist with the new content ("content" from touchFile).
+	data, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(data) != "content" {
+		t.Fatalf("expected dst content %q, got %q", "content", string(data))
+	}
+
+	// Marker should exist.
+	if _, err := os.Stat(filepath.Join(root, ".multi-user-migrated")); os.IsNotExist(err) {
+		t.Fatal("expected .multi-user-migrated after force migration")
+	}
+
+	// Lock should be gone.
+	if _, err := os.Stat(filepath.Join(root, ".multi-user-migrating")); !os.IsNotExist(err) {
+		t.Fatal("expected .multi-user-migrating to be removed")
+	}
+}
+
 func TestMigration_ForceRemovesMarkerAndRestarts(t *testing.T) {
 	resolver := newTestResolver(t)
 	writeTestConfig(t, resolver, []int64{12345})

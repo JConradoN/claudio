@@ -28,7 +28,7 @@ func newTestUserGate(t *testing.T) (*UserGate, *users.Store, *users.OnboardingSt
 		t.Fatalf("EnsureSchema() error = %v", err)
 	}
 
-	gate := NewUserGate(store, obStore)
+	gate := NewUserGate(store, obStore, 0)
 	return gate, store, obStore
 }
 

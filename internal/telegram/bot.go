@@ -223,7 +223,8 @@ func (bc *BotController) SetContinuity(cs continuity.Store) {
 func (bc *BotController) SetOnboardingStore(os *users.OnboardingStore) {
 	bc.onboardingStore = os
 	if bc.userStore != nil && os != nil {
-		bc.userGate = NewUserGate(bc.userStore, os)
+		ownerUserID := bc.config.DefaultOwnerUserIDOrFallback()
+		bc.userGate = NewUserGate(bc.userStore, os, ownerUserID)
 	}
 }
 

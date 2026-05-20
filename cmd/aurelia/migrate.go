@@ -90,6 +90,10 @@ func runMigrateMultiUser(args []string) error {
 		}
 	}
 
+	if resume && force {
+		return fmt.Errorf("--resume and --force are mutually exclusive")
+	}
+
 	resolver, err := runtime.New()
 	if err != nil {
 		return fmt.Errorf("resolve instance root: %w", err)
@@ -163,14 +167,14 @@ func runMigration(resolver *runtime.PathResolver, userID int64, dryRun, resume, 
 	}
 
 	// Conflict detection (skip in resume/force mode).
-	if !resume {
+	if !resume && !force {
 		conflicts := detectConflicts(plan)
 		if len(conflicts) > 0 {
 			fmt.Fprintf(os.Stderr, "Migration conflicts detected:\n")
 			for _, c := range conflicts {
 				fmt.Fprintf(os.Stderr, "  %s → %s (already exists)\n", c.src, c.dst)
 			}
-			return fmt.Errorf("aborting due to %d conflict(s); remove destination files or use --resume", len(conflicts))
+			return fmt.Errorf("aborting due to %d conflict(s); remove destination files or use --resume or --force", len(conflicts))
 		}
 	}
 
@@ -184,7 +188,7 @@ func runMigration(resolver *runtime.PathResolver, userID int64, dryRun, resume, 
 	}
 
 	// Execute.
-	stats, err := executeMigration(plan, resume)
+	stats, err := executeMigration(plan, resume, force)
 	if err != nil {
 		return fmt.Errorf("migration failed (lock preserved at %s): %w", migratingPath, err)
 	}
@@ -347,7 +351,7 @@ func detectConflicts(plan *migrationPlan) []conflict {
 
 // ─── Execution ──────────────────────────────────────────────────────────────
 
-func executeMigration(plan *migrationPlan, resume bool) (*migrateStats, error) {
+func executeMigration(plan *migrationPlan, resume, force bool) (*migrateStats, error) {
 	stats := &migrateStats{}
 
 	for _, op := range plan.fileOps {
@@ -377,8 +381,20 @@ func executeMigration(plan *migrationPlan, resume bool) (*migrateStats, error) {
 			continue
 		}
 
-		if dstExists && !resume {
+		if dstExists && !resume && !force {
 			return nil, fmt.Errorf("destination already exists: %s", op.dst)
+		}
+
+		// Force mode: remove destination before overwriting.
+		if force && dstExists {
+			if !srcExists {
+				// Destination exists but source doesn't — nothing to do.
+				stats.itemsMoved++
+				continue
+			}
+			if err := os.RemoveAll(op.dst); err != nil {
+				return nil, fmt.Errorf("remove destination for force move: %w", err)
+			}
 		}
 
 		// Perform the move.

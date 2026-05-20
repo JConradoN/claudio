@@ -76,6 +76,7 @@ specs/
 
 # Build output
 /build/
+aurelia
 
 # Bridge bundle (built from TypeScript source, not versioned)
 internal/bridge/bundle.js
