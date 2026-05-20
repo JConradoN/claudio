@@ -1,7 +1,7 @@
 package version
 
 // Version is the current release version. Update this on each release.
-const Version = "0.11.1"
+const Version = "0.11.2"
 
 // BuildInfo returns a formatted version string.
 func BuildInfo() string {

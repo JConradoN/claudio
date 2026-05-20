@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.2] - 2026-05-20
+
+### Fixed
+- Audio transcription failing: temp file now preserves original extension
+  (.ogg/.mp3) so Groq Whisper API accepts the file format
+- Error messages leaking to wrong chat in group topics: SendContextText now
+  passes ThreadID via SendOptions, keeping responses in the correct topic
+- Four additional SendContextText calls (album, document, image handlers)
+  now also pass ThreadID for topic-safe error messages
+
+### Changed
+- Groq STT model upgraded from whisper-large-v3 to whisper-large-v3-turbo
+  (faster, same accuracy)
+- Added explicit language=pt and temperature=0.0 to Groq transcription
+  requests for better Portuguese accuracy and deterministic output
+
 ## [0.11.1] - 2026-05-20
 
 ### Fixed

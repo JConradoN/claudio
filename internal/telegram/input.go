@@ -80,12 +80,12 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 
 	if len(images) == 0 && partialMsg != "" {
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, partialMsg)
+		return SendContextText(c, partialMsg, &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
 	if partialMsg != "" {
 		// Partial success — let the user know before kicking off the LLM call so
 		// they don't wonder why their 4-photo album was analyzed as 3.
-		_ = SendContextText(c, partialMsg)
+		_ = SendContextText(c, partialMsg, &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
 	return bc.processInputWithImages(c, text, images)
 }
@@ -221,7 +221,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 	if !isSupportedDocument(doc.FileName, doc.MIME) {
 		log.Println("Unsupported document type:", doc.MIME)
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, unsupportedDocumentMessage())
+		return SendContextText(c, unsupportedDocumentMessage(), &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
 
 	stopTyping := startChatActionLoop(bc.bot, c.Chat(), telebot.Typing, typingIndicatorInterval, c.Message().ThreadID)
@@ -231,7 +231,7 @@ func (bc *BotController) handleDocument(c telebot.Context) error {
 	if err != nil {
 		log.Println("Failed to download file:", err)
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, downloadFailureMessage())
+		return SendContextText(c, downloadFailureMessage(), &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
 	defer func() { _ = os.Remove(filePath) }()
 
@@ -279,7 +279,7 @@ func (bc *BotController) handleImageDocument(c telebot.Context, doc *telebot.Doc
 		var tooLarge imageTooLargeError
 		if errors.As(err, &tooLarge) {
 			bc.confirmMessage(c.Message())
-			return SendContextText(c, tooLarge.UserMessage())
+			return SendContextText(c, tooLarge.UserMessage(), &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 		}
 		return bc.processInput(c, text)
 	}
@@ -300,7 +300,7 @@ func (bc *BotController) handleVoice(c telebot.Context) error {
 	if err != nil {
 		log.Println("Failed to download audio:", err)
 		bc.confirmMessage(c.Message())
-		return SendContextText(c, downloadFailureMessage())
+		return SendContextText(c, downloadFailureMessage(), &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
 	defer func() { _ = os.Remove(filePath) }()
 
@@ -309,9 +309,9 @@ func (bc *BotController) handleVoice(c telebot.Context) error {
 		bc.confirmMessage(c.Message())
 		var msgErr sendContextTextError
 		if ok := errorAs(err, &msgErr); ok {
-			return SendContextText(c, msgErr.Error())
+			return SendContextText(c, msgErr.Error(), &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 		}
-		return SendContextText(c, audioProcessingFailureMessage())
+		return SendContextText(c, audioProcessingFailureMessage(), &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
 	return bc.processInput(c, transcribedText)
 }
@@ -343,7 +343,8 @@ func (bc *BotController) downloadTelegramFile(file *telebot.File, name string) (
 		return "", fmt.Errorf("invalid filename: %q", name)
 	}
 
-	f, err := os.CreateTemp(os.TempDir(), "aurelia_*")
+	ext := filepath.Ext(name)
+	f, err := os.CreateTemp(os.TempDir(), "aurelia_*"+ext)
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
 	}

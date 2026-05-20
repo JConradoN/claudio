@@ -61,8 +61,16 @@ func (t *GroqTranscriber) Transcribe(ctx context.Context, audioFilePath string) 
 		return "", fmt.Errorf("failed to copy file content: %w", err)
 	}
 
-	if err := writer.WriteField("model", "whisper-large-v3"); err != nil {
+	if err := writer.WriteField("model", "whisper-large-v3-turbo"); err != nil {
 		return "", fmt.Errorf("failed to write model field: %w", err)
+	}
+
+	if err := writer.WriteField("language", "pt"); err != nil {
+		return "", fmt.Errorf("failed to write language field: %w", err)
+	}
+
+	if err := writer.WriteField("temperature", "0.0"); err != nil {
+		return "", fmt.Errorf("failed to write temperature field: %w", err)
 	}
 
 	if err := writer.WriteField("response_format", "json"); err != nil {
