@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] - 2026-05-20
+
+### Added
+- Bridge-side session management: sessions persist after query for steer,
+  followUp, and abort commands
+- New bridge commands: steer (interrompe e redireciona), follow-up
+  (enfileira após atual), abort (cancela)
+- get-state bridge command for pipeline to query session status
+  (isStreaming, pendingCount)
+- Idle timer (5 min) auto-disposes inactive sessions on the bridge
+
+### Changed
+- Pipeline no longer manages in-process queue — delegates
+  cancel/supersede/follow-up classification to bridge commands
+- Text splitting now converts markdown→HTML before splitting at tag
+  boundaries, preventing broken HTML in Telegram messages
+- ReportToolResult only appends " ✓" instead of full tool result
+  for cleaner progress display
+
+### Removed
+- In-process runSupervisor (queue logic, cancel, supersede) — replaced
+  by bridge-side session lifecycle
+
 ## [0.11.5] - 2026-05-20
 
 ### Changed

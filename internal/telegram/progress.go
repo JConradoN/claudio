@@ -77,25 +77,22 @@ func (p *progressReporter) ReportTool(toolName string) {
 	p.lastEdit = time.Now()
 }
 
-// ReportToolResult appends a result summary to the last tool entry.
+// ReportToolResult marks the last tool as completed with a checkmark.
+// The full result summary is logged in runlog — we don't show it in progress
+// to avoid noise and leaking internal operation details.
 // If there are no tools yet, the result is silently dropped.
 func (p *progressReporter) ReportToolResult(summary string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.tools) == 0 || summary == "" {
+	if len(p.tools) == 0 {
 		return
 	}
 
-	// Truncate summary for display
-	runes := []rune(summary)
-	if len(runes) > maxToolResultDisplay {
-		runes = runes[:maxToolResultDisplay]
-	}
-
-	// Update the last tool entry with the result
+	// Just mark as done with checkmark — don't show the actual result
+	// to keep progress clean and avoid exposing internal operation details
 	lastIdx := len(p.tools) - 1
-	p.tools[lastIdx] = p.tools[lastIdx] + " → [" + string(runes) + "]"
+	p.tools[lastIdx] = p.tools[lastIdx] + " ✓"
 
 	if p.bot == nil {
 		return

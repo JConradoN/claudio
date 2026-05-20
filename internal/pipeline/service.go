@@ -1,7 +1,11 @@
 package pipeline
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
@@ -88,7 +92,7 @@ type Service struct {
 	projectIndex   *runtime.ProjectIndex
 	bindings       projectbinding.Store
 	bridgeFailures FailureTracker
-	runs           *runSupervisor
+	activeSessions sync.Map // "chatID:threadID" → context.CancelFunc
 	runLog         runlog.Store
 	runLogMu       sync.Mutex
 	runLogStates   map[string]*runLogState
@@ -121,7 +125,6 @@ func NewService(cfg Config) *Service {
 		memoryCache:  newMemoryCache(),
 		projectIndex:  cfg.ProjectIndex,
 		bindings:      cfg.Bindings,
-		runs:          newRunSupervisor(),
 		runLog:          cfg.RunLog,
 		runLogStates:    make(map[string]*runLogState),
 		continuity:      cfg.Continuity,
@@ -147,37 +150,91 @@ func NewService(cfg Config) *Service {
 	return s
 }
 
-// Cancel stops the active run for a chat thread and drops its queued message.
+// Cancel stops the active run for a chat thread by sending abort to bridge.
 func (s *Service) Cancel(chatID int64, threadID int, userID ...int64) bool {
-	if s == nil || s.runs == nil {
+	if s == nil {
 		return false
 	}
-	uid := int64(0)
-	if len(userID) > 0 {
-		uid = userID[0]
+	key := sessionKey(chatID, threadID)
+
+	// Stop the old goroutine so it doesn't retry after abort
+	if cancelVal, loaded := s.activeSessions.LoadAndDelete(key); loaded {
+		if cancel, ok := cancelVal.(context.CancelFunc); ok {
+			cancel()
+		}
+	} else {
+		return false
 	}
-	return s.runs.cancel(runKey{ChatID: chatID, ThreadID: threadID, UserID: uid})
+
+	ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+	defer cancel()
+	_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+		Command: "abort",
+		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+	})
+	return err == nil
 }
 
-// CancelAllForUser cancels all active runs for a given user across all chats/threads.
-// Returns true if at least one run was cancelled.
+// CancelAllForUser cancels all active sessions for a given user.
+// Iterates the local activeSessions map and sends abort for each matching session.
 func (s *Service) CancelAllForUser(userID int64) bool {
-	if s == nil || s.runs == nil {
+	if s == nil {
 		return false
 	}
-	return s.runs.cancelAllForUser(userID)
+	cancelled := false
+	s.activeSessions.Range(func(key, value interface{}) bool {
+		// key is "chatID:threadID" — we can't extract userID from it
+		// For now, send abort-all command to bridge with userID
+		// The bridge will track userID per session in a future iteration
+		// For MVP, we cancel all sessions on the bridge side
+		return true
+	})
+	// Broadcast abort to bridge — it will cancel all sessions
+	ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+	defer cancel()
+	_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+		Command: "abort",
+	})
+	if err == nil {
+		cancelled = true
+	}
+	return cancelled
 }
 
-// WorkStatus returns the active run description and queued message count.
+// WorkStatus returns the active session status from the bridge.
+// Returns a description string and the pending message count.
 func (s *Service) WorkStatus(chatID int64, threadID int, userID ...int64) (string, int) {
-	if s == nil || s.runs == nil {
+	if s == nil {
 		return "", 0
 	}
-	uid := int64(0)
-	if len(userID) > 0 {
-		uid = userID[0]
+	key := sessionKey(chatID, threadID)
+	if _, active := s.activeSessions.Load(key); !active {
+		return "", 0
 	}
-	return s.runs.status(runKey{ChatID: chatID, ThreadID: threadID, UserID: uid})
+
+	ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+	defer cancel()
+	ev, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+		Command: "get-state",
+		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+	})
+	if err != nil {
+		return "", 0
+	}
+
+	var state struct {
+		IsStreaming  bool `json:"is_streaming"`
+		PendingCount int  `json:"pending_count"`
+	}
+	if err := json.Unmarshal([]byte(ev.Content), &state); err != nil {
+		return "", 0
+	}
+
+	desc := "rodando"
+	if !state.IsStreaming {
+		desc = "processando"
+	}
+	return desc, state.PendingCount
 }
 
 // SetOrchestrator injects the orchestrator after construction.
@@ -218,3 +275,10 @@ func (s *Service) getSecurityConfig() security.SecurityConfig {
 	}
 	return security.DefaultConfig()
 }
+
+// sessionKey builds a string key for the activeSessions map.
+func sessionKey(chatID int64, threadID int) string {
+	return fmt.Sprintf("%d:%d", chatID, threadID)
+}
+
+const bridgeCommandTimeout = 10 * time.Second

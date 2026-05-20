@@ -27,6 +27,10 @@ type Event struct {
 	NumTurns     int     `json:"num_turns,omitempty"`
 	InputTokens  int     `json:"input_tokens,omitempty"`
 	OutputTokens int     `json:"output_tokens,omitempty"`
+
+	// get_state response
+	IsStreaming  bool `json:"is_streaming,omitempty"`
+	PendingCount int  `json:"pending_count,omitempty"`
 }
 
 // IsTerminal returns true if the event signals the end of a request stream.

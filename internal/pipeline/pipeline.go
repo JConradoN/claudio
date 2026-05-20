@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -31,6 +32,16 @@ type runLogState struct {
 	summaryCount int
 }
 
+// pipelineInput carries a user message through processing.
+type pipelineInput struct {
+	chatID    int64
+	threadID  int
+	messageID int
+	userID    int64
+	text      string
+	images    []bridge.ImageAttachment
+}
+
 const (
 	classifyTimeout        = 5 * time.Second
 	classifyMinTextLen     = 10
@@ -56,41 +67,81 @@ func bridgeCooldownMessage(remaining time.Duration) string {
 	return fmt.Sprintf("⏳ Processador em recuperação. Tente novamente em ~%d segundos.", seconds)
 }
 
-func queueStatusMessage(active *activeRun, queueSize int) string {
-	description := strings.TrimSpace(active.description())
-	queueText := queueStatusSuffix(queueSize)
-	if description == "" {
-		return "⏳ Ainda estou processando o pedido anterior." + queueText
+type concurrentMessageKind int
+
+const (
+	concurrentEnqueue concurrentMessageKind = iota
+	concurrentCancel
+	concurrentSupersede
+	concurrentStatus
+)
+
+func classifyConcurrentMessage(text string) concurrentMessageKind {
+	n := normalizeConcurrentText(text)
+	if n == "" {
+		return concurrentStatus
 	}
-	return "⏳ Ainda estou processando: " + description + "." + queueText
+	if isStatusMessage(n) {
+		return concurrentStatus
+	}
+	if isCancelOnlyMessage(n) {
+		return concurrentCancel
+	}
+	if isSupersedeMessage(n) {
+		return concurrentSupersede
+	}
+	return concurrentEnqueue
 }
 
-func queueStatusSuffix(queueSize int) string {
-	if queueSize <= 0 {
-		return ""
-	}
-	if queueSize == 1 {
-		return "\n📥 Fila: 1 mensagem aguardando."
-	}
-	return fmt.Sprintf("\n📥 Fila: %d mensagens aguardando.", queueSize)
+func normalizeConcurrentText(text string) string {
+	n := strings.ToLower(strings.TrimSpace(text))
+	replacer := strings.NewReplacer("á", "a", "à", "a", "ã", "a", "â", "a", "é", "e", "ê", "e", "í", "i", "ó", "o", "ô", "o", "õ", "o", "ú", "u", "ç", "c")
+	n = replacer.Replace(n)
+	n = strings.Trim(n, ".,!?:; ")
+	return strings.Join(strings.Fields(n), " ")
 }
 
-func queueAdmittedMessage(active *activeRun, queueSize int) string {
-	description := strings.TrimSpace(active.description())
-	ahead := queueSize - 1
-	var positionMsg string
-	switch {
-	case ahead <= 0:
-		positionMsg = "Sua mensagem será a próxima na fila."
-	case ahead == 1:
-		positionMsg = "📥 Fila: 1 mensagem à sua frente. Sua mensagem será processada em seguida."
-	default:
-		positionMsg = fmt.Sprintf("📥 Fila: %d mensagens à sua frente. Sua mensagem será processada em seguida.", ahead)
+func isCancelOnlyMessage(n string) bool {
+	exact := map[string]bool{
+		"para": true, "pare": true, "parar": true, "stop": true,
+		"cancela": true, "cancelar": true, "cancele": true,
+		"interrompe": true, "interrompa": true,
+		"esquece": true, "deixa pra la": true, "nao precisa": true,
 	}
-	if description == "" {
-		return "📥 " + positionMsg
+	if exact[n] {
+		return true
 	}
-	return "📥 Ainda estou processando: " + description + ". " + positionMsg
+	needles := []string{"pode parar", "pode cancelar", "nao precisa mais", "para isso", "cancela isso", "cancele isso"}
+	for _, needle := range needles {
+		if strings.Contains(n, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSupersedeMessage(n string) bool {
+	needles := []string{
+		"na verdade", "corrigindo", "em vez", "ao inves", "melhor", "mudei", "troque",
+		"nao corrija", "apenas", "so faca", "so teste", "topico errado", "lugar errado",
+		"nao era", "errado", "pare e", "cancele e", "ignore o anterior",
+	}
+	for _, needle := range needles {
+		if strings.Contains(n, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isStatusMessage(n string) bool {
+	needles := []string{"conseguiu", "terminou", "acabou", "status", "andamento", "ja foi", "ta pronto", "esta pronto"}
+	for _, needle := range needles {
+		if strings.Contains(n, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // Process handles a user message after transport-level bootstrap and command checks.
@@ -101,67 +152,143 @@ func (s *Service) Process(chatID int64, threadID int, messageID int, text string
 	if s.output == nil {
 		return errors.New("pipeline output is nil")
 	}
+	if s.bridge == nil {
+		return errors.New("pipeline bridge is nil")
+	}
 
+	key := sessionKey(chatID, threadID)
 	input := pipelineInput{chatID: chatID, threadID: threadID, messageID: messageID, userID: userID, text: text, images: images}
-	run, admission, active := s.runs.admit(input)
-	switch admission {
-	case admitStart:
+
+	_, active := s.activeSessions.Load(key)
+	if !active {
+		// No active session — start new query in a goroutine
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("pipeline: panic in processRun: %v", r)
 				}
 			}()
-			s.processRun(input, run)
+			s.processRun(input)
 		}()
-	case admitCancelOnly:
-		if _, err := s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior."); err != nil {
-			log.Printf("pipeline: SendText(admitCancelOnly) failed for chat=%d: %v", chatID, err)
-		}
-		s.output.ConfirmMessage(chatID, messageID)
-	case admitSupersede:
-		if _, err := s.output.SendText(chatID, threadID, "🔁 Interrompi o pedido anterior e vou seguir com sua correção."); err != nil {
-			log.Printf("pipeline: SendText(admitSupersede) failed for chat=%d: %v", chatID, err)
-		}
-		s.output.ConfirmMessage(chatID, messageID)
-	case admitStatus:
-		queueSize := s.runs.queueSize(runKey{ChatID: chatID, ThreadID: threadID, UserID: input.userID})
-		if _, err := s.output.SendText(chatID, threadID, queueStatusMessage(active, queueSize)); err != nil {
-			log.Printf("pipeline: SendText(admitStatus) failed for chat=%d: %v", chatID, err)
-		}
-		s.output.ConfirmMessage(chatID, messageID)
-	case admitQueued:
-		queueSize := s.runs.queueSize(runKey{ChatID: chatID, ThreadID: threadID, UserID: input.userID})
-		if _, err := s.output.SendText(chatID, threadID, queueAdmittedMessage(active, queueSize)); err != nil {
-			log.Printf("pipeline: SendText(admitQueued) failed for chat=%d: %v", chatID, err)
-		}
-	case admitQueueFull:
-		if _, err := s.output.SendText(chatID, threadID, "📥 Já tenho 3 mensagens na fila. Aguarde um momento e reenvie depois."); err != nil {
-			log.Printf("pipeline: SendText(admitQueueFull) failed for chat=%d: %v", chatID, err)
-		}
+		return nil
 	}
+
+	// Active session — classify and send appropriate bridge command
+	switch classifyConcurrentMessage(text) {
+	case concurrentCancel:
+		// Stop the old goroutine so it doesn't retry after abort
+		if cancelVal, loaded := s.activeSessions.LoadAndDelete(key); loaded {
+			if cancel, ok := cancelVal.(context.CancelFunc); ok {
+				cancel()
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+		defer cancel()
+		_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+			Command: "abort",
+			Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+		})
+		if err != nil {
+			log.Printf("pipeline: abort failed for chat=%d: %v", chatID, err)
+		}
+		if _, err := s.output.SendText(chatID, threadID, "🛑 Interrompendo o pedido anterior."); err != nil {
+			log.Printf("pipeline: SendText(cancel) failed for chat=%d: %v", chatID, err)
+		}
+		s.output.ConfirmMessage(chatID, messageID)
+
+	case concurrentSupersede:
+		// Stop the old goroutine; the superseding message starts fresh
+		if cancelVal, loaded := s.activeSessions.LoadAndDelete(key); loaded {
+			if cancel, ok := cancelVal.(context.CancelFunc); ok {
+				cancel()
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+		defer cancel()
+		_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+			Command: "steer",
+			Prompt:  text,
+			Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+		})
+		if err != nil {
+			log.Printf("pipeline: steer failed for chat=%d: %v", chatID, err)
+		}
+		if _, err := s.output.SendText(chatID, threadID, "🔁 Interrompi o pedido anterior e vou seguir com sua correção."); err != nil {
+			log.Printf("pipeline: SendText(supersede) failed for chat=%d: %v", chatID, err)
+		}
+		s.output.ConfirmMessage(chatID, messageID)
+		// Start a new goroutine to process the steered session
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("pipeline: panic in processRun(supersede): %v", r)
+				}
+			}()
+			s.processRun(input)
+		}()
+
+	case concurrentEnqueue:
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+		defer cancel()
+		_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+			Command: "follow-up",
+			Prompt:  text,
+			Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+		})
+		if err != nil {
+			log.Printf("pipeline: follow-up failed for chat=%d: %v", chatID, err)
+		}
+		if _, err := s.output.SendText(chatID, threadID, "📥 Adicionado à fila. Processo após concluir o atual."); err != nil {
+			log.Printf("pipeline: SendText(follow-up) failed for chat=%d: %v", chatID, err)
+		}
+		s.output.ConfirmMessage(chatID, messageID)
+
+	case concurrentStatus:
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
+		defer cancel()
+		ev, err := s.bridge.ExecuteSync(ctx, bridge.Request{
+			Command: "get-state",
+			Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+		})
+		if err == nil {
+			var state struct {
+				IsStreaming  bool `json:"is_streaming"`
+				PendingCount int  `json:"pending_count"`
+			}
+			if json.Unmarshal([]byte(ev.Content), &state) == nil {
+				desc := "⏳ Ainda estou processando o pedido anterior."
+				if state.PendingCount > 0 {
+					desc += fmt.Sprintf("\n📥 Fila: %d mensagens aguardando.", state.PendingCount)
+				}
+				if _, err := s.output.SendText(chatID, threadID, desc); err != nil {
+					log.Printf("pipeline: SendText(status) failed for chat=%d: %v", chatID, err)
+				}
+			}
+		}
+		s.output.ConfirmMessage(chatID, messageID)
+	}
+
 	return nil
 }
 
-func (s *Service) processRun(input pipelineInput, run *activeRun) {
-	defer s.startQueuedAfter(run)
+func (s *Service) processRun(input pipelineInput) {
+	key := sessionKey(input.chatID, input.threadID)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.activeSessions.Store(key, cancel)
+	defer s.activeSessions.Delete(key)
+	defer cancel()
 
 	agent := s.routeAgent(input.text)
 	userText := stripAgentPrefix(input.text, agent)
 
-	if run.ctx.Err() != nil {
-		return
-	}
 	if _, active := s.sessions.GetSessionWithState(input.chatID, input.threadID, input.userID); !active {
 		s.autoDetectProject(input.chatID, input.threadID, userText)
 	}
 
-	if run.ctx.Err() != nil {
-		return
-	}
 	if s.checkProjectPreflight(input, agent, userText) {
 		return
 	}
+
 	systemPrompt, err := s.buildSystemPrompt(userText, agent, input.chatID, input.messageID, input.threadID, input.userID)
 	if err != nil {
 		log.Printf("Failed to build system prompt: %s", redactSecrets(err.Error()))
@@ -171,26 +298,11 @@ func (s *Service) processRun(input pipelineInput, run *activeRun) {
 	}
 
 	req := s.buildBridgeRequest(userText, systemPrompt, agent, input.chatID, input.threadID, input.userID)
-	req.RequestID = fmt.Sprintf("run-%d", run.id)
+	req.RequestID = fmt.Sprintf("run-%d", time.Now().UnixNano())
 	req.Options.Images = input.images
 	s.applyVisionFallback(&req, input.images)
 
-	s.executeAsync(run.ctx, input.chatID, input.threadID, input.messageID, req, userText, input.userID)
-}
-
-func (s *Service) startQueuedAfter(run *activeRun) {
-	nextRun, nextInput := s.runs.finish(run)
-	if nextRun == nil || nextInput == nil {
-		return
-	}
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("pipeline: panic in startQueuedAfter: %v", r)
-			}
-		}()
-		s.processRun(*nextInput, nextRun)
-	}()
+	s.executeAsync(ctx, input.chatID, input.threadID, input.messageID, req, userText, input.userID)
 }
 
 func stripAgentPrefix(text string, agent *agents.Agent) string {

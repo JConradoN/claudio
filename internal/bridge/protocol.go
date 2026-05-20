@@ -16,25 +16,32 @@ type ImageAttachment struct {
 	MediaType string `json:"media_type,omitempty"`
 }
 
-// RequestOptions configures how the Bridge executes a query.
+// RequestOptions configures how the Bridge executes a query or session command.
 //
 // The PI SDK does not expose hooks for MaxTurns, PermissionMode, MCP servers,
 // sub-agent registries, or per-tool disablement that the legacy Claude SDK
 // supported. Those fields were dropped during the migration; revisit if PI
 // adds equivalents in a future release.
+//
+// ChatID and ThreadID identify the chat session for bridge-side session indexing.
+// StreamingBehavior controls how the bridge queues the prompt on an active session:
+// "steer" interrupts the current turn, "followUp" queues for after completion.
 type RequestOptions struct {
-	Provider       string            `json:"provider,omitempty"`
-	Model          string            `json:"model,omitempty"`
-	Cwd            string            `json:"cwd,omitempty"`
-	SystemPrompt   string            `json:"system_prompt,omitempty"`
-	Resume         string            `json:"resume,omitempty"`
-	AllowedTools    []string          `json:"allowed_tools,omitempty"`
-	DisallowedTools []string          `json:"disallowed_tools,omitempty"`
-	Continue        bool              `json:"continue,omitempty"`
-	NoUserSettings bool              `json:"no_user_settings,omitempty"`
-	PersistSession *bool             `json:"persist_session,omitempty"`
-	Images         []ImageAttachment `json:"images,omitempty"`
-	Security       *SecurityContext  `json:"security,omitempty"`
+	Provider          string            `json:"provider,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	Cwd               string            `json:"cwd,omitempty"`
+	SystemPrompt      string            `json:"system_prompt,omitempty"`
+	Resume            string            `json:"resume,omitempty"`
+	AllowedTools      []string          `json:"allowed_tools,omitempty"`
+	DisallowedTools   []string          `json:"disallowed_tools,omitempty"`
+	Continue          bool              `json:"continue,omitempty"`
+	NoUserSettings    bool              `json:"no_user_settings,omitempty"`
+	PersistSession    *bool             `json:"persist_session,omitempty"`
+	Images            []ImageAttachment `json:"images,omitempty"`
+	Security          *SecurityContext  `json:"security,omitempty"`
+	ChatID            int64             `json:"chat_id,omitempty"`
+	ThreadID          int               `json:"thread_id,omitempty"`
+	StreamingBehavior string            `json:"streaming_behavior,omitempty"`
 }
 
 // SecurityContext carries capability profile and policy configuration to the

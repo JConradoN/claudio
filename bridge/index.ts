@@ -51,6 +51,8 @@ interface RequestOptions {
   persist_session?: boolean;
   images?: ImageAttachment[];
   security?: SecurityContext;
+  chat_id?: number;
+  thread_id?: number;
 }
 
 interface Request {
@@ -83,7 +85,41 @@ interface ActiveRequest {
   cancel(reason: string): void;
 }
 
+interface ChatSessionState {
+  session: Awaited<ReturnType<typeof createPiSession>>["session"];
+  sessionId: string;
+  sessionFile: string | undefined;
+  currentReqId: string;
+  unsubPersistent: () => void;
+  unsubHook?: () => void;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  createdAt: number;
+}
+
 const activeRequests = new Map<string, ActiveRequest>();
+const chatSessions = new Map<string, ChatSessionState>();
+
+function chatKey(chatID: number, threadID: number): string {
+  return `${chatID}:${threadID}`;
+}
+
+function cleanupChatSession(key: string): void {
+  const cs = chatSessions.get(key);
+  if (!cs) return;
+  clearTimeout(cs.idleTimer);
+  try { cs.unsubPersistent(); } catch {}
+  try { if (cs.unsubHook) cs.unsubHook(); } catch {}
+  try { cs.session.dispose(); } catch {}
+  chatSessions.delete(key);
+}
+
+function startIdleTimer(cs: ChatSessionState, key: string): void {
+  clearTimeout(cs.idleTimer);
+  cs.idleTimer = setTimeout(() => {
+    log(`idle timeout: cleaning up session ${cs.sessionId} for chat ${key}`);
+    cleanupChatSession(key);
+  }, 30 * 60 * 1000); // 30 minutes
+}
 
 function rememberSession(id: string, lookup: SessionLookup): void {
   // Touch on update so re-resumed sessions stay warm.
@@ -686,10 +722,13 @@ async function createPiSession(opts: RequestOptions | undefined) {
 async function handleQuery(req: Request): Promise<void> {
   const reqId = req.request_id || "";
   const opts = req.options;
+  const chatID = opts?.chat_id || opts?.security?.chat_id || 0;
+  const threadID = opts?.thread_id ?? opts?.security?.thread_id ?? 0;
+  const cKey = chatKey(chatID, threadID);
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   redactedLog(
-    `query start — rid=${reqId} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
+    `query start — rid=${reqId} chat=${chatID} thread=${threadID} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
   );
 
   const timeoutMs = 30 * 60 * 1000;
@@ -707,13 +746,10 @@ async function handleQuery(req: Request): Promise<void> {
   };
 
   const cancelActive = (reason: string): void => {
+    if (canceled) return;
     canceled = true;
     redactedLog(`query cancel — rid=${reqId} reason=${reason}`);
-    try {
-      session?.dispose();
-    } catch (disposeErr) {
-      redactedLog(`session cancel dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
-    }
+    cleanupChatSession(cKey);
     emitTerminalError(reason);
     activeRequests.delete(reqId);
   };
@@ -725,13 +761,71 @@ async function handleQuery(req: Request): Promise<void> {
   }, timeoutMs);
 
   try {
-    ({ session } = await createPiSession(opts));
-    if (canceled) throw new Error("request canceled");
+    // Clean up any existing session for this chat
+    cleanupChatSession(cKey);
 
-    // Register security tool_call hook if enabled.
+    const piSession = await createPiSession(opts);
+    session = piSession.session;
+    if (canceled) {
+      session.dispose();
+      throw new Error("request canceled");
+    }
+
+    const sessionID = session.sessionId;
+    lastSessionID = sessionID;
+    rememberSession(sessionID, { id: sessionID, file: session.sessionFile });
+
+    emitReq({
+      event: "system",
+      session_id: sessionID,
+      tools: session.getActiveToolNames(),
+      model: session.model ? `${session.model.provider}/${session.model.id}` : "",
+    });
+
+    // Set up persistent subscription for this session
+    const unsubPersistent = session.subscribe((event) => {
+      if (terminalEmitted) return;
+      const rid = chatSessions.get(cKey)?.currentReqId || reqId;
+      const eReq = (obj: OutEvent) => emit({ ...obj, request_id: rid });
+
+      switch (event.type) {
+        case "message_update": {
+          const update = event.assistantMessageEvent;
+          if (update.type === "text_delta") {
+            eReq({ event: "assistant", text: update.delta });
+          }
+          break;
+        }
+        case "tool_execution_start": {
+          eReq({
+            event: "tool_use",
+            id: event.toolCallId,
+            name: event.toolName,
+            input: event.args,
+          });
+          break;
+        }
+        case "tool_execution_end": {
+          eReq({
+            event: "tool_result",
+            content: textFromContent(event.result?.content),
+          });
+          break;
+        }
+        case "turn_end": {
+          turnCount += 1;
+          break;
+        }
+        default:
+          break;
+      }
+    });
+
+    // Register security tool_call hook if enabled
     let unsubHook: (() => void) | undefined;
     if (opts?.security?.enabled) {
       if (typeof session.on !== "function") {
+        session.dispose();
         throw new Error("security hook not available: PI SDK version too old");
       }
       unsubHook = session.on("tool_call", async (event: { toolName: string; args: Record<string, unknown> }) => {
@@ -756,56 +850,27 @@ async function handleQuery(req: Request): Promise<void> {
           Object.assign(event.args, decision.input);
           return { rewrite: true };
         }
-        // allow — let through
         return undefined;
       });
     }
 
-    const sessionID = session.sessionId;
-    lastSessionID = sessionID;
-    rememberSession(sessionID, { id: sessionID, file: session.sessionFile });
+    // Store the chat session
+    const cs: ChatSessionState = {
+      session,
+      sessionId: sessionID,
+      sessionFile: session.sessionFile,
+      currentReqId: reqId,
+      unsubPersistent,
+      unsubHook,
+      createdAt: Date.now(),
+    };
+    chatSessions.set(cKey, cs);
 
-    emitReq({
-      event: "system",
-      session_id: sessionID,
-      tools: session.getActiveToolNames(),
-      model: session.model ? `${session.model.provider}/${session.model.id}` : "",
-    });
-
-    const unsubscribe = session.subscribe((event) => {
-      if (terminalEmitted) return;
-      switch (event.type) {
-        case "message_update": {
-          const update = event.assistantMessageEvent;
-          if (update.type === "text_delta") {
-            emitReq({ event: "assistant", text: update.delta });
-          }
-          break;
-        }
-        case "tool_execution_start": {
-          emitReq({
-            event: "tool_use",
-            id: event.toolCallId,
-            name: event.toolName,
-            input: event.args,
-          });
-          break;
-        }
-        case "tool_execution_end": {
-          emitReq({
-            event: "tool_result",
-            content: textFromContent(event.result?.content),
-          });
-          break;
-        }
-        case "turn_end": {
-          turnCount += 1;
-          break;
-        }
-        default:
-          break;
-      }
-    });
+    // Re-check cancel after storing — guards race between session setup and cancel
+    if (canceled) {
+      cleanupChatSession(cKey);
+      throw new Error("request canceled");
+    }
 
     try {
       const images = opts?.images;
@@ -823,11 +888,11 @@ async function handleQuery(req: Request): Promise<void> {
         await session.prompt(req.prompt, { source: "rpc" });
       }
     } finally {
-      unsubscribe();
-      if (unsubHook) unsubHook();
+      // Keep subscription alive — session stays for steer/followUp/abort
+      // Only clean up if canceled (disposed via cancelActive or canceled guard)
     }
 
-    if (!terminalEmitted) {
+    if (!terminalEmitted && !canceled) {
       const stats = session.getSessionStats();
       const content = session.getLastAssistantText() ?? "";
       terminalEmitted = true;
@@ -841,8 +906,18 @@ async function handleQuery(req: Request): Promise<void> {
         input_tokens: stats.tokens.input,
         output_tokens: stats.tokens.output,
       });
+
+      // Start idle timer — session stays alive for subsequent steer/followUp/abort
+      const currentCs = chatSessions.get(cKey);
+      if (currentCs) {
+        startIdleTimer(currentCs, cKey);
+      }
     }
   } catch (err: unknown) {
+    // If session was created but never stored in chatSessions (setup failure), dispose it
+    if (session && !chatSessions.has(cKey)) {
+      try { session.dispose(); } catch {}
+    }
     if (!terminalEmitted) {
       const errMsg = err instanceof Error ? err.message : String(err);
       redactedLog(`query error: rid=${reqId} ${errMsg}`);
@@ -851,14 +926,120 @@ async function handleQuery(req: Request): Promise<void> {
   } finally {
     if (timeout) clearTimeout(timeout);
     activeRequests.delete(reqId);
-    if (session) {
-      try {
-        session.dispose();
-      } catch (disposeErr) {
-        redactedLog(`session dispose failed: ${disposeErr instanceof Error ? disposeErr.message : String(disposeErr)}`);
-      }
-    }
+    // Session is NOT disposed here when stored — it stays in chatSessions for steer/followUp/abort
   }
+}
+
+// ── Handle steer command ────────────────────────────────────
+async function handleSteer(req: Request): Promise<void> {
+  const reqId = req.request_id || "";
+  const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
+  const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
+  const cKey = chatKey(chatID, threadID);
+  const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
+
+  const cs = chatSessions.get(cKey);
+  if (!cs) {
+    emitReq({ event: "result", content: "no active session" });
+    return;
+  }
+
+  clearTimeout(cs.idleTimer);
+  cs.currentReqId = reqId;
+  redactedLog(`steer — rid=${reqId} chat=${chatID} thread=${threadID}`);
+
+  try {
+    await cs.session.steer(req.prompt);
+    emitReq({ event: "result", content: "steer queued" });
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    redactedLog(`steer error: rid=${reqId} ${errMsg}`);
+    emitReq({ event: "error", message: redactSDKError(errMsg) });
+  } finally {
+    startIdleTimer(cs, cKey);
+  }
+}
+
+// ── Handle follow-up command ────────────────────────────────
+async function handleFollowUp(req: Request): Promise<void> {
+  const reqId = req.request_id || "";
+  const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
+  const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
+  const cKey = chatKey(chatID, threadID);
+  const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
+
+  const cs = chatSessions.get(cKey);
+  if (!cs) {
+    emitReq({ event: "result", content: "no active session" });
+    return;
+  }
+
+  clearTimeout(cs.idleTimer);
+  cs.currentReqId = reqId;
+  redactedLog(`followUp — rid=${reqId} chat=${chatID} thread=${threadID}`);
+
+  try {
+    await cs.session.followUp(req.prompt);
+    emitReq({ event: "result", content: "follow-up queued" });
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    redactedLog(`followUp error: rid=${reqId} ${errMsg}`);
+    emitReq({ event: "error", message: redactSDKError(errMsg) });
+  } finally {
+    startIdleTimer(cs, cKey);
+  }
+}
+
+// ── Handle abort command ────────────────────────────────────
+async function handleAbort(req: Request): Promise<void> {
+  const reqId = req.request_id || "";
+  const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
+  const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
+  const cKey = chatKey(chatID, threadID);
+  const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
+
+  const cs = chatSessions.get(cKey);
+  if (!cs) {
+    emitReq({ event: "result", content: "no active session" });
+    return;
+  }
+
+  redactedLog(`abort — rid=${reqId} chat=${chatID} thread=${threadID}`);
+
+  try {
+    await cs.session.abort();
+    emitReq({ event: "result", content: "session aborted" });
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    redactedLog(`abort error: rid=${reqId} ${errMsg}`);
+    emitReq({ event: "error", message: redactSDKError(errMsg) });
+  } finally {
+    cleanupChatSession(cKey);
+  }
+}
+
+// ── Handle get-state command ────────────────────────────────
+async function handleGetState(req: Request): Promise<void> {
+  const reqId = req.request_id || "";
+  const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
+  const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
+  const cKey = chatKey(chatID, threadID);
+  const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
+
+  const cs = chatSessions.get(cKey);
+  if (!cs) {
+    emitReq({ event: "result", content: JSON.stringify({ is_streaming: false, pending_count: 0, session_id: "" }) });
+    return;
+  }
+
+  emitReq({
+    event: "result",
+    content: JSON.stringify({
+      is_streaming: cs.session.isStreaming,
+      pending_count: cs.session.pendingMessageCount,
+      session_id: cs.sessionId,
+    }),
+  });
 }
 
 // ── Handle incoming request ──────────────────────────────────────────────────
@@ -932,6 +1113,34 @@ async function handleRequest(line: string): Promise<void> {
         redactedLog(`list-models error: ${errMsg}`);
         emitReq({ event: "error", message: `list-models failed: ${redactSDKError(errMsg)}` });
       }
+      break;
+    }
+
+    case "steer": {
+      if (!req.prompt) {
+        emit({ event: "error", request_id: reqId, message: "missing 'prompt' field for steer command" });
+        return;
+      }
+      await handleSteer(req);
+      break;
+    }
+
+    case "follow-up": {
+      if (!req.prompt) {
+        emit({ event: "error", request_id: reqId, message: "missing 'prompt' field for follow-up command" });
+        return;
+      }
+      await handleFollowUp(req);
+      break;
+    }
+
+    case "abort": {
+      await handleAbort(req);
+      break;
+    }
+
+    case "get-state": {
+      await handleGetState(req);
       break;
     }
 
