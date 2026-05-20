@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.5] - 2026-05-20
+
+### Changed
+- Nomes das ferramentas no progresso encurtados de frases completas
+  ("📖 lendo arquivo") para rótulos curtos ("📖 read")
+
+### Removed
+- Logs de debug do streaming (first-delta/first-3-chars) removidos do pipeline
+  e do progress reporter — eliminando ruído nos logs.
+
 ## [0.11.4] - 2026-05-20
 
 ### Changed

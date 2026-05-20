@@ -29,3 +29,6 @@
 ## Change ux-session-improvements (2026-05-20)
 - [pattern] pi-sdk-session-compaction
 - [process] parallel-delegation-batching
+
+## Change deploy-automation-post-commit (2026-05-20)
+- [process] deploy-via-launchd

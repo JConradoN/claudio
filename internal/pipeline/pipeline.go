@@ -721,13 +721,6 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			}
 		case "assistant":
 			delta := eventContent(ev)
-			// Debug: log first delta to check if first char is being received
-			if assistantText.Len() == 0 && len(delta) > 0 {
-				runes := []rune(delta)
-				if len(runes) >= 3 {
-					log.Printf("pipeline: first assistant delta, %d chars, first 3: %q (runes: %v)", len(delta), string(runes[:3]), runes[:3])
-				}
-			}
 			assistantText.WriteString(delta)
 
 			// Periodic flush — send full accumulated text so nothing is lost

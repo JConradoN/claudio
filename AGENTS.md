@@ -43,23 +43,17 @@ For trivial tasks, implement directly and validate.
 After every commit that changes Go or Bridge code, the binary **must** be rebuilt and the daemon restarted before considering the work done. This prevents testing with a stale binary.
 
 ```bash
-# 1. Build binary to the daemon's expected location
-go build -o ~/.aurelia/bin/aurelia ./cmd/aurelia/
-
-# 2. Kill the running daemon gracefully
-kill $(pgrep -f "aurelia" | head -1)
-sleep 2
-
-# 3. Restart with log redirection
-mkdir -p ~/.aurelia/logs
-nohup ~/.aurelia/bin/aurelia >> ~/.aurelia/logs/aurelia.stdout.log 2>> ~/.aurelia/logs/aurelia.stderr.log &
-sleep 3
-
-# 4. Confirm it's running
-pgrep -f "aurelia"
+# Atomic build + restart via launchd (KeepAlive so launchd respawns automatically)
+make deploy
 ```
 
+This uses `make install` (build → `.new` → `mv` — never corrupts a running binary) followed by `launchctl kickstart -k` which sends SIGTERM and lets launchd restart the daemon with the new binary.
+
+> **Fallback** (if service is not loaded): `make install` then manually kill + restart via the old sequence below.
+
 **Failure to rebuild + restart will produce false negatives during testing.** Treat this as part of "done".
+
+> **Pro tip:** A `post-commit` git hook is installed at `.git/hooks/post-commit` that runs `make deploy` automatically after every commit. If enabled, step 6 is automatic — just commit and the daemon updates itself.
 
 ## Rules
 

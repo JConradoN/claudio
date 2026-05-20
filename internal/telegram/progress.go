@@ -135,14 +135,6 @@ func (p *progressReporter) ReportText(text string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Debug: log first few chars to detect if first char is being lost
-	if len(text) > 0 {
-		runes := []rune(text)
-		if len(runes) >= 3 {
-			log.Printf("progress: ReportText received %d chars, first 3: %q (runes: %v)", len(text), string(runes[:3]), runes[:3])
-		}
-	}
-
 	p.latestThought = text
 
 	// Without a bot we cannot send anything — just update internal state.
@@ -193,11 +185,6 @@ func (p *progressReporter) buildDisplay() string {
 		runes := []rune(snippet)
 		if len(runes) > 300 {
 			snippet = string(runes[:300]) + "..."
-		}
-		// Debug: log what we're about to display
-		displayRunes := []rune(snippet)
-		if len(displayRunes) >= 3 {
-			log.Printf("progress: buildDisplay snippet first 3 chars: %q (runes: %v)", string(displayRunes[:3]), displayRunes[:3])
 		}
 		text += "\n\n" + snippet
 	}
