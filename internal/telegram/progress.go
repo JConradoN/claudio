@@ -42,7 +42,7 @@ func (p *progressReporter) ReportTool(toolName string) {
 	label := toolDisplayName(toolName)
 	p.tools = append(p.tools, label)
 
-	text := progressText(p.tools, time.Since(p.startTime))
+	text := p.buildDisplay()
 	if text == p.lastText {
 		return
 	}
