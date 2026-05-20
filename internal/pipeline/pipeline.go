@@ -675,7 +675,6 @@ func heartbeatMonitor(doneCh <-chan struct{}, toolUseSignal <-chan struct{}, cha
 func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int, ch <-chan bridge.Event, progress ProgressReporter, userText string, toolUseSignal chan<- struct{}, userID int64) Outcome {
 	var (
 		assistantText      strings.Builder
-		textSinceLastFlush strings.Builder
 		lastStreamFlush    = time.Now()
 		streamFlushInterval = 3 * time.Second
 	)
@@ -694,12 +693,11 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			}
 			// Flush pending thought block before showing tool
 			if progress != nil {
-				if text := strings.TrimSpace(textSinceLastFlush.String()); text != "" {
+				if text := strings.TrimSpace(assistantText.String()); text != "" {
 					progress.ReportText(text)
 				}
 				progress.ReportTool(toolName)
 			}
-			textSinceLastFlush.Reset()
 			lastStreamFlush = time.Now()
 			s.recordToolUse(chatID, threadID, toolName)
 			if toolUseSignal != nil {
@@ -731,21 +729,14 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 				}
 			}
 			assistantText.WriteString(delta)
-			textSinceLastFlush.WriteString(delta)
 
-			// Periodic flush — show checkpoints even during long text without tools
+			// Periodic flush — send full accumulated text so nothing is lost
 			if time.Since(lastStreamFlush) >= streamFlushInterval {
 				if progress != nil {
-					if text := strings.TrimSpace(textSinceLastFlush.String()); text != "" {
-						// Debug: log what we're sending to progress reporter
-						runes := []rune(text)
-						if len(runes) >= 3 {
-							log.Printf("pipeline: flushing %d chars to progress, first 3: %q", len(text), string(runes[:3]))
-						}
+					if text := strings.TrimSpace(assistantText.String()); text != "" {
 						progress.ReportText(text)
 					}
 				}
-				textSinceLastFlush.Reset()
 				lastStreamFlush = time.Now()
 			}
 		case "result":

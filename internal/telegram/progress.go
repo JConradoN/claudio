@@ -239,22 +239,22 @@ func toolDisplayName(name string) string {
 
 	switch name {
 	case "Read":
-		return "📖 Reading file..."
+		return "📖 read"
 	case "Write":
-		return "✍️ Writing file..."
+		return "✍️ write"
 	case "Edit":
-		return "✏️ Editing file..."
+		return "✏️ edit"
 	case "Bash":
-		return "⚡ Running command..."
+		return "⚡ bash"
 	case "Glob":
-		return " Searching files..."
+		return " glob"
 	case "Grep":
-		return "🔎 Searching content..."
+		return "🔎 grep"
 	case "WebSearch":
-		return "🌐 Searching web..."
+		return "🌐 web_search"
 	case "WebFetch":
-		return " Fetching page..."
+		return " web_fetch"
 	default:
-		return fmt.Sprintf("🔧 %s...", name)
+		return fmt.Sprintf("🔧 %s", strings.ToLower(name))
 	}
 }

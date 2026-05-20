@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.4] - 2026-05-20
+
+### Changed
+- Nomes das ferramentas no progresso encurtados de frases completas
+  ("📖 Reading file...") para rótulos curtos ("📖 read")
+
+### Fixed
+- Streaming: primeiro caractere do texto do assistente não é mais perdido
+  — flush envia o texto completo acumulado (assistantText) em vez do
+  incremental (textSinceLastFlush), evitando que o caracter inicial
+  desapareça após tool_use intermediário
+
 ## [0.11.3] - 2026-05-20
 
 ### Corrigido
