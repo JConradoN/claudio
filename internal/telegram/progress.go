@@ -14,6 +14,10 @@ import (
 // Telegram allows ~1 edit/sec per message; we leave a margin.
 const progressEditInterval = 1500 * time.Millisecond
 
+// maxToolResultDisplay limits how much of a tool result summary is shown
+// in the progress message. The full summary is stored in the run log.
+const maxToolResultDisplay = 150
+
 type progressReporter struct {
 	bot           *telebot.Bot
 	chat          *telebot.Chat
@@ -73,9 +77,71 @@ func (p *progressReporter) ReportTool(toolName string) {
 	p.lastEdit = time.Now()
 }
 
+// ReportToolResult appends a result summary to the last tool entry.
+// If there are no tools yet, the result is silently dropped.
+func (p *progressReporter) ReportToolResult(summary string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.tools) == 0 || summary == "" {
+		return
+	}
+
+	// Truncate summary for display
+	runes := []rune(summary)
+	if len(runes) > maxToolResultDisplay {
+		runes = runes[:maxToolResultDisplay]
+	}
+
+	// Update the last tool entry with the result
+	lastIdx := len(p.tools) - 1
+	p.tools[lastIdx] = p.tools[lastIdx] + " → [" + string(runes) + "]"
+
+	if p.bot == nil {
+		return
+	}
+
+	text := p.buildDisplay()
+	if text == p.lastText {
+		return
+	}
+
+	if p.msg == nil {
+		sent, err := p.bot.Send(p.chat, text, &telebot.SendOptions{ThreadID: p.threadID})
+		if err != nil {
+			log.Printf("Progress send error: %v", err)
+			return
+		}
+		p.msg = sent
+		p.lastText = text
+		p.lastEdit = time.Now()
+		return
+	}
+
+	if time.Since(p.lastEdit) < progressEditInterval {
+		return
+	}
+
+	_, err := p.bot.Edit(p.msg, text)
+	if err != nil {
+		log.Printf("Progress edit error: %v", err)
+		return
+	}
+	p.lastText = text
+	p.lastEdit = time.Now()
+}
+
 func (p *progressReporter) ReportText(text string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Debug: log first few chars to detect if first char is being lost
+	if len(text) > 0 {
+		runes := []rune(text)
+		if len(runes) >= 3 {
+			log.Printf("progress: ReportText received %d chars, first 3: %q (runes: %v)", len(text), string(runes[:3]), runes[:3])
+		}
+	}
 
 	p.latestThought = text
 
@@ -128,6 +194,11 @@ func (p *progressReporter) buildDisplay() string {
 		if len(runes) > 300 {
 			snippet = string(runes[:300]) + "..."
 		}
+		// Debug: log what we're about to display
+		displayRunes := []rune(snippet)
+		if len(displayRunes) >= 3 {
+			log.Printf("progress: buildDisplay snippet first 3 chars: %q (runes: %v)", string(displayRunes[:3]), displayRunes[:3])
+		}
 		text += "\n\n" + snippet
 	}
 	return text
@@ -163,6 +234,9 @@ func (p *progressReporter) Delete() {
 }
 
 func toolDisplayName(name string) string {
+	// Normalize to Title case for matching (bridge sends lowercase: "bash", "read", etc.)
+	name = strings.Title(strings.ToLower(name))
+
 	switch name {
 	case "Read":
 		return "📖 Reading file..."
@@ -173,13 +247,13 @@ func toolDisplayName(name string) string {
 	case "Bash":
 		return "⚡ Running command..."
 	case "Glob":
-		return "🔍 Searching files..."
+		return " Searching files..."
 	case "Grep":
 		return "🔎 Searching content..."
 	case "WebSearch":
 		return "🌐 Searching web..."
 	case "WebFetch":
-		return "🌐 Fetching page..."
+		return " Fetching page..."
 	default:
 		return fmt.Sprintf("🔧 %s...", name)
 	}

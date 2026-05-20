@@ -676,7 +676,7 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 	var (
 		assistantText      strings.Builder
 		textSinceLastFlush strings.Builder
-		lastStreamFlush    time.Time
+		lastStreamFlush    = time.Now()
 		streamFlushInterval = 3 * time.Second
 	)
 
@@ -710,16 +710,26 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			}
 		case "tool_result":
 			// Append a truncated, redacted summary to the tool tracking state.
-			if s.runLog != nil {
-				summary := summarizeToolResult(eventContent(ev))
-				if summary != "" {
+			// Also show the summary in the live progress display.
+			content := eventContent(ev)
+			summary := summarizeToolResult(content)
+			if summary != "" {
+				if s.runLog != nil {
 					s.recordToolResult(chatID, threadID, summary)
 				}
-			} else {
-				log.Printf("Bridge event (ignored): tool_result")
+				if progress != nil {
+					progress.ReportToolResult(summary)
+				}
 			}
 		case "assistant":
 			delta := eventContent(ev)
+			// Debug: log first delta to check if first char is being received
+			if assistantText.Len() == 0 && len(delta) > 0 {
+				runes := []rune(delta)
+				if len(runes) >= 3 {
+					log.Printf("pipeline: first assistant delta, %d chars, first 3: %q (runes: %v)", len(delta), string(runes[:3]), runes[:3])
+				}
+			}
 			assistantText.WriteString(delta)
 			textSinceLastFlush.WriteString(delta)
 
@@ -727,6 +737,11 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			if time.Since(lastStreamFlush) >= streamFlushInterval {
 				if progress != nil {
 					if text := strings.TrimSpace(textSinceLastFlush.String()); text != "" {
+						// Debug: log what we're sending to progress reporter
+						runes := []rune(text)
+						if len(runes) >= 3 {
+							log.Printf("pipeline: flushing %d chars to progress, first 3: %q", len(text), string(runes[:3]))
+						}
 						progress.ReportText(text)
 					}
 				}

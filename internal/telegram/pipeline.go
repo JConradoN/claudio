@@ -194,6 +194,7 @@ func (o telegramPipelineOutput) ExecuteApprovedPlan(chatID int64, messageID int,
 
 type noopPipelineProgress struct{}
 
-func (noopPipelineProgress) ReportTool(string) {}
-func (noopPipelineProgress) ReportText(string) {}
-func (noopPipelineProgress) Delete()           {}
+func (noopPipelineProgress) ReportTool(string)       {}
+func (noopPipelineProgress) ReportToolResult(string) {}
+func (noopPipelineProgress) ReportText(string)       {}
+func (noopPipelineProgress) Delete()                 {}

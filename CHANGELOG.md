@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.3] - 2026-05-20
+
+### Corrigido
+- Primeiro caractere do streaming não é mais cortado: `lastStreamFlush` agora
+  inicializado com `time.Now()` em vez de zero value, evitando flush imediato
+  do primeiro fragmento de texto (que sobrescrevia o início da frase).
+
+### Adicionado
+- Resumo dos resultados das tools agora aparece no progresso em tempo real:
+  "📖 Reading file... → [3 files found, 240 lines]" em vez de apenas
+  "📖 Reading file..."
+
 ## [0.11.2] - 2026-05-20
 
 ### Fixed

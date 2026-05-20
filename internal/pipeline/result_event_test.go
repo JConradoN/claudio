@@ -50,9 +50,10 @@ func (f *fakeOutput) ExecuteApprovedPlan(_ int64, _ int, _ *orchestrator.Plan) {
 
 type fakeProgress struct{}
 
-func (fakeProgress) ReportTool(_ string) {}
-func (fakeProgress) ReportText(_ string) {}
-func (fakeProgress) Delete()             {}
+func (fakeProgress) ReportTool(_ string)       {}
+func (fakeProgress) ReportToolResult(_ string) {}
+func (fakeProgress) ReportText(_ string)       {}
+func (fakeProgress) Delete()                   {}
 
 func newTestService(output Output) *Service {
 	return &Service{
