@@ -672,7 +672,12 @@ func heartbeatMonitor(doneCh <-chan struct{}, toolUseSignal <-chan struct{}, cha
 // toolUseSignal, if non-nil, receives a signal on every tool_use event so a
 // caller can monitor thinking gaps (heartbeat).
 func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int, ch <-chan bridge.Event, progress ProgressReporter, userText string, toolUseSignal chan<- struct{}) Outcome {
-	var assistantText strings.Builder
+	var (
+		assistantText      strings.Builder
+		textSinceLastFlush strings.Builder
+		lastStreamFlush    time.Time
+		streamFlushInterval = 3 * time.Second
+	)
 
 	for ev := range ch {
 		switch ev.Type {
@@ -686,9 +691,15 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			if toolName == "" {
 				toolName = "tool"
 			}
+			// Flush pending thought block before showing tool
 			if progress != nil {
+				if text := strings.TrimSpace(textSinceLastFlush.String()); text != "" {
+					progress.ReportText(text)
+				}
 				progress.ReportTool(toolName)
 			}
+			textSinceLastFlush.Reset()
+			lastStreamFlush = time.Now()
 			s.recordToolUse(chatID, threadID, toolName)
 			if toolUseSignal != nil {
 				select {
@@ -707,9 +718,19 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 				log.Printf("Bridge event (ignored): tool_result")
 			}
 		case "assistant":
-			assistantText.WriteString(eventContent(ev))
-			if progress != nil {
-				progress.ReportText(assistantText.String())
+			delta := eventContent(ev)
+			assistantText.WriteString(delta)
+			textSinceLastFlush.WriteString(delta)
+
+			// Periodic flush — show checkpoints even during long text without tools
+			if time.Since(lastStreamFlush) >= streamFlushInterval {
+				if progress != nil {
+					if text := strings.TrimSpace(textSinceLastFlush.String()); text != "" {
+						progress.ReportText(text)
+					}
+				}
+				textSinceLastFlush.Reset()
+				lastStreamFlush = time.Now()
 			}
 		case "result":
 			return s.handleResultEvent(chatID, threadID, messageID, ev, &assistantText, userText)

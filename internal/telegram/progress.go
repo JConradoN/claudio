@@ -19,7 +19,7 @@ type progressReporter struct {
 	chat          *telebot.Chat
 	msg           *telebot.Message
 	tools         []string
-	streamingText string
+	latestThought string
 	threadID      int
 	startTime     time.Time
 	lastText      string
@@ -77,7 +77,7 @@ func (p *progressReporter) ReportText(text string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.streamingText = text
+	p.latestThought = text
 
 	// Without a bot we cannot send anything — just update internal state.
 	if p.bot == nil {
@@ -115,19 +115,18 @@ func (p *progressReporter) ReportText(text string) {
 	p.lastEdit = time.Now()
 }
 
-// buildDisplay returns the progress message text, including streaming text
-// snippet when present. Must be called while p.mu is held.
+// buildDisplay returns the progress message text, including the latest
+// thought block when present. Must be called while p.mu is held.
 func (p *progressReporter) buildDisplay() string {
 	text := progressText(p.tools, time.Since(p.startTime))
-	if p.streamingText != "" {
-		toolsCount := len(p.tools)
-		charCount := len([]rune(p.streamingText))
-		text += fmt.Sprintf("\n— %d ferramentas, ~%d caracteres —", toolsCount, charCount)
-		// Text snippet truncated to 400 runes
-		snippet := p.streamingText
+	if p.latestThought != "" {
+		if len(p.tools) > 0 {
+			text += fmt.Sprintf("\n— %d ferramentas —", len(p.tools))
+		}
+		snippet := p.latestThought
 		runes := []rune(snippet)
-		if len(runes) > 400 {
-			snippet = string(runes[:400]) + "..."
+		if len(runes) > 300 {
+			snippet = string(runes[:300]) + "..."
 		}
 		text += "\n\n" + snippet
 	}
@@ -156,7 +155,7 @@ func formatProgressDuration(d time.Duration) string {
 func (p *progressReporter) Delete() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.streamingText = ""
+	p.latestThought = ""
 	if p.msg != nil {
 		_ = p.bot.Delete(p.msg)
 		p.msg = nil
