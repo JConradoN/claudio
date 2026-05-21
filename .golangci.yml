@@ -9,7 +9,6 @@ linters:
         - "-ST1000"  # package comments — not enforced in this project
         - "-ST1016"  # receiver name consistency — prompt_builder uses "bc" throughout, other files use "s"
 
-issues:
   exclusions:
     rules:
       - path: "_test\\.go"
