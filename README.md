@@ -1,8 +1,8 @@
 <div align="center">
 
-# Aurelia OS
+# Cláudio
 
-<img src="assets/aurelia_cover.png" alt="Aurelia cover" width="720" />
+<img src="assets/aurelia_cover.png" alt="Cláudio cover" width="720" />
 
 **An autonomous agent operating system in Go.**
 
@@ -10,7 +10,9 @@ Telegram-native. PI-powered. Built to stay light.
 
 One persistent daemon, many projects, many agents.
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+> **Fork notice:** Cláudio is a research fork of [Aurelia](https://github.com/igormaneschy/aurelia) by [@igormaneschy](https://github.com/igormaneschy), extended for multi-agent research and fox-server infrastructure. The Go module path (`github.com/igormaneschy/aurelia`) is intentionally kept in sync with upstream.
+
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Runtime](https://img.shields.io/badge/Runtime-Local--First-0F172A)](#runtime-model)
 [![Architecture](https://img.shields.io/badge/Architecture-Modular_Monolith-1F2937)](.specs/codebase/ARCHITECTURE.md)
 [![Storage](https://img.shields.io/badge/Storage-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org/)
@@ -34,9 +36,9 @@ Before installing, ensure you have:
   - **OpenRouter** — recommended (multi-model proxy, one key for many models)
   - **opencode-go** — alternative (OpenCode API key)
 
-## Why Aurelia OS
+## Why Cláudio
 
-Aurelia is an autonomous agent operating system accessible via Telegram. Talk naturally — Aurelia decides whether to respond directly, delegate to a specialist agent, or schedule automated execution.
+Cláudio is an autonomous agent operating system accessible via Telegram. Talk naturally — Cláudio decides whether to respond directly, delegate to a specialist agent, or schedule automated execution.
 
 It is built around a practical execution model:
 
@@ -316,11 +318,11 @@ Requirements:
 
 1. **Clone** the repository:
    ```bash
-   git clone https://github.com/igormaneschy/aurelia.git
-   cd aurelia
+   git clone https://github.com/JConradoN/claudio.git
+   cd claudio
    ```
 
-   > **Note**: You do not need to install the PI CLI (`pi`) or run `pi /login`. The PI SDK is bundled and installed automatically by Aurelia.
+   > **Note**: You do not need to install the PI CLI (`pi`) or run `pi /login`. The PI SDK is bundled and installed automatically by Cláudio.
 
 2. **Run the onboarding wizard** (required before first start):
    ```bash
@@ -444,7 +446,7 @@ Aurelia supports local models via [Ollama](https://ollama.com/) or any OpenAI-co
 
 ### Notes
 
-- Ollama must be running (`ollama serve`) before starting Aurelia
+- Ollama must be running (`ollama serve`) before starting Cláudio
 - The `apiKey` field is required by the PI SDK but ignored by Ollama — any value works
 - Local models do not support image input or advanced tool calling — use cloud providers for those features
 - For other local servers (vLLM, LM Studio, etc.), adjust `baseUrl` and `api` accordingly
@@ -509,9 +511,10 @@ Full guide: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Current State
 
-- **v0.13.x active development** — see [CHANGELOG.md](CHANGELOG.md)
-- Canonical repository: `https://github.com/igormaneschy/aurelia`
-- Go module: `github.com/igormaneschy/aurelia`
+- **v0.14.0 upstream + Cláudio patches** — see [CHANGELOG.md](CHANGELOG.md)
+- Fork repository: `https://github.com/JConradoN/claudio`
+- Upstream: `https://github.com/igormaneschy/aurelia`
+- Go module: `github.com/igormaneschy/aurelia` (kept in sync with upstream)
 - Go test suite is green
 - TypeScript Bridge compiles clean
 - Cross-platform: macOS, Windows, and Linux
