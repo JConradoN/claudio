@@ -48,8 +48,8 @@ func TestOnboarder_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin() error = %v", err)
 	}
-	if !strings.Contains(greeting, "Aurelia") {
-		t.Errorf("greeting should mention Aurelia, got %q", greeting)
+	if !strings.Contains(greeting, "Cláudio") {
+		t.Errorf("greeting should mention Cláudio, got %q", greeting)
 	}
 	if !onboarder.Active(1) {
 		t.Fatal("Active() should be true after Begin")

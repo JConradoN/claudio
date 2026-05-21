@@ -645,7 +645,14 @@ func TestUpdateMemoryIndex_FailsOnUnwritableDir(t *testing.T) {
 		t.Fatalf("expected first MEMORY.md write to succeed: %v", err)
 	}
 
-	// Make the directory read-only (permission 0500 = r-x------)
+	// Make both the file and directory read-only.
+	// On Linux, overwriting an existing file only requires write permission on
+	// the file itself (not the directory), so both must be locked.
+	indexPath := filepath.Join(dir, "MEMORY.md")
+	if err := os.Chmod(indexPath, 0400); err != nil {
+		t.Skipf("cannot chmod MEMORY.md: %v", err)
+	}
+	defer os.Chmod(indexPath, 0600) // restore for cleanup
 	if err := os.Chmod(dir, 0500); err != nil {
 		t.Skipf("cannot chmod temp dir: %v", err)
 	}
