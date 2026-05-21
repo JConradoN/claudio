@@ -60,3 +60,36 @@ func TestAuthSymlink(t *testing.T) {
 		t.Errorf("symlink points to %q, want %q", linkTarget, srcAuth)
 	}
 }
+
+func TestSourceHashDetection(t *testing.T) {
+	// computeSourceHash is consistent across calls.
+	h1 := computeSourceHash()
+	h2 := computeSourceHash()
+	if h1 != h2 {
+		t.Errorf("computeSourceHash() not consistent: %q vs %q", h1, h2)
+	}
+
+	// Round-trip: write then verify.
+	dir := t.TempDir()
+	if err := writeSourceHash(dir); err != nil {
+		t.Fatalf("writeSourceHash: %v", err)
+	}
+	if !isSourceHashCurrent(dir) {
+		t.Error("isSourceHashCurrent returned false after writeSourceHash")
+	}
+
+	// Mismatched hash returns false.
+	badPath := sourceHashPath(dir)
+	if err := os.WriteFile(badPath, []byte("badhash"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if isSourceHashCurrent(dir) {
+		t.Error("isSourceHashCurrent returned true with wrong hash")
+	}
+
+	// Missing file returns false.
+	emptyDir := t.TempDir()
+	if isSourceHashCurrent(emptyDir) {
+		t.Error("isSourceHashCurrent returned true for missing file")
+	}
+}

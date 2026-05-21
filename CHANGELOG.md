@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-05-21
+
+### Fixed
+- `EnsureBridge` now detects stale `bundle.js` on disk by comparing a SHA-256 hash of the embedded TypeScript source (`.source-hash`). When the source changes (e.g. timeout fix from 10min to 30min), the bundle is automatically rebuilt — eliminating the root cause of persistent query timeouts.
+
 ## [0.13.1] - 2026-05-21
 
 ### Fixed

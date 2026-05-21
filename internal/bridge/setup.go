@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -81,6 +82,16 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		}
 	}
 
+	// Detect stale bundle: if bundle exists but TypeScript source changed,
+	// force rebuild. This handles the case where EmbeddedBundleJS is empty
+	// (no pre-built JS to compare) but the embedded TS source was updated.
+	if bundleExists && len(bundleJS) == 0 && len(EmbeddedBridgeTS) > 0 {
+		if !isSourceHashCurrent(targetDir) {
+			slog.Info("Bridge bundle is stale (TypeScript source changed), rebuilding...")
+			bundleExists = false
+		}
+	}
+
 	if bundleExists && !needsNpmInstall {
 		return targetDir, nil
 	}
@@ -133,6 +144,9 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 				os.Remove(tmpPath)
 				return "", fmt.Errorf("rename bundle.js.tmp → bundle.js: %w", err)
 			}
+			if err := writeSourceHash(targetDir); err != nil {
+				slog.Warn("failed to write bridge source hash", "error", err)
+			}
 		} else {
 			// No embedded bundle — build from TypeScript source.
 			slog.Info("Building Bridge from TypeScript source (esbuild)...")
@@ -142,6 +156,9 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
 				return "", fmt.Errorf("npm run build failed: %w", err)
+			}
+			if err := writeSourceHash(targetDir); err != nil {
+				slog.Warn("failed to write bridge source hash", "error", err)
 			}
 		}
 	}
@@ -161,6 +178,32 @@ func writeBridgeSource(targetDir string) error {
 	return nil
 }
 
+// sourceHashPath returns the path to the bridge source hash file.
+func sourceHashPath(targetDir string) string {
+	return filepath.Join(targetDir, ".source-hash")
+}
+
+// computeSourceHash returns the SHA-256 hash of the embedded TypeScript source.
+func computeSourceHash() string {
+	return fmt.Sprintf("%x", sha256.Sum256(EmbeddedBridgeTS))
+}
+
+// isSourceHashCurrent returns true if the stored hash matches the current source hash.
+func isSourceHashCurrent(targetDir string) bool {
+	data, err := os.ReadFile(sourceHashPath(targetDir))
+	if err != nil {
+		return false
+	}
+	return string(data) == computeSourceHash()
+}
+
+// writeSourceHash writes the current source hash to the target directory.
+func writeSourceHash(targetDir string) error {
+	if err := os.MkdirAll(targetDir, 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(sourceHashPath(targetDir), []byte(computeSourceHash()), 0600)
+}
 
 
 

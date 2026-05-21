@@ -38,8 +38,10 @@ func acquireLock() (release func(), err error) {
 			if findErr == nil {
 				if signalErr := proc.Signal(syscall.Signal(0)); signalErr == nil {
 					return nil, fmt.Errorf("outra instância já está rodando (PID %d).\n"+
-						"Use 'kill %d' para encerrá-la ou 'launchctl stop com.aurelia.agent'",
-						existingPID, existingPID)
+						"Use 'make deploy' para build + restart, ou:\n"+
+						"  launchctl kickstart -k com.aurelia.agent   (restart limpo)\n"+
+						"  launchctl stop com.aurelia.agent           (parar o daemon)",
+						existingPID)
 				}
 			}
 		}

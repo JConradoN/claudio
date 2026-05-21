@@ -10,7 +10,7 @@ LOG_DIR       := $(HOME)/.aurelia/logs
 STDERR_LOG    := $(LOG_DIR)/aurelia.stderr.log
 STDOUT_LOG    := $(LOG_DIR)/aurelia.stdout.log
 
-.PHONY: help build test vet bridge install install-service install-service-macos install-service-linux deploy restart stop status logs stdout uninstall-service
+.PHONY: help build test vet bridge install install-service install-service-macos install-service-linux deploy restart sign stop status logs stdout uninstall-service
 
 help:
 	@echo "Common targets:"
@@ -40,10 +40,15 @@ build:
 # Atomic build: write to .new then rename so a running daemon never sees a
 # half-written file. On macOS the running process keeps its mmap of the old
 # inode, so this is safe even with the service active.
+#
+# On macOS, the binary is ad-hoc signed (or self-signed if the Aurelia Dev
+# certificate exists) so that TCC permissions survive rebuilds. Without a
+# stable code identity, each new binary triggers macOS permission prompts.
 install:
 	mkdir -p $(dir $(BINARY))
 	go build -o $(TMP_BINARY) $(PKG)
 	mv $(TMP_BINARY) $(BINARY)
+	$(MAKE) sign
 
 test:
 	go test ./... -short -count=1
@@ -87,6 +92,26 @@ restart:
 	else \
 		echo "service not loaded — run 'make install-service' first" >&2; \
 		exit 1; \
+	fi
+
+CERT_NAME := Aurelia Dev
+KEYCHAIN_PATH := $(HOME)/Library/Keychains/aurelia-codesign.keychain-db
+KEYCHAIN_PASS_FILE := $(HOME)/.aurelia/codesign-pass
+
+# sign — codesign the binary so macOS TCC permissions persist across rebuilds.
+# Uses a self-signed "Aurelia Dev" certificate if available, otherwise
+# falls back to ad-hoc signing (better than unsigned, but still prompts
+# on rebuild since ad-hoc identity changes with content).
+# Run scripts/setup-codesign.sh once to create the persistent certificate.
+sign:
+	@if security find-identity -p codesigning "$(KEYCHAIN_PATH)" 2>/dev/null | grep -q "$(CERT_NAME)"; then \
+		pass=$$(cat "$(KEYCHAIN_PASS_FILE)" 2>/dev/null || echo ""); \
+		security unlock-keychain -p "$$pass" "$(KEYCHAIN_PATH)" 2>/dev/null || true; \
+		echo "signing with self-signed certificate: $(CERT_NAME)"; \
+		codesign --force --sign "$(CERT_NAME)" -i com.aurelia.agent --options runtime "$(BINARY)"; \
+	elif command -v codesign >/dev/null 2>&1; then \
+		echo "signing with ad-hoc (run scripts/setup-codesign.sh for persistent cert)"; \
+		codesign --force --sign - -i com.aurelia.agent --options runtime "$(BINARY)"; \
 	fi
 
 stop:
