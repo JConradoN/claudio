@@ -10,7 +10,8 @@ linters:
         - "-ST1016"  # receiver name consistency — prompt_builder uses "bc" throughout, other files use "s"
 
 issues:
-  exclude-rules:
-    - path: "_test\\.go"
-      linters:
-        - errcheck
+  exclusions:
+    rules:
+      - path: "_test\\.go"
+        linters:
+          - errcheck
