@@ -45,8 +45,7 @@ type migrationOp struct {
 type migrationPlan struct {
 	targetUserID int64
 	root         string
-	fileOps      []migrationOp
-	cronUpdates  int // populated after execution
+	fileOps []migrationOp
 }
 
 type migrateStats struct {
@@ -520,13 +519,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() { _ = dstFile.Close() }()
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err

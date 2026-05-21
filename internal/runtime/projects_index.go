@@ -37,7 +37,7 @@ func NewProjectIndex(roots []string, jsonPath string) *ProjectIndex {
 	return idx
 }
 
-// persistPath returns the default path for the project index cache file.
+// PersistPath returns the default path for the project index cache file.
 func PersistPath(aureliaDir string) string {
 	return filepath.Join(aureliaDir, "projects.json")
 }

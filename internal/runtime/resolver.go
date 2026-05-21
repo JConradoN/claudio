@@ -99,7 +99,7 @@ func normalizeProjectCwdInput(raw string) (string, error) {
 				s = filepath.Join(home, s[2:])
 			}
 		} else {
-			return "", fmt.Errorf("expand ~user (%q) is not supported; use an absolute path or ~/...", s)
+			return "", fmt.Errorf("expand ~user (%q) is not supported; use an absolute path or ~/", s)
 		}
 	}
 

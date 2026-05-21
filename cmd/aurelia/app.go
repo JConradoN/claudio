@@ -107,7 +107,7 @@ func bootstrapApp() (*app, error) {
 	if homeDir == "" {
 		log.Printf("Warning: cannot determine home directory — PI_CODING_AGENT_DIR not set, bridge will use default ~/.pi/agent/")
 	} else {
-		os.Setenv("PI_CODING_AGENT_DIR", filepath.Join(homeDir, ".aurelia", "pi-agent"))
+		_ = os.Setenv("PI_CODING_AGENT_DIR", filepath.Join(homeDir, ".aurelia", "pi-agent"))
 	}
 
 	br := setupBridge()

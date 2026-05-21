@@ -31,10 +31,6 @@ type progressReporter struct {
 	mu            sync.Mutex
 }
 
-func newProgressReporter(bot *telebot.Bot, chat *telebot.Chat) *progressReporter {
-	return &progressReporter{bot: bot, chat: chat, startTime: time.Now()}
-}
-
 func newProgressReporterWithThread(bot *telebot.Bot, chat *telebot.Chat, threadID int) *progressReporter {
 	return &progressReporter{bot: bot, chat: chat, threadID: threadID, startTime: time.Now()}
 }
@@ -219,7 +215,9 @@ func (p *progressReporter) Delete() {
 
 func toolDisplayName(name string) string {
 	// Normalize to Title case for matching (bridge sends lowercase: "bash", "read", etc.)
-	name = strings.Title(strings.ToLower(name))
+	if len(name) > 0 {
+		name = strings.ToUpper(name[:1]) + strings.ToLower(name[1:])
+	}
 
 	switch name {
 	case "Read":

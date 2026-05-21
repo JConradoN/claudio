@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -103,7 +102,7 @@ func (s *Store) LoadContext(prefix string, limit int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load context: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var buf strings.Builder
 	for rows.Next() {
@@ -204,7 +203,7 @@ func (s *Store) RecentTasksSummary(limit int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("recent tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var buf strings.Builder
 	count := 0
@@ -214,11 +213,6 @@ func (s *Store) RecentTasksSummary(limit int) (string, error) {
 		var updatedAt string
 		if err := rows.Scan(&agent, &taskType, &status, &result, &updatedAt); err != nil {
 			continue
-		}
-		// Parse updatedAt to a human-readable relative time
-		ts, _ := time.Parse("2006-01-02T15:04:05Z", updatedAt)
-		if ts.IsZero() {
-			ts, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
 		}
 		fmt.Fprintf(&buf, "- [%s] %s/%s → **%s**", updatedAt, agent, taskType, status)
 		if result.Valid && result.String != "" {
@@ -241,7 +235,7 @@ func (s *Store) SharedMemorySummary() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("memory summary: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var buf strings.Builder
 	for rows.Next() {

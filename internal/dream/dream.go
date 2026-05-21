@@ -332,7 +332,7 @@ func (d *Dreamer) tryStartNudge(key session.SessionKey) bool {
 	return true
 }
 
-// memoryDirResolver implementation for Dreamer.
+// TopicMemoryDir returns the directory for topic-scoped memories.
 func (d *Dreamer) TopicMemoryDir(chatID int64, threadID int) string {
 	if d.userResolver == nil {
 		return ""

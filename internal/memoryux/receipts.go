@@ -110,7 +110,7 @@ func AppendReceipt(memoryDir string, r Receipt) error {
 	if err != nil {
 		return fmt.Errorf("open receipt file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("write receipt: %w", err)
@@ -136,7 +136,7 @@ func LatestReceipt(memoryDir string) (*Receipt, error) {
 		}
 		return nil, fmt.Errorf("open receipt file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lastValid *Receipt
 	var skipped int

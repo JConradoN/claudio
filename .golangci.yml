@@ -7,3 +7,10 @@ linters:
         - "all"
         - "-SA5011"  # false positive: t.Fatal stops execution but analyzer doesn't see it
         - "-ST1000"  # package comments — not enforced in this project
+        - "-ST1016"  # receiver name consistency — prompt_builder uses "bc" throughout, other files use "s"
+
+issues:
+  exclude-rules:
+    - path: "_test\\.go"
+      linters:
+        - errcheck

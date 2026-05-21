@@ -125,8 +125,9 @@ func TestOnboarder_SkipBio(t *testing.T) {
 		t.Fatalf("Begin() error = %v", err)
 	}
 
-	// Give name
-	reply, done, err := onboarder.Step(2, "Bob")
+	// Give name (reply not asserted here; checked in FullFlow test)
+	var reply string
+	_, done, err := onboarder.Step(2, "Bob")
 	if err != nil {
 		t.Fatalf("Step(name) error = %v", err)
 	}
@@ -244,8 +245,9 @@ func TestOnboarder_EnglishFlow(t *testing.T) {
 		t.Errorf("greeting should be in English, got %q", greeting)
 	}
 
-	// Give name
-	reply, done, err := onboarder.Step(4, "Diana")
+	// Give name (done not used until bio step)
+	var done bool
+	reply, _, err := onboarder.Step(4, "Diana")
 	if err != nil {
 		t.Fatalf("Step(name) error = %v", err)
 	}

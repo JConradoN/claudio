@@ -44,9 +44,8 @@ type BotController struct {
 	exePath          string // path to aurelia binary for CLI instructions in system prompt
 	bootstrapMu      sync.Mutex
 	pendingBootstrap map[int64]bootstrapState
-	albums           *albumBuffer
-	bridgeFailures   bridgeFailureTracker
-	orchestrator     *orchestrator.Orchestrator
+	albums       *albumBuffer
+	orchestrator *orchestrator.Orchestrator
 	nudgeBuffer      *session.NudgeBuffer
 	botCwd           string // working directory of the aurelia daemon
 	dreamer          interface {
