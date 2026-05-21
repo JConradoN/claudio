@@ -73,5 +73,7 @@ func (o *channelOutput) ExecuteApprovedPlan(_ int64, _ int, _ *orchestrator.Plan
 
 type noopProgress struct{}
 
-func (noopProgress) ReportTool(string) {}
-func (noopProgress) Delete()           {}
+func (noopProgress) ReportTool(string)       {}
+func (noopProgress) ReportToolResult(string) {}
+func (noopProgress) ReportText(string)       {}
+func (noopProgress) Delete()                 {}

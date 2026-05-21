@@ -42,10 +42,11 @@ type Config struct {
 
 // Server is a local HTTP server that exposes POST /api/chat for synchronous chat.
 type Server struct {
-	pipeline   *pipelinepkg.Service
-	output     *channelOutput
-	httpServer *http.Server
-	reqCounter int64
+	pipeline    *pipelinepkg.Service
+	output      *channelOutput
+	httpServer  *http.Server
+	reqCounter  int64
+	ownerUserID int64
 
 	// sessionKeys maps caller-supplied session keys to stable synthetic chatIDs,
 	// so multi-turn scenarios retain conversation context across requests.
@@ -76,6 +77,7 @@ func NewServer(port int, cfg Config) *Server {
 		pipeline:    svc,
 		output:      out,
 		sessionKeys: make(map[string]int64),
+		ownerUserID: cfg.AppConfig.DefaultOwnerUserIDOrFallback(),
 	}
 
 	mux := http.NewServeMux()
@@ -148,7 +150,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer cleanup()
 
 	t0 := time.Now()
-	if err := s.pipeline.Process(chatID, 0, 0, req.Text, nil); err != nil {
+	if err := s.pipeline.Process(chatID, 0, 0, req.Text, nil, s.ownerUserID); err != nil {
 		http.Error(w, "pipeline error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -40,6 +40,7 @@ const (
 	CmdDebugLast
 	CmdDebugRun
 	CmdDebugErrors
+	CmdAgentDelegate
 )
 
 // MatchedCommand represents a message that was identified as a system command.
@@ -144,6 +145,14 @@ var commandRules = []commandRule{
 	{CmdDebugErrors, []string{
 		"/debug errors",
 		"ultimos erros", "últimos erros", "debug erros",
+	}, true},
+	// agent_delegate — /claude, /gemini, /mesh
+	{CmdAgentDelegate, []string{
+		"/claude ",
+		"/gemini ",
+	}, false},
+	{CmdAgentDelegate, []string{
+		"/mesh",
 	}, true},
 }
 
@@ -283,6 +292,8 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 			break
 		}
 		reply, err = bc.cmdDebugErrors()
+	case CmdAgentDelegate:
+		reply, err = bc.cmdAgentDelegate(c, cmd.Text)
 	default:
 		return fmt.Errorf("unknown command type: %d", cmd.Type)
 	}
