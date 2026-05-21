@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Security guard-rails no longer throw "PI SDK version too old" — the bridge was using
+  `session.on("tool_call")` which doesn't exist in the PI SDK. Replaced with wrapping
+  `session.agent.beforeToolCall`, the correct hook for intercepting and blocking tool calls.
+
 ## [0.13.2] - 2026-05-21
 
 ### Fixed

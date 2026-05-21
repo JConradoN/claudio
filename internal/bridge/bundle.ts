@@ -799,37 +799,68 @@ async function handleQuery(req: Request): Promise<void> {
       }
     });
 
-    // Register security tool_call hook if enabled
+    // Register security tool_call hook if enabled.
+    // Uses session.agent.beforeToolCall (PI SDK hook that can block tools) rather than
+    // the non-existent session.on("tool_call") — the Agent class exposes beforeToolCall
+    // as a direct property, and AgentSession._installAgentToolHooks() already sets it for
+    // the extension runner. We wrap the existing hook to chain security before extensions.
     let unsubHook: (() => void) | undefined;
     if (opts?.security?.enabled) {
-      if (typeof session.on !== "function") {
+      if (typeof session.agent?.beforeToolCall !== "function") {
         session.dispose();
         throw new Error("security hook not available: PI SDK version too old");
       }
-      unsubHook = session.on("tool_call", async (event: { toolName: string; args: Record<string, unknown> }) => {
-        const decision = evaluateToolPolicy(event.toolName, event.args, opts.security!);
+      // Snapshot security config at install time so policy doesn't change mid-session.
+      const {
+        chat_id,
+        agent_name,
+        profile,
+        cwd,
+      } = opts.security!;
+      const origBeforeToolCall = session.agent.beforeToolCall;
+      session.agent.beforeToolCall = async (ctx, signal) => {
+        const decision = evaluateToolPolicy(
+          ctx.toolCall.name,
+          ctx.args as Record<string, unknown>,
+          opts.security!,
+        );
 
         logAudit({
           decision: decision.decision,
-          tool_name: event.toolName,
+          tool_name: ctx.toolCall.name,
           reason: decision.reason || "",
-          chat_id: opts.security!.chat_id,
-          agent_name: opts.security!.agent_name,
-          profile: opts.security!.profile,
-          cwd: opts.security!.cwd,
+          chat_id,
+          agent_name,
+          profile,
+          cwd,
           redacted: true,
         });
 
         if (decision.decision === "block") {
-          redactedLog(`security block: tool=${event.toolName} reason=${decision.reason}`);
+          redactedLog(`security block: tool=${ctx.toolCall.name} reason=${decision.reason}`);
           return { block: true, reason: decision.reason };
         }
-        if (decision.decision === "rewrite") {
-          Object.assign(event.args, decision.input);
-          return { rewrite: true };
+        if (decision.decision === "rewrite" && decision.input) {
+          if (typeof ctx.args === "object" && ctx.args !== null) {
+            Object.assign(ctx.args, decision.input);
+          }
         }
-        return undefined;
-      });
+        // Chain to the existing extension-runner hook (installed by AgentSession).
+        try {
+          return await origBeforeToolCall(ctx, signal);
+        } catch (hookError) {
+          redactedLog(
+            `security: tool=${ctx.toolCall.name} extension hook threw: ${
+              hookError instanceof Error ? hookError.message : String(hookError)
+            }`,
+          );
+          throw hookError;
+        }
+      };
+
+      unsubHook = () => {
+        session.agent.beforeToolCall = origBeforeToolCall;
+      };
     }
 
     // Store the chat session

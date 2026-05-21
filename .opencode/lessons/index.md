@@ -36,3 +36,7 @@
 ## Change remove-token-tracker-enable-compaction (2026-05-20)
 - [pattern] delegate-to-dependency
 - [process] remove-type-grep-references
+
+## Change fix-security-hook-pi-sdk-api (2026-05-21)
+- [anti-pattern] pi-sdk-api-verification
+- [pattern] tool-call-hook-mechanism
