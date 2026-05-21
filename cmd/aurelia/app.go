@@ -194,7 +194,6 @@ func bootstrapApp() (*app, error) {
 		log.Printf("Warning: failed to resolve executable path: %v", err)
 	}
 	sessions := session.NewStore()
-	tracker := session.NewTracker()
 
 	br.SetOnDeath(func() {
 		log.Printf("bridge: process died, deactivating all sessions")
@@ -210,7 +209,7 @@ func bootstrapApp() (*app, error) {
 
 	bot, err := telegram.NewBotController(
 		cfg, br, agentReg, personaSvc, transcriber,
-		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, tracker, resolver, bindings,
+		cronHandler, resolver.MemoryPersonas(), resolver.Memory(), exePath, sessions, resolver, bindings,
 	)
 	if err != nil {
 		if closeErr := onboardingStore.Close(); closeErr != nil {

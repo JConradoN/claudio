@@ -37,7 +37,6 @@ type BotController struct {
 	stt              stt.Transcriber
 	cronHandler      *CronCommandHandler
 	sessions         *session.Store
-	tracker          *session.Tracker
 	resolver         *runtime.PathResolver
 	personasDir      string
 	memoryDir        string // path to ~/.aurelia/memory for SDK auto-memory
@@ -110,7 +109,6 @@ func NewBotController(
 	memoryDir string,
 	exePath string,
 	sessions *session.Store,
-	tracker *session.Tracker,
 	resolver *runtime.PathResolver,
 	bindings projectbinding.Store,
 ) (*BotController, error) {
@@ -148,7 +146,6 @@ func NewBotController(
 		stt:              s,
 		cronHandler:      cronHandler,
 		sessions:         sessions,
-		tracker:          tracker,
 		resolver:         resolver,
 		personasDir:      personasDir,
 		memoryDir:        memoryDir,
@@ -172,7 +169,6 @@ func NewBotController(
 		Agents:       bc.agents,
 		Persona:      bc.persona,
 		Sessions:     bc.sessions,
-		Tracker:      bc.tracker,
 		Resolver:     bc.resolver,
 		MemoryDir:    bc.memoryDir,
 		ExePath:      bc.exePath,

@@ -15,7 +15,6 @@ import (
 	memoryuxpkg "github.com/igormaneschy/aurelia/internal/memoryux"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
 	"github.com/igormaneschy/aurelia/internal/runtime"
-	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 func (bc *BotController) whitelistMiddleware() telebot.MiddlewareFunc {
@@ -268,14 +267,10 @@ func (bc *BotController) handleResetCommand(c telebot.Context) error {
 
 func (bc *BotController) handleUsageCommand(c telebot.Context) error {
 	defer bc.confirmMessage(c.Message())
-	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
-	usage := bc.tracker.Get(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: 0})
-	if usage.NumTurns == 0 {
-		return SendTextWithThread(bc.bot, c.Chat(), "Nenhum uso registrado na sessão atual.", threadID)
-	}
-	maxTokens := bc.config.MaxSessionTokens
-	msg := fmt.Sprintf("📊 Sessão atual:\n\n%s\nAuto-reset em: %d tokens", usage, maxTokens)
+	msg := "📊 O gerenciamento de tokens agora é feito pelo PI SDK (compaction automática).\n\n" +
+		"O contexto é podado automaticamente conforme necessário — não é mais necessário " +
+		"monitorar manualmente o uso de tokens."
 	return SendTextWithThread(bc.bot, c.Chat(), msg, threadID)
 }
 

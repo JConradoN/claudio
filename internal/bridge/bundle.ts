@@ -658,7 +658,7 @@ async function createPiSession(opts: RequestOptions | undefined) {
     cwd,
     agentDir,
     settingsManager,
-    noContextFiles: true,
+    noContextFiles: false,  // let PI discover CLAUDE.md/AGENTS.md
     noExtensions: opts?.no_user_settings ?? false,
     noSkills: opts?.no_user_settings ?? false,
     noPromptTemplates: opts?.no_user_settings ?? false,

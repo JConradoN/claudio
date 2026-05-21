@@ -62,7 +62,6 @@ func newTestService(output Output) *Service {
 		nudgeBuffer:  nil,
 		dreamer:      nil,
 		orchestrator: nil,
-		tracker:      nil,
 		config:       nil,
 	}
 }

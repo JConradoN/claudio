@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [0.13.0] - 2026-05-21
+
+### Changed
+- Bridge model resolution: replaced custom `resolveModelFromRegistry()` (~42 lines of fuzzy matching) with native PI SDK `ModelRegistry.find()` + exact-ID fallback
+- Bridge security hooks: simplified to single source of truth in TypeScript; removed duplicated Go policy engine (`internal/security/policy.go`, ~514 lines)
+- Bridge session management: simplified `internal/session/store.go` to track `sessionFile` (disk path) instead of opaque `sessionID`; Bridge emits `session_file` in `system` and `result` events
+- Bridge context pruning: enabled PI SDK `SettingsManager.compaction` (`enabled: true`); removed Go `session.Tracker` (~131 lines) and auto-reset logic
+- Bridge prompt assembly: delegated `CLAUDE.md`/`AGENTS.md` discovery to PI SDK `DefaultResourceLoader` (`noContextFiles: false`); removed `buildProjectDocsSection()` from prompt builder (~24 lines)
+- `/usage` command now reports that token usage is managed by PI SDK compaction instead of manual tracking
+
+### Removed
+- `internal/security/policy.go` — policy engine moved to Bridge (TypeScript), Go side now holds only config types and constants
+- `internal/security/security_test.go` — tests for removed policy engine
+- `internal/session/tracker.go` — token tracker; PI SDK compaction replaces auto-reset logic
+- `internal/session/tracker_test.go` — tests for removed tracker
+- `internal/pipeline/prompt_builder.go` — `buildProjectDocsSection()` function; PI SDK discovers context files natively
+- Auto-reset logic in pipeline (`resetSessionAfterSuccessfulTurn`, `recordUsage` threshold checks)
+
+### Fixed
+- Reduced total codebase by ~1.312 lines while preserving all user-facing functionality
+
 ## [0.12.0] - 2026-05-20
 
 ### Added

@@ -73,32 +73,6 @@ func TestEffectiveCwd_UsesPersistedBindingWithTopicFallback(t *testing.T) {
 	}
 }
 
-func TestBuildProjectDocsSection_UsesPersistedBinding(t *testing.T) {
-	projectDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectDir, "AGENTS.md"), []byte("project instructions"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := projectbinding.NewSQLiteStore(filepath.Join(t.TempDir(), "bindings.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.Set(t.Context(), projectbinding.ProjectBinding{
-		Key:         projectbinding.ConversationKey{ChatID: 42, ThreadID: 99},
-		CWD:         projectDir,
-		ProjectSlug: "test-project",
-		Source:      projectbinding.BindingManual,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	bc := &Service{bindings: store, sessions: session.NewStore()}
-	got := bc.buildProjectDocsSection(42, nil, 99)
-	if !strings.Contains(got, "project instructions") {
-		t.Fatalf("expected persisted binding project docs, got %q", got)
-	}
-}
-
 func TestLoadMemoryContents_CompactModeIncludesIndexAndCurrentTask(t *testing.T) {
 	dir := t.TempDir()
 
@@ -363,7 +337,7 @@ func TestBuildLastRunStateSection_CompletedRunSkipsWithoutContinuation(t *testin
 		sessions: session.NewStore(),
 	}
 	// Active session + completed run + casual text = skip
-	bc.sessions.Set(1, 0, "sess-abc")
+	bc.sessions.Set(1, 0, "/tmp/test-session.jsonl")
 
 	got := bc.buildLastRunStateSection(1, 0, "good morning")
 	if got != "" {
@@ -383,7 +357,7 @@ func TestBuildLastRunStateSection_FailedRunInjectsCheckpoint(t *testing.T) {
 		},
 		sessions: session.NewStore(),
 	}
-	bc.sessions.Set(1, 0, "sess-abc")
+	bc.sessions.Set(1, 0, "/tmp/test-session.jsonl")
 
 	got := bc.buildLastRunStateSection(1, 0, "good morning")
 	if got == "" {
@@ -409,7 +383,7 @@ func TestBuildLastRunStateSection_ContinuationTriggersInjection(t *testing.T) {
 		},
 		sessions: session.NewStore(),
 	}
-	bc.sessions.Set(1, 0, "sess-abc")
+	bc.sessions.Set(1, 0, "/tmp/test-session.jsonl")
 
 	got := bc.buildLastRunStateSection(1, 0, "continua a análise")
 	if got == "" {
@@ -432,7 +406,7 @@ func TestBuildLastRunStateSection_RedactsSecrets(t *testing.T) {
 		},
 		sessions: session.NewStore(),
 	}
-	bc.sessions.Set(1, 0, "sess-abc")
+	bc.sessions.Set(1, 0, "/tmp/test-session.jsonl")
 
 	got := bc.buildLastRunStateSection(1, 0, "retoma")
 	if !strings.Contains(got, "API_KEY_REDACTED") && !strings.Contains(got, "REDACTED") {

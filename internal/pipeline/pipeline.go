@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -19,7 +20,6 @@ import (
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/security"
-	"github.com/igormaneschy/aurelia/internal/session"
 )
 
 // runLogState tracks per-run state for the run journal.
@@ -658,7 +658,7 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	retryReq.RequestID = ""
 	if sid := s.sessions.Get(chatID, threadID); sid != "" {
 		retryReq.Options.Resume = sid
-		log.Printf("bridge: retry with resume sid=%s", shortSessionID(sid))
+		log.Printf("bridge: retry with resume file=%s", filepath.Base(sid))
 	}
 
 	ch, err = s.bridge.Execute(ctx, retryReq)
@@ -857,11 +857,11 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 }
 
 func (s *Service) handleSystemEvent(chatID int64, threadID int, ev bridge.Event, userID int64) {
-	if ev.SessionID == "" {
+	if ev.SessionFile == "" {
 		return
 	}
-	s.sessions.SetSession(chatID, threadID, userID, ev.SessionID)
-	s.patchContinuitySessionID(chatID, threadID, ev.SessionID)
+	s.sessions.SetSession(chatID, threadID, userID, ev.SessionFile)
+	s.patchContinuitySessionID(chatID, threadID, ev.SessionFile)
 }
 
 func eventContent(ev bridge.Event) string {
@@ -888,12 +888,21 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 		assistantText.WriteString(content)
 	}
 
-	needsReset := s.recordUsage(chatID, threadID, ev, userID)
+	// Store session file path as fallback in case the system event was missed.
+	if ev.SessionFile != "" {
+		existing := s.sessions.GetSession(chatID, threadID, userID)
+		if existing == "" {
+			s.sessions.SetSession(chatID, threadID, userID, ev.SessionFile)
+			s.patchContinuitySessionID(chatID, threadID, ev.SessionFile)
+		}
+	}
+
+	s.recordUsage(chatID, threadID, ev, userID)
 	finalText := strings.TrimSpace(assistantText.String())
 
 	if finalText == "" {
 		toolSummary := s.getRunToolSummary(chatID, threadID)
-		return s.handleEmptyResult(chatID, threadID, messageID, ev, userText, toolSummary, needsReset, userID)
+		return s.handleEmptyResult(chatID, threadID, messageID, ev, userText, toolSummary, userID)
 	}
 
 	safeFinalText := sanitizeExecutionPlanForChat(finalText)
@@ -902,16 +911,16 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	successRunID := s.getRunID(chatID, threadID)
 	s.completeRunLog(chatID, threadID, runlog.RunCompleted, safeFinalText, "")
 
-	if ok, outcome := s.handlePlanExecution(chatID, threadID, messageID, finalText, safeFinalText, successRunID, userText, needsReset, userID); ok {
+	if ok, outcome := s.handlePlanExecution(chatID, threadID, messageID, finalText, safeFinalText, successRunID, userText, userID); ok {
 		return outcome
 	}
 
-	return s.handleNormalReply(chatID, threadID, messageID, safeFinalText, successRunID, userText, needsReset, userID)
+	return s.handleNormalReply(chatID, threadID, messageID, safeFinalText, successRunID, userText, userID)
 }
 
 // handleEmptyResult handles the case where the bridge returned no text.
 // It distinguishes between "worked but empty" (tokens consumed) and "no work at all".
-func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, ev bridge.Event, userText string, toolSummary string, needsReset bool, userID int64) Outcome {
+func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, ev bridge.Event, userText string, toolSummary string, userID int64) Outcome {
 	if emptyResultHadWork(ev) {
 		log.Printf("bridge: empty result after work chat=%d thread=%d request=%s turns=%d cost=$%.4f in=%d out=%d",
 			chatID, threadID, ev.RequestID, ev.NumTurns, ev.CostUSD, ev.InputTokens, ev.OutputTokens)
@@ -938,10 +947,6 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 		}
 	}
 
-	// Even on empty results, flush remaining nudge buffer and reset if threshold was crossed
-	if needsReset {
-		s.resetSessionAfterSuccessfulTurn(chatID, threadID, userID)
-	}
 	s.output.ConfirmMessage(chatID, messageID)
 	return OutcomeLLMError
 }
@@ -949,72 +954,35 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 // handlePlanExecution checks whether the assistant output contains an execution
 // plan and, if so, starts the orchestrator. Returns (true, outcome) when a plan
 // was executed, or (false, OutcomeSuccess) to continue with normal reply.
-func (s *Service) handlePlanExecution(chatID int64, threadID int, messageID int, finalText string, safeFinalText string, successRunID string, userText string, needsReset bool, userID int64) (bool, Outcome) {
+func (s *Service) handlePlanExecution(chatID int64, threadID int, messageID int, finalText string, safeFinalText string, successRunID string, userText string, userID int64) (bool, Outcome) {
 	if !s.tryExecutePlan(chatID, threadID, messageID, finalText) {
 		return false, OutcomeSuccess
 	}
 
 	s.output.ConfirmMessage(chatID, messageID)
 	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID, userID)
-	if needsReset {
-		s.resetSessionAfterSuccessfulTurn(chatID, threadID, userID)
-	}
 	return true, OutcomeSuccess
 }
 
 // handleNormalReply sends the assistant's text response to the chat as a
 // normal reply and finalizes the turn.
-func (s *Service) handleNormalReply(chatID int64, threadID int, messageID int, safeFinalText string, successRunID string, userText string, needsReset bool, userID int64) Outcome {
+func (s *Service) handleNormalReply(chatID int64, threadID int, messageID int, safeFinalText string, successRunID string, userText string, userID int64) Outcome {
 	if err := s.output.SendReply(chatID, threadID, safeFinalText); err != nil {
 		log.Printf("Failed to send reply to chat %d: %v", chatID, err)
 	}
 	s.output.ConfirmMessage(chatID, messageID)
 	s.afterSuccessfulTurn(chatID, threadID, userText, safeFinalText, successRunID, userID)
-	if needsReset {
-		s.resetSessionAfterSuccessfulTurn(chatID, threadID, userID)
-	}
 	return OutcomeSuccess
 }
 
-// recordUsage checks whether token usage exceeds the session threshold.
-// Returns true if the session should be auto-reset.
-// The actual reset must be performed by the caller via resetSessionAfterSuccessfulTurn
-// AFTER the current turn has been saved to the nudge buffer, ensuring no context loss.
-func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event, userID int64) bool {
-	if s.config == nil || s.tracker == nil {
-		return false
-	}
+// recordUsage logs token usage from the bridge result to the debug log.
+// PI SDK compaction (enabled in SettingsManager) handles context pruning automatically.
+func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event, userID int64) {
 	if ev.CostUSD <= 0 && ev.NumTurns <= 0 {
-		return false
+		return
 	}
-	key := session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
-	needsReset := s.tracker.RecordUsage(key, ev.NumTurns, ev.CostUSD, s.config.MaxSessionTokens, ev.InputTokens, ev.OutputTokens)
-	usage := s.tracker.Get(key)
-	log.Printf("session usage: chat=%d thread=%d user=%d %s (auto-reset=%t)", chatID, threadID, userID, usage, needsReset)
-	if isNear, pct := s.tracker.WarningZone(key, s.config.MaxSessionTokens); isNear {
-		log.Printf("session warning zone: chat=%d thread=%d user=%d %d%% used", chatID, threadID, userID, pct)
-	}
-	return needsReset
-}
-
-// resetSessionAfterSuccessfulTurn performs the auto-reset actions that were
-// previously inside recordUsage. It must be called AFTER afterSuccessfulTurn
-// has saved the current turn to the nudge buffer — otherwise the turn is lost.
-// Uses ClearSession to preserve cwd and project binding so the user does not
-// lose their working directory after an auto-reset.
-func (s *Service) resetSessionAfterSuccessfulTurn(chatID int64, threadID int, userID int64) {
-	if s.config != nil {
-		log.Printf("session auto-reset: chat=%d thread=%d user=%d threshold=%d", chatID, threadID, userID, s.config.MaxSessionTokens)
-	} else {
-		log.Printf("session auto-reset: chat=%d thread=%d user=%d", chatID, threadID, userID)
-	}
-	// Patch continuity before clearing session — mark cold with reason
-	s.patchContinuitySessionCold(chatID, threadID, "auto-reset")
-	s.flushDreamer(chatID, threadID, userID)
-	s.sessions.ClearSession(chatID, threadID)
-	if s.tracker != nil {
-		s.tracker.Clear(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID})
-	}
+	log.Printf("session usage: chat=%d thread=%d user=%d cost=$%.4f turns=%d input=%d output=%d",
+		chatID, threadID, userID, ev.CostUSD, ev.NumTurns, ev.InputTokens, ev.OutputTokens)
 }
 
 func (s *Service) flushDreamer(chatID int64, threadID int, userID int64) {

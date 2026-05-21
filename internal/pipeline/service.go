@@ -55,7 +55,6 @@ type Config struct {
 	Agents       *agents.Registry
 	Persona      *persona.CanonicalIdentityService
 	Sessions     *session.Store
-	Tracker      *session.Tracker
 	Resolver     *runtime.PathResolver
 	MemoryDir    string
 	ExePath      string
@@ -79,7 +78,6 @@ type Service struct {
 	agents         *agents.Registry
 	persona        *persona.CanonicalIdentityService
 	sessions       *session.Store
-	tracker        *session.Tracker
 	resolver       *runtime.PathResolver
 	memoryDir      string
 	exePath        string
@@ -113,7 +111,6 @@ func NewService(cfg Config) *Service {
 		agents:       cfg.Agents,
 		persona:      cfg.Persona,
 		sessions:     cfg.Sessions,
-		tracker:      cfg.Tracker,
 		resolver:     cfg.Resolver,
 		memoryDir:    cfg.MemoryDir,
 		exePath:      cfg.ExePath,

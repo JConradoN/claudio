@@ -23,16 +23,37 @@ Aurelia continua sendo um **personal agent persistente via Telegram**, com PI co
 
 A próxima onda foca em tornar o sistema seguro e estável para trabalho autônomo em projetos reais:
 
-1. isolar usuários autorizados e propagar `user_id` no runtime;
-2. fechar o ciclo de execução orquestrada (o scaffold de ~80% precisa ser conectado);
-3. transformar plan mode em modo explícito, persistente e retomável;
-4. escopar memória por usuário;
-5. promover a memória para uma Wiki transversal via MCP;
-6. só então ativar nudge profundo, agent comms e auto-skills.
+1. **delegar reimplementações ao PI SDK nativo** — eliminar ~1.816 linhas de código duplicado;
+2. isolar usuários autorizados e propagar `user_id` no runtime;
+3. fechar o ciclo de execução orquestrada (o scaffold de ~80% precisa ser conectado);
+4. transformar plan mode em modo explícito, persistente e retomável;
+5. escopar memória por usuário;
+6. promover a memória para uma Wiki transversal via MCP;
+7. só então ativar nudge profundo, agent comms e auto-skills.
 
-**Ordem é importante:** cada spec depende da anterior, técnica e conceitualmente.
+**Ordem é importante:** cada spec depende da anterior, técnica e conceitualmente. O refactoring do PI SDK pode ser feito em paralelo com User Isolation, mas deve ser merged antes para reduzir a superfície de código.
 
 > **Nota sobre o delta real:** Security Guard-Rails e Project Binding já foram implementados (revisão de Maio 2026), então o roadmap foi reordenado para refletir o estado real da codebase. Agent Orchestration subiu do passo 8 para o passo 2 porque ~40% do código já existe em `internal/orchestrator/` e precisa ser fechado antes de Plan Mode poder fazer handoff.
+
+---
+
+## 0. Delegate to PI SDK Native
+
+**Spec:** `.specs/features/delegate-to-pi-sdk/`  
+**Design:** `.specs/features/delegate-to-pi-sdk/design.md`  
+**Tasks:** `.specs/features/delegate-to-pi-sdk/tasks.md`  
+**Status:** 🔴 A implementar  
+**Prioridade:** P0 (pode rodar em paralelo com User Isolation)  
+**Depends on:** `security-guard-rails` (✅ v0.8.0)  
+
+**Problem:** O Aurélia reimplementa em Go e TypeScript funcionalidades que o PI SDK já oferece nativamente: agent registry, security policy engine, session management, token tracking, model registry resolution, system prompt assembly. Isso quebra o princípio do projeto: "não reimplementar o que o PI já faz".
+
+**Scope:**
+- Bridge: simplificar model resolution, manter security hooks
+- Go: remover `internal/security/policy.go` (~514 linhas), simplificar `internal/session/store.go`, eliminar `internal/session/tracker.go`, refatorar `prompt_builder.go`, remover `internal/agents/`
+- **Preservar:** persona, memory, cron, telegram, orchestrator (não têm equivalente PI)
+
+**Por que agora:** Reduz ~1.816 linhas de código duplicado antes de User Isolation, diminuindo a superfície a isolar. Security-guard-rails está estável (100%), então a policy engine Go pode ser removida com confiança.
 
 ---
 
@@ -216,6 +237,8 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 ```text
 Foundation validada (inclui Security Guard-Rails + Project Binding)
       │
+      ├──→ 0. Delegate to PI SDK Native (paralelo, reduz LOC)
+      │
       ▼
 1. User Isolation
       │
@@ -244,6 +267,16 @@ Foundation validada (inclui Security Guard-Rails + Project Binding)
 ## Mapa de implementação por sprint
 
 ```
+Sprint 0: Delegate to PI SDK Native
+  ├─ Bridge: simplify model resolution
+  ├─ Go: remove security/policy.go (~514 lines)
+  ├─ Go: simplify session store (265→80 lines)
+  ├─ Go: remove token tracker (131 lines)
+  ├─ Go: refactor prompt builder (861→500 lines)
+  ├─ Go: remove agent registry (~300 lines)
+  ├─ Script: migrate agents ~/.aurelia/ → ~/.pi/agent/
+  └─ Validation: build/test/e2e clean
+
 Sprint A: User Isolation MVP (Phase 0–3)
   ├─ TurnContext + SessionKey/ConversationKey
   ├─ internal/users/ (Profile, Resolver, Store)

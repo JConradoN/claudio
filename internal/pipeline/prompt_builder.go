@@ -122,11 +122,6 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 		sections = append(sections, "# Long Task Guidance\n\n"+longTaskGuidance())
 	}
 
-	// Project docs (CLAUDE.md / AGENTS.md) when cwd is set
-	if projectSection := bc.buildProjectDocsSection(chatID, agent, threadID); projectSection != "" {
-		sections = append(sections, projectSection)
-	}
-
 	// Codebase-read guidance — when user asks to read/analyze code but no cwd is set,
 	// inject a specific instruction so the model responds with clear /cwd guidance
 	// instead of attempting file operations or giving a vague answer.
@@ -584,31 +579,6 @@ func truncateToBudget(content string, budget int) string {
 		return content[:budget]
 	}
 	return content[:budget-len(notice)] + notice
-}
-
-// buildProjectDocsSection reads CLAUDE.md and AGENTS.md from the active cwd.
-func (bc *Service) buildProjectDocsSection(chatID int64, agent *agents.Agent, threadID int) string {
-	cwd := bc.effectiveCwd(agent, chatID, threadID)
-	if cwd == "" {
-		return ""
-	}
-
-	var parts []string
-
-	claudeMd, err := os.ReadFile(filepath.Join(cwd, "CLAUDE.md"))
-	if err == nil && len(claudeMd) > 0 {
-		parts = append(parts, fmt.Sprintf("# Project Instructions (CLAUDE.md)\n\n%s", strings.TrimSpace(string(claudeMd))))
-	}
-
-	agentsMd, err := os.ReadFile(filepath.Join(cwd, "AGENTS.md"))
-	if err == nil && len(agentsMd) > 0 {
-		parts = append(parts, fmt.Sprintf("# Squad Configuration (AGENTS.md)\n\n%s", strings.TrimSpace(string(agentsMd))))
-	}
-
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 // buildLastRunStateSection returns a system prompt section describing the last

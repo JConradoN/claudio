@@ -267,10 +267,6 @@ func (bc *BotController) cmdSessionReset(chatID int64, threadID int, userID int6
 
 func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalidate bool, userID int64) (string, error) {
 	canceledActive := bc.cancelActiveRun(chatID, threadID, userID)
-	var usage session.Usage
-	if bc.tracker != nil {
-		usage = bc.tracker.Get(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID})
-	}
 	if bc.dreamer != nil && bc.sessions != nil {
 		cwd := bc.currentCwd(chatID, threadID)
 		bc.dreamer.FlushNudge(chatID, threadID, userID, cwd, bc.nudgeBuffer)
@@ -281,11 +277,8 @@ func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalid
 	if bc.sessions != nil {
 		bc.sessions.ClearSession(chatID, threadID)
 	}
-	if bc.tracker != nil {
-		bc.tracker.Clear(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID})
-	}
 	log.Printf("command: session reset for chat=%d thread=%d user=%d", chatID, threadID, userID)
-	return formatResetSummary(usage, canceledActive), nil
+	return formatResetSummary(session.Usage{}, canceledActive), nil
 }
 
 func (bc *BotController) cancelActiveRun(chatID int64, threadID int, userID ...int64) bool {
@@ -585,15 +578,6 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 		}
 	}
 
-	if bc.tracker != nil {
-		usage := bc.tracker.Get(session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: 0})
-		if usage.NumTurns > 0 {
-			lines = append(lines, fmt.Sprintf("💬 Sessão: **%d mensagens**, **%d tokens**, **$%.4f**", usage.NumTurns, usage.TotalTokens(), usage.CostUSD))
-		} else {
-			lines = append(lines, "💬 Sessão: Nenhuma conversa ativa no momento.")
-		}
-	}
-
 	// Run log — latest persisted run status and checkpoint
 	if bc.runLog != nil {
 		if runLines := statusRunLogSummary(bc.runLog, chatID, threadID); runLines != nil {
@@ -823,20 +807,10 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 }
 
 func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int, userID ...int64) string {
-	uid := int64(0)
-	if len(userID) > 0 {
-		uid = userID[0]
-	}
-	var usage session.Usage
-	if bc.tracker != nil {
-		key := session.SessionKey{ChatID: chatID, ThreadID: threadID, UserID: uid}
-		usage = bc.tracker.Get(key)
-		bc.tracker.Clear(key)
-	}
 	if bc.sessions != nil {
 		bc.sessions.ClearSession(chatID, threadID)
 	}
-	return formatModelResetSummary(threadID, usage)
+	return formatModelResetSummary(threadID, session.Usage{})
 }
 
 func formatModelResetSummary(threadID int, usage session.Usage) string {

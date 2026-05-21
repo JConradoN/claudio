@@ -52,6 +52,7 @@ One persistent Go daemon, many projects, many agents.
 Ver `.specs/project/ROADMAP.md` para o sequenciamento completo. Resumo:
 
 ```
+Sprint 0 → Delegate to PI SDK Native (eliminar ~1.816 linhas duplicadas)
 Sprint A → User Isolation MVP
 Sprint B → Close Orchestration Cycle (conectar scaffold existente)
 Sprint C → Plan Mode Architecture explícito

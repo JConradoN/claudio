@@ -38,9 +38,9 @@ type Store struct {
 }
 
 type entry struct {
-	sessionID string
-	active    bool
-	lastSeen  time.Time
+	sessionFile string
+	active      bool
+	lastSeen    time.Time
 }
 
 // NewStore creates a new session store.
@@ -67,7 +67,7 @@ func (s *Store) Get(chatID int64, threadID int) string {
 		return ""
 	}
 	e.lastSeen = time.Now()
-	return e.sessionID
+	return e.sessionFile
 }
 
 func (s *Store) GetWithState(chatID int64, threadID int) (sessionID string, active bool) {
@@ -79,14 +79,14 @@ func (s *Store) GetWithState(chatID int64, threadID int) (sessionID string, acti
 		return "", false
 	}
 	e.lastSeen = time.Now()
-	return e.sessionID, e.active
+	return e.sessionFile, e.active
 }
 
-func (s *Store) Set(chatID int64, threadID int, sessionID string) {
+func (s *Store) Set(chatID int64, threadID int, sessionFile string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := SessionKeyFor(chatID, threadID, 0)
-	s.sessions[key] = &entry{sessionID: sessionID, active: true, lastSeen: time.Now()}
+	s.sessions[key] = &entry{sessionFile: sessionFile, active: true, lastSeen: time.Now()}
 }
 
 // Clear removes session and cwd for a specific chat thread.
@@ -222,7 +222,7 @@ func (s *Store) GetSession(chatID int64, threadID int, userID int64) string {
 		return ""
 	}
 	e.lastSeen = time.Now()
-	return e.sessionID
+	return e.sessionFile
 }
 
 // GetSessionWithState returns the session ID and active state for a specific chat, thread, and user.
@@ -235,15 +235,15 @@ func (s *Store) GetSessionWithState(chatID int64, threadID int, userID int64) (s
 		return "", false
 	}
 	e.lastSeen = time.Now()
-	return e.sessionID, e.active
+	return e.sessionFile, e.active
 }
 
 // SetSession creates or updates a session for a specific chat, thread, and user.
-func (s *Store) SetSession(chatID int64, threadID int, userID int64, sessionID string) {
+func (s *Store) SetSession(chatID int64, threadID int, userID int64, sessionFile string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := SessionKey{ChatID: chatID, ThreadID: threadID, UserID: userID}
-	s.sessions[key] = &entry{sessionID: sessionID, active: true, lastSeen: time.Now()}
+	s.sessions[key] = &entry{sessionFile: sessionFile, active: true, lastSeen: time.Now()}
 }
 
 // ClearSessionForUser removes the session for a specific chat, thread, and user.

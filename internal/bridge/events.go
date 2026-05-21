@@ -8,9 +8,10 @@ type Event struct {
 	RequestID string `json:"request_id,omitempty"`
 
 	// system event
-	SessionID string   `json:"session_id,omitempty"`
-	Tools     []string `json:"tools,omitempty"`
-	Model     string   `json:"model,omitempty"`
+	SessionID   string   `json:"session_id,omitempty"`
+	SessionFile string   `json:"session_file,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	Model       string   `json:"model,omitempty"`
 
 	// tool_use event
 	Name  string `json:"name,omitempty"`

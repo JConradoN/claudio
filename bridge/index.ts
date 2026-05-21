@@ -601,47 +601,22 @@ function textFromContent(content: unknown): string {
     .join("");
 }
 
-function resolveModelFromRegistry(
+function resolveModel(
   registry: ModelRegistry,
   provider: string | undefined,
   modelID: string | undefined,
 ) {
   if (!modelID) return undefined;
 
-  const allModels = registry.getAll();
   const mappedProvider = mapProvider(provider);
   const mappedModel = mapModelForProvider(mappedProvider, modelID);
 
-  if (mappedProvider) {
-    const direct = registry.find(mappedProvider, mappedModel);
-    if (direct) return direct;
-  }
+  // Native PI SDK resolution
+  const found = registry.find(mappedProvider, mappedModel);
+  if (found) return found;
 
-  const canonical = allModels.find(
-    (model) => `${model.provider}/${model.id}`.toLowerCase() === mappedModel.toLowerCase(),
-  );
-  if (canonical) return canonical;
-
-  const exactIDMatches = allModels.filter((model) => model.id.toLowerCase() === mappedModel.toLowerCase());
-  const configuredExact = exactIDMatches.find((model) => registry.hasConfiguredAuth(model));
-  if (configuredExact) return configuredExact;
-  if (exactIDMatches.length === 1) return exactIDMatches[0];
-
-  if (mappedModel.includes("/") && !mappedProvider) {
-    const [maybeProvider, ...rest] = mappedModel.split("/");
-    const inferredProvider = mapProvider(maybeProvider);
-    const inferredModel = rest.join("/");
-    const inferred = registry.find(inferredProvider ?? maybeProvider, inferredModel);
-    if (inferred) return inferred;
-  }
-
-  const fuzzy = allModels.filter(
-    (model) =>
-      model.id.toLowerCase().includes(mappedModel.toLowerCase()) ||
-      model.name?.toLowerCase().includes(mappedModel.toLowerCase()),
-  );
-  const configuredFuzzy = fuzzy.find((model) => registry.hasConfiguredAuth(model));
-  return configuredFuzzy ?? fuzzy[0];
+  // Fallback: exact ID match among all models
+  return registry.getAll().find((m) => m.id === mappedModel);
 }
 
 async function resolveSessionManager(opts: RequestOptions | undefined): Promise<SessionManager> {
@@ -678,14 +653,14 @@ async function createPiSession(opts: RequestOptions | undefined) {
   const agentDir = piAgentDir() || getAgentDir();
   const settingsManager = opts?.no_user_settings
     ? SettingsManager.inMemory({
-        compaction: { enabled: false },
+        compaction: { enabled: true },
         retry: { enabled: true, maxRetries: 2 },
       })
     : SettingsManager.create(cwd, agentDir);
 
   const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
   const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
-  const model = resolveModelFromRegistry(modelRegistry, opts?.provider, opts?.model);
+  const model = resolveModel(modelRegistry, opts?.provider, opts?.model);
   if (opts?.model && !model) {
     throw new Error(`Modelo não encontrado no PI registry: provider=${opts.provider ?? ""} model=${opts.model}. Use /model para listar os disponíveis.`);
   }
@@ -694,7 +669,7 @@ async function createPiSession(opts: RequestOptions | undefined) {
     cwd,
     agentDir,
     settingsManager,
-    noContextFiles: true,
+    noContextFiles: false,  // let PI discover CLAUDE.md/AGENTS.md
     noExtensions: opts?.no_user_settings ?? false,
     noSkills: opts?.no_user_settings ?? false,
     noPromptTemplates: opts?.no_user_settings ?? false,
@@ -778,6 +753,7 @@ async function handleQuery(req: Request): Promise<void> {
     emitReq({
       event: "system",
       session_id: sessionID,
+      session_file: session.sessionFile,
       tools: session.getActiveToolNames(),
       model: session.model ? `${session.model.provider}/${session.model.id}` : "",
     });
@@ -901,6 +877,7 @@ async function handleQuery(req: Request): Promise<void> {
         content,
         cost_usd: stats.cost,
         session_id: sessionID,
+        session_file: session.sessionFile,
         duration_ms: Date.now() - startedAt,
         num_turns: turnCount || stats.assistantMessages,
         input_tokens: stats.tokens.input,

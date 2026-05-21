@@ -32,3 +32,7 @@
 
 ## Change deploy-automation-post-commit (2026-05-20)
 - [process] deploy-via-launchd
+
+## Change remove-token-tracker-enable-compaction (2026-05-20)
+- [pattern] delegate-to-dependency
+- [process] remove-type-grep-references

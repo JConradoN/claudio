@@ -112,7 +112,6 @@ func (bc *BotController) ensurePipeline() *pipelinepkg.Service {
 		Agents:       bc.agents,
 		Persona:      bc.persona,
 		Sessions:     bc.sessions,
-		Tracker:      bc.tracker,
 		Resolver:     bc.resolver,
 		MemoryDir:    bc.memoryDir,
 		ExePath:      bc.exePath,

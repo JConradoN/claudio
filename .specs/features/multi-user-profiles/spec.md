@@ -28,6 +28,8 @@ Esta spec resolve **isolamento interno de dados entre os users já autorizados p
 - [ ] Memória pessoal (fatos, USER.md, project memory, dream output) isolada por `user_id`
 - [ ] IDENTITY.md e SOUL.md continuam globais — Aurelia é uma só
 - [ ] Cron jobs têm `owner_user_id` normalizado; user só vê/cancela seus próprios
+
+> **Nota sobre delegate-to-pi-sdk:** Com a simplificação do session store, `SessionKey` mapeia para `sessionFile` (path da sessão PI no disco) em vez de `sessionID` (string opaca em memória). O isolamento por `user_id` continua válido — cada usuário tem seu próprio `sessionFile`. O store simplificado ainda mantém `SessionKey{chat_id, thread_id, user_id}`.
 - [ ] User novo (autorizado mas sem profile) recebe onboarding conversacional via Telegram
 - [ ] Onboarding/user gate roda antes de comandos e antes do pipeline LLM, depois apenas da whitelist e do bootstrap inicial do deployment
 - [ ] Migração do layout single-user legado para layout isolado por user é um comando CLI explícito e idempotente

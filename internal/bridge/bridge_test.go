@@ -28,9 +28,9 @@ rl.on('line', (line) => {
     if (req.command === "ping") {
         process.stdout.write(JSON.stringify({event:"pong",request_id:rid}) + "\n");
     } else if (req.command === "query") {
-        process.stdout.write(JSON.stringify({event:"system",request_id:rid,session_id:"test-123",tools:["Read"],model:"claude-3"}) + "\n");
+        process.stdout.write(JSON.stringify({event:"system",request_id:rid,session_id:"test-123",session_file:"/tmp/test-session.jsonl",tools:["Read"],model:"claude-3"}) + "\n");
         process.stdout.write(JSON.stringify({event:"assistant",request_id:rid,text:"hello world"}) + "\n");
-        process.stdout.write(JSON.stringify({event:"result",request_id:rid,content:"done",cost_usd:0.01,session_id:"test-123",duration_ms:100,num_turns:1}) + "\n");
+        process.stdout.write(JSON.stringify({event:"result",request_id:rid,content:"done",cost_usd:0.01,session_id:"test-123",session_file:"/tmp/test-session.jsonl",duration_ms:100,num_turns:1}) + "\n");
     } else {
         process.stdout.write(JSON.stringify({event:"error",request_id:rid,message:"unknown command: " + req.command}) + "\n");
     }
@@ -81,6 +81,9 @@ func TestBridge_Execute_ParsesEvents(t *testing.T) {
 	}
 	if events[0].SessionID != "test-123" {
 		t.Errorf("event[0].SessionID = %q, want %q", events[0].SessionID, "test-123")
+	}
+	if events[0].SessionFile != "/tmp/test-session.jsonl" {
+		t.Errorf("event[0].SessionFile = %q, want %q", events[0].SessionFile, "/tmp/test-session.jsonl")
 	}
 	if len(events[0].Tools) != 1 || events[0].Tools[0] != "Read" {
 		t.Errorf("event[0].Tools = %v, want [Read]", events[0].Tools)
@@ -218,7 +221,7 @@ rl.on('line', (line) => {
     const rid = req.request_id || "";
     if (req.command === "query") {
         active.add(rid);
-        process.stdout.write(JSON.stringify({event:"system",request_id:rid,session_id:"sess"}) + "\n");
+        process.stdout.write(JSON.stringify({event:"system",request_id:rid,session_id:"sess",session_file:"/tmp/sess.jsonl"}) + "\n");
         return;
     }
     if (req.command === "cancel") {

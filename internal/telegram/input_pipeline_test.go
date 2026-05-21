@@ -95,7 +95,6 @@ func newTestBotController() *BotController {
 			Providers:        map[string]config.ProviderConfig{},
 		},
 		sessions: session.NewStore(),
-		tracker:  session.NewTracker(),
 	}
 }
 
@@ -109,7 +108,7 @@ func TestProcessBridgeEventsAsync_ProcessDeath_NoTerminalEvent(t *testing.T) {
 	chat := &telebot.Chat{ID: 1}
 
 	ch := make(chan bridge.Event, 2)
-	ch <- bridge.Event{Type: "system", SessionID: "sess-1"}
+	ch <- bridge.Event{Type: "system", SessionID: "sess-1", SessionFile: "/tmp/test-session.jsonl"}
 	ch <- bridge.Event{Type: "assistant", Text: "partial response"}
 	close(ch) // simulate process death — no terminal event
 
@@ -120,8 +119,8 @@ func TestProcessBridgeEventsAsync_ProcessDeath_NoTerminalEvent(t *testing.T) {
 
 	// Session should still have been set from the system event
 	sid := bc.sessions.Get(1, 0)
-	if sid != "sess-1" {
-		t.Fatalf("expected session sess-1, got %q", sid)
+	if sid != "/tmp/test-session.jsonl" {
+		t.Fatalf("expected session file /tmp/test-session.jsonl, got %q", sid)
 	}
 }
 
@@ -143,13 +142,13 @@ func TestProcessBridgeEventsAsync_SessionSetFromSystemEvent(t *testing.T) {
 	chat := &telebot.Chat{ID: 42}
 
 	ch := make(chan bridge.Event, 1)
-	ch <- bridge.Event{Type: "system", SessionID: "sess-xyz"}
+	ch <- bridge.Event{Type: "system", SessionID: "sess-xyz", SessionFile: "/tmp/test-session.jsonl"}
 	close(ch) // death after system event
 
 	bc.processBridgeEventsAsync(chat, ch, noopProgress(), "test", 1)
 
 	sid, active := bc.sessions.GetWithState(42, 0)
-	if sid != "sess-xyz" {
+	if sid != "/tmp/test-session.jsonl" {
 		t.Fatalf("expected session sess-xyz, got %q", sid)
 	}
 	if !active {
@@ -159,8 +158,8 @@ func TestProcessBridgeEventsAsync_SessionSetFromSystemEvent(t *testing.T) {
 
 func TestBridgeRecovery_DeactivateAllPreservesIDs(t *testing.T) {
 	sessions := session.NewStore()
-	sessions.Set(1, 0, "sess-a")
-	sessions.Set(2, 0, "sess-b")
+	sessions.Set(1, 0, "/tmp/sess-a.jsonl")
+	sessions.Set(2, 0, "/tmp/sess-b.jsonl")
 
 	sessions.DeactivateAll()
 
@@ -169,20 +168,20 @@ func TestBridgeRecovery_DeactivateAllPreservesIDs(t *testing.T) {
 	if active {
 		t.Fatal("session 1 should be inactive")
 	}
-	if sid != "sess-a" {
-		t.Fatalf("session 1 ID should be preserved, got %q", sid)
+	if sid != "/tmp/sess-a.jsonl" {
+		t.Fatalf("session 1 file should be preserved, got %q", sid)
 	}
 
 	sid, active = sessions.GetWithState(2, 0)
 	if active {
 		t.Fatal("session 2 should be inactive")
 	}
-	if sid != "sess-b" {
-		t.Fatalf("session 2 ID should be preserved, got %q", sid)
+	if sid != "/tmp/sess-b.jsonl" {
+		t.Fatalf("session 2 file should be preserved, got %q", sid)
 	}
 
 	// Get still works
-	if id := sessions.Get(1, 0); id != "sess-a" {
+	if id := sessions.Get(1, 0); id != "/tmp/sess-a.jsonl" {
 		t.Fatalf("Get(1) = %q, want sess-a", id)
 	}
 }

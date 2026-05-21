@@ -270,28 +270,21 @@ func TestCommandLayer_MatchRouting(t *testing.T) {
 }
 
 func TestCommandLayer_SessionResetClearsState(t *testing.T) {
-	// Integration: session reset via command layer clears session and tracker.
+	// Integration: session reset via command layer clears session.
 	sessions := session.NewStore()
-	tracker := session.NewTracker()
 
-	sessions.Set(100, 0, "sess-integration-test")
-	tracker.Add(session.SessionKey{ChatID: 100, ThreadID: 0, UserID: 0}, 5000, 2000, 3, 0.05)
+	sessions.Set(100, 0, "/tmp/integration-test-session.jsonl")
 
 	// Verify session exists.
-	if sid := sessions.Get(100, 0); sid != "sess-integration-test" {
+	if sid := sessions.Get(100, 0); sid != "/tmp/integration-test-session.jsonl" {
 		t.Fatalf("expected session, got %q", sid)
 	}
 
 	// Clear (simulating what cmdSessionReset does).
 	sessions.Clear(100, 0)
-	tracker.Clear(session.SessionKey{ChatID: 100, ThreadID: 0, UserID: 0})
 
 	if sid := sessions.Get(100, 0); sid != "" {
 		t.Fatalf("session should be cleared, got %q", sid)
-	}
-	usage := tracker.Get(session.SessionKey{ChatID: 100, ThreadID: 0, UserID: 0})
-	if usage.NumTurns != 0 {
-		t.Fatalf("tracker should be cleared, got %d turns", usage.NumTurns)
 	}
 }
 

@@ -168,51 +168,6 @@ func TestContinuityAfterError(t *testing.T) {
 	}
 }
 
-// TestContinuityAfterAutoReset verifies that auto-reset marks continuity cold.
-func TestContinuityAfterAutoReset(t *testing.T) {
-	contStore := newContinuityTestStore(t)
-	defer contStore.Close()
-
-	// Pre-populate some state
-	ctx := context.Background()
-	err := contStore.Upsert(ctx, continuity.ConversationState{
-		ChatID:             42,
-		ThreadID:           0,
-		CWD:                "/repo",
-		LastRunStatus:      "completed",
-		UpdatedAt:          time.Now(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ss := session.NewStore()
-	svc := &Service{
-		continuity: contStore,
-		sessions:   ss,
-	}
-
-	svc.resetSessionAfterSuccessfulTurn(42, 0, 100)
-
-	state, err := contStore.Get(ctx, 42, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil {
-		t.Fatal("expected non-nil continuity state after auto-reset")
-	}
-	if !state.SessionCold {
-		t.Fatal("SessionCold should be true after auto-reset")
-	}
-	if !strings.Contains(state.ResetReason, "auto-reset") {
-		t.Fatalf("ResetReason = %q, want to contain 'auto-reset'", state.ResetReason)
-	}
-	// CWD should be preserved across auto-reset
-	if state.CWD != "/repo" {
-		t.Fatalf("CWD = %q, want preserved %q", state.CWD, "/repo")
-	}
-}
-
 // TestContinuitySessionID verifies that system events update the session ID.
 func TestContinuitySessionID(t *testing.T) {
 	contStore := newContinuityTestStore(t)
