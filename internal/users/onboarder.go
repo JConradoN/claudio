@@ -41,9 +41,9 @@ func (o *Onboarder) Begin(userID, chatID int64, threadID int, firstMsg string) (
 
 func (o *Onboarder) greeting(lang string) string {
 	if lang == "en" {
-		return "Hello! I'm Aurelia. What should I call you?"
+		return "Hello! I'm Cláudio. What should I call you?"
 	}
-	return "Olá! Eu sou a Aurelia. Como devo te chamar?"
+	return "Olá! Eu sou o Cláudio. Como devo te chamar?"
 }
 
 // Step processes one reply from the user during onboarding.
@@ -98,7 +98,7 @@ func (o *Onboarder) Step(userID int64, reply string) (string, bool, error) {
 		if state.Language == "en" {
 			return fmt.Sprintf("Thanks, %s! You're all set. I'll now process your first message.", state.Name), true, nil
 		}
-		return fmt.Sprintf("Obrigada, %s! Tudo pronto. Vou processar sua primeira mensagem agora.", state.Name), true, nil
+		return fmt.Sprintf("Obrigado, %s! Tudo pronto. Vou processar sua primeira mensagem agora.", state.Name), true, nil
 
 	default:
 		return "", false, fmt.Errorf("unknown onboarding step: %s", state.Step)

@@ -131,12 +131,10 @@ status:
 	fi
 
 logs:
-	@test -f $(STDERR_LOG) || { echo "log not found: $(STDERR_LOG)" >&2; exit 1; }
-	tail -n 50 -f $(STDERR_LOG)
+	journalctl --user -u aurelia.service -n 50 -f
 
 stdout:
-	@test -f $(STDOUT_LOG) || { echo "log not found: $(STDOUT_LOG)" >&2; exit 1; }
-	tail -n 50 -f $(STDOUT_LOG)
+	journalctl --user -u aurelia.service -n 50 -f -o cat
 
 uninstall-service:
 	@if launchctl print $(SERVICE) >/dev/null 2>&1; then \
