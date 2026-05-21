@@ -300,7 +300,7 @@ func appendUniqueFacts(path string, facts []string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// If the file is new or empty, no leading newline needed
 	stat, err := f.Stat()

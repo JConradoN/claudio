@@ -100,7 +100,7 @@ func (bc *BotController) runDelegatedTask(
 	taskID string,
 	req agentDelegateRequest,
 ) {
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Build prompt with shared context
 	prompt := buildDelegatePrompt(store, req)
@@ -157,7 +157,7 @@ func (bc *BotController) meshStatus() (string, error) {
 	if err != nil {
 		return fmt.Sprintf("agent-mesh DB indisponível: %v", err), nil
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	tasks, err := store.RecentTasksSummary(10)
 	if err != nil {
