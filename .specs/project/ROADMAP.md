@@ -19,15 +19,21 @@ Estas features já foram implementadas ou têm validação registrada. Elas são
 
 ## Current Evolution Track
 
-Aurelia continua sendo um **personal agent persistente via Telegram**, com PI como motor de execução e Go como camada de orquestração, persistência, segurança e memória.
+Aurelia continua sendo um **personal agent persistente via Telegram**, com PI como motor de execução e Go como camada de produto: Telegram UX, identidade/persona, memória, scheduling, project binding, governança e orquestração.
+
+O conceito central está fechado assim:
+
+- **PI SDK owns**: modelo, sessão/compaction, execução de tools, context files do projeto e capacidades agentic nativas.
+- **Aurelia owns**: experiência Telegram, identidade, memória persistente, cron, multi-projeto, user/project scoping, auditoria, roadmap e workflows.
+- **Regra de arquitetura**: quando algo já existe no PI, Aurelia só adapta/orquestra; não reimplementa.
 
 A próxima onda foca em tornar o sistema seguro e estável para trabalho autônomo em projetos reais:
 
-1. **delegar reimplementações ao PI SDK nativo** — eliminar ~1.816 linhas de código duplicado;
-2. isolar usuários autorizados e propagar `user_id` no runtime;
-3. fechar o ciclo de execução orquestrada (o scaffold de ~80% precisa ser conectado);
+1. concluir o hardening pós-v0.13 do limite PI↔Aurelia;
+2. fechar lacunas residuais de User Isolation no runtime;
+3. fechar o ciclo de execução orquestrada (o scaffold precisa ser conectado);
 4. transformar plan mode em modo explícito, persistente e retomável;
-5. escopar memória por usuário;
+5. escopar memória por usuário/projeto com semântica estável;
 6. promover a memória para uma Wiki transversal via MCP;
 7. só então ativar nudge profundo, agent comms e auto-skills.
 
@@ -42,18 +48,27 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 **Spec:** `.specs/features/delegate-to-pi-sdk/`  
 **Design:** `.specs/features/delegate-to-pi-sdk/design.md`  
 **Tasks:** `.specs/features/delegate-to-pi-sdk/tasks.md`  
-**Status:** 🔴 A implementar  
-**Prioridade:** P0 (pode rodar em paralelo com User Isolation)  
+**Status:** 🟡 Core implementado em v0.13.0; fechamento pendente
+**Prioridade:** P0 hardening
 **Depends on:** `security-guard-rails` (✅ v0.8.0)  
 
-**Problem:** O Aurélia reimplementa em Go e TypeScript funcionalidades que o PI SDK já oferece nativamente: agent registry, security policy engine, session management, token tracking, model registry resolution, system prompt assembly. Isso quebra o princípio do projeto: "não reimplementar o que o PI já faz".
+**Problem:** O Aurélia vinha reimplementando funcionalidades que o PI SDK já oferece nativamente: model registry resolution, session management, context pruning, context-file loading e partes da policy/tool boundary. v0.13 removeu a maior duplicação, mas ainda há limites a fechar.
 
-**Scope:**
-- Bridge: simplificar model resolution, manter security hooks
-- Go: remover `internal/security/policy.go` (~514 linhas), simplificar `internal/session/store.go`, eliminar `internal/session/tracker.go`, refatorar `prompt_builder.go`, remover `internal/agents/`
-- **Preservar:** persona, memory, cron, telegram, orchestrator (não têm equivalente PI)
+**Já entregue em v0.13.0:**
+- Bridge: `ModelRegistry.find()` + fallback por ID exato.
+- Bridge: `SettingsManager.compaction.enabled=true`.
+- Bridge: `DefaultResourceLoader(noContextFiles=false)` para `CLAUDE.md`/`AGENTS.md`.
+- Go: session store passou a trabalhar com `session_file`.
+- Go: auto-reset por token threshold removido; PI compaction é a fonte de verdade.
+- Go: evaluator de policy removido; Bridge é a fonte de verdade para enforcement.
 
-**Por que agora:** Reduz ~1.816 linhas de código duplicado antes de User Isolation, diminuindo a superfície a isolar. Security-guard-rails está estável (100%), então a policy engine Go pode ser removida com confiança.
+**Ainda pendente para fechar o sprint:**
+- Decidir o limite do `internal/agents/`: manter como feature de produto Aurelia ou migrar parsing/execução para PI-native agents.
+- Atualizar specs/tasks antigas que ainda dizem “a implementar”.
+- Validar E2E real de contexto PI (`CLAUDE.md`/`AGENTS.md`) e agente especialista.
+- Opcional P2: mover policy Bridge para PI extension se a API permitir.
+
+**Princípio:** preservar persona, memory, cron, Telegram UX, project binding e orchestrator no Aurelia; delegar engine/session/context/tools ao PI.
 
 ---
 
@@ -62,23 +77,29 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 **Spec:** `.specs/features/multi-user-profiles/`
 **Design:** `.specs/features/multi-user-profiles/design.md`
 **Tasks:** `.specs/features/multi-user-profiles/tasks.md`
-**Status:** 🔴 A implementar
+**Status:** 🟡 MVP implementado em v0.11.0; hardening pendente
 **Prioridade:** P0 foundation
 
-**Problem:** A whitelist já permite múltiplos `user_id`s, mas o runtime ainda mistura estado pessoal: sessões, memória, persona USER, cron, usage e comandos de controle.
+**Problem:** A whitelist já permite múltiplos `user_id`s. O MVP agora separa grande parte do estado pessoal, mas ainda há paths de runtime que precisam ser auditados para garantir que nenhuma sessão/cancelamento/estado ativo use só `(chat_id, thread_id)` quando deveria usar `user_id`.
 
-**MVP Scope (Phase 0–3 do tasks.md):**
+**Já entregue em v0.11.0:**
 
-- `TurnContext` com `user_id`;
-- `SessionKey{chat_id, thread_id, user_id}` para sessão LLM/usage/active run;
-- `ConversationKey{chat_id, thread_id}` para `/cwd` e topic memory (já existe em `internal/projectbinding/`);
+- `TurnContext` e `SessionKey{chat_id, thread_id, user_id}`;
+- `ConversationKey{chat_id, thread_id}` para `/cwd` e topic memory;
 - `internal/users/` — Profile, Resolver, Store;
 - `UserGate` antes de comandos/pipeline;
 - USER/persona/memória pessoal por usuário;
 - cron owner normalizado;
-- Comando CLI `migrate-multi-user`.
+- Comando CLI `migrate-multi-user`;
+- `/users`, `/forget-me`, owner-only guards.
 
-**Por que primeiro:** sem `user_id` propagado, Plan Mode, Auto-Skills, memória e nudge vazam estado entre usuários autorizados. Tudo depende disso.
+**Ainda pendente para fechar o sprint:**
+
+- Auditar `activeSessions`, `Cancel`, `WorkStatus`, bridge `get-state/abort` e runlog para garantir escopo por usuário onde necessário.
+- Marcar tarefas reais em `tasks.md`; hoje o arquivo está stale e todo desmarcado.
+- Teste de regressão explícito: dois usuários no mesmo chat/thread não compartilham `session_file`.
+
+**Por que continua P0:** sem `user_id` propagado integralmente, Plan Mode, Auto-Skills, memória e nudge podem vazar estado entre usuários autorizados.
 
 ---
 
@@ -235,12 +256,12 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 ## Sequenciamento resumido
 
 ```text
-Foundation validada (inclui Security Guard-Rails + Project Binding)
+Foundation validada (Security Guard-Rails + Project Binding + Bridge Resilience)
       │
-      ├──→ 0. Delegate to PI SDK Native (paralelo, reduz LOC)
+      ├──→ 0. Delegate to PI SDK Native core ✅ / hardening pendente
       │
       ▼
-1. User Isolation
+1. User Isolation MVP ✅ / hardening pendente
       │
       ▼
 2. Close Orchestration Cycle
@@ -268,24 +289,25 @@ Foundation validada (inclui Security Guard-Rails + Project Binding)
 
 ```
 Sprint 0: Delegate to PI SDK Native
-  ├─ Bridge: simplify model resolution
-  ├─ Go: remove security/policy.go (~514 lines)
-  ├─ Go: simplify session store (265→80 lines)
-  ├─ Go: remove token tracker (131 lines)
-  ├─ Go: refactor prompt builder (861→500 lines)
-  ├─ Go: remove agent registry (~300 lines)
-  ├─ Script: migrate agents ~/.aurelia/ → ~/.pi/agent/
-  └─ Validation: build/test/e2e clean
+  ├─ ✅ Bridge: simplify model resolution
+  ├─ ✅ Bridge: PI compaction + PI context-file loading
+  ├─ ✅ Go: remove policy evaluator duplication; keep config/profile types
+  ├─ ✅ Go: simplify session store around PI session_file
+  ├─ ✅ Go: remove auto-reset/token-threshold lifecycle
+  ├─ 🟡 Go: prompt builder reduced, but still owns Aurelia persona/memory/Telegram sections
+  ├─ 🟡 Decision: internal/agents as Aurelia product feature vs PI-native migration
+  └─ 🟡 Validation/docs: E2E specialist + stale specs cleanup
 
-Sprint A: User Isolation MVP (Phase 0–3)
-  ├─ TurnContext + SessionKey/ConversationKey
-  ├─ internal/users/ (Profile, Resolver, Store)
-  ├─ CLI migrate-multi-user
-  ├─ cron owner normalizado
-  ├─ session isolation + persona per-user
-  ├─ memory/dream per-user
-  ├─ pipeline integration + UserGate
-  └─ owner-only commands
+Sprint A: User Isolation MVP
+  ├─ ✅ TurnContext + SessionKey/ConversationKey
+  ├─ ✅ internal/users/ (Profile, Resolver, Store)
+  ├─ ✅ CLI migrate-multi-user
+  ├─ ✅ cron owner normalizado
+  ├─ ✅ session isolation + persona per-user
+  ├─ ✅ memory/dream per-user base
+  ├─ ✅ pipeline integration + UserGate
+  ├─ ✅ owner-only commands
+  └─ 🟡 Hardening: active run/cancel/get-state fully user-scoped
 
 Sprint B: Close Orchestration Cycle (T0–T12 do tasks.md)
   ├─ ExecutionContext com cwd+threadID

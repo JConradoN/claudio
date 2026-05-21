@@ -19,6 +19,8 @@ func TestContinuityAfterSuccessfulTurn(t *testing.T) {
 	defer contStore.Close()
 
 	ss := session.NewStore()
+	ss.SetSession(42, 0, 100, "sid-user-100")
+	ss.SetSession(42, 0, 200, "sid-user-200")
 	svc := &Service{
 		continuity: contStore,
 		sessions:   ss,
@@ -44,6 +46,9 @@ func TestContinuityAfterSuccessfulTurn(t *testing.T) {
 	if state.LastRunStatus != "completed" {
 		t.Fatalf("LastRunStatus = %q, want %q", state.LastRunStatus, "completed")
 	}
+	if state.SessionID != "sid-user-100" {
+		t.Fatalf("SessionID = %q, want sender session", state.SessionID)
+	}
 	if state.SessionCold {
 		t.Fatal("SessionCold should be false after successful turn")
 	}
@@ -56,6 +61,8 @@ func TestContinuityAfterTimeout(t *testing.T) {
 	defer contStore.Close()
 
 	ss := session.NewStore()
+	ss.SetSession(42, 0, 100, "sid-user-100")
+	ss.SetSession(42, 0, 200, "sid-user-200")
 	svc := &Service{
 		continuity: contStore,
 		sessions:   ss,
@@ -71,7 +78,9 @@ func TestContinuityAfterTimeout(t *testing.T) {
 	fo := &fakeOutput{}
 	svc.output = fo
 
-	_ = svc.handleContextOutcome(parentCtx, ctx, 42, 0)
+	tracker := newRunTimeoutTracker()
+	tracker.mark(timeoutOriginMaxExecution)
+	_ = svc.handleContextOutcome(parentCtx, ctx, 42, 0, 100, tracker)
 
 	state, err := contStore.Get(context.Background(), 42, 0)
 	if err != nil {
@@ -86,6 +95,12 @@ func TestContinuityAfterTimeout(t *testing.T) {
 	if state.LastRunStatus != "timed_out" {
 		t.Fatalf("LastRunStatus = %q, want %q", state.LastRunStatus, "timed_out")
 	}
+	if _, active := ss.GetSessionWithState(42, 0, 100); active {
+		t.Fatal("sender session should be inactive after timeout")
+	}
+	if _, active := ss.GetSessionWithState(42, 0, 200); !active {
+		t.Fatal("other user session should remain active after timeout")
+	}
 }
 
 // TestContinuityAfterEmptyResult verifies that after an empty result with work,
@@ -95,7 +110,8 @@ func TestContinuityAfterEmptyResult(t *testing.T) {
 	defer contStore.Close()
 
 	ss := session.NewStore()
-	ss.Set(42, 0, "sid-test")
+	ss.SetSession(42, 0, 100, "sid-user-100")
+	ss.SetSession(42, 0, 200, "sid-user-200")
 
 	// Need a runLogStore to prevent panic in completeRunLog
 	runLogStore := &fakeRunLogStore{}
@@ -129,6 +145,12 @@ func TestContinuityAfterEmptyResult(t *testing.T) {
 	if state.LastRunStatus != "failed" {
 		t.Fatalf("LastRunStatus = %q, want %q", state.LastRunStatus, "failed")
 	}
+	if _, active := ss.GetSessionWithState(42, 0, 100); active {
+		t.Fatal("sender session should be inactive after empty result")
+	}
+	if _, active := ss.GetSessionWithState(42, 0, 200); !active {
+		t.Fatal("other user session should remain active after empty result")
+	}
 }
 
 // TestContinuityAfterError verifies that after a bridge error, continuity state
@@ -147,7 +169,7 @@ func TestContinuityAfterError(t *testing.T) {
 	}
 
 	ev := newFakeErrorEvent("API rate limit exceeded")
-	outcome := svc.handleErrorEvent(42, 0, 100, ev)
+	outcome := svc.handleErrorEvent(42, 0, 100, ev, 100)
 
 	if outcome != OutcomeLLMError {
 		t.Fatalf("expected OutcomeLLMError, got %v", outcome)

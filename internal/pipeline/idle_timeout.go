@@ -9,10 +9,9 @@ import (
 )
 
 // idleTimeoutWrapper wraps an events channel with an idle timeout.
-// If no event arrives within idleDuration, cancel() is called and the
-// wrapped channel is closed (triggered by ctx being done). When the
-// input channel closes or ctx is done, the wrapper shuts down cleanly.
-func idleTimeoutWrapper(ctx context.Context, ch <-chan bridge.Event, idleDuration time.Duration, cancel context.CancelFunc) <-chan bridge.Event {
+// If no event arrives within idleDuration, markTimeout and cancel are called.
+// When the input channel closes or ctx is done, the wrapper shuts down cleanly.
+func idleTimeoutWrapper(ctx context.Context, ch <-chan bridge.Event, idleDuration time.Duration, cancel context.CancelFunc, markTimeout func()) <-chan bridge.Event {
 	out := make(chan bridge.Event, cap(ch))
 
 	go func() {
@@ -49,6 +48,9 @@ func idleTimeoutWrapper(ctx context.Context, ch <-chan bridge.Event, idleDuratio
 					return
 				}
 			case <-timer.C:
+				if markTimeout != nil {
+					markTimeout()
+				}
 				log.Printf("pipeline: idle timeout (%s) — cancelling context", idleDuration)
 				cancel()
 				return

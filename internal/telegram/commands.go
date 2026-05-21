@@ -228,7 +228,7 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 	case CmdCronCreate:
 		reply, err = bc.cmdCronCreate(c, cmd.Text)
 	case CmdStatus:
-		reply, err = bc.cmdStatus(chatID, threadID)
+		reply, err = bc.cmdStatus(chatID, threadID, userID)
 	case CmdListAgents:
 		reply, err = bc.cmdListAgents()
 	case CmdListModels:
@@ -275,7 +275,7 @@ func (bc *BotController) resetCurrentSession(chatID int64, threadID int, invalid
 		}
 	}
 	if bc.sessions != nil {
-		bc.sessions.ClearSession(chatID, threadID)
+		bc.sessions.ClearSessionForUser(chatID, threadID, userID)
 	}
 	log.Printf("command: session reset for chat=%d thread=%d user=%d", chatID, threadID, userID)
 	return formatResetSummary(session.Usage{}, canceledActive), nil
@@ -520,7 +520,7 @@ func (bc *BotController) cmdCronCreate(c telebot.Context, text string) (string, 
 	}
 }
 
-func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
+func (bc *BotController) cmdStatus(chatID int64, threadID int, userID int64) (string, error) {
 	var lines []string
 	lines = append(lines, "**Status da Aurelia**\n")
 
@@ -536,7 +536,7 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 		}
 	}
 	lines = append(lines, fmt.Sprintf("🧠 Processador: **%s**", bridgeStatus))
-	lines = append(lines, statusWorkLines(bc.currentWorkStatus(chatID, threadID))...)
+	lines = append(lines, statusWorkLines(bc.currentWorkStatus(chatID, threadID, userID))...)
 
 	// Agents
 	agentCount := 0
@@ -571,7 +571,7 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int) (string, error) {
 			lines = append(lines, fmt.Sprintf("📂 Diretório: `%s`", cwd))
 		}
 
-		if sid, active := bc.sessions.GetWithState(chatID, threadID); sid != "" {
+		if sid, active := bc.sessions.GetSessionWithState(chatID, threadID, userID); sid != "" {
 			if !active {
 				lines = append(lines, "😴 Sessão: **fria** (inativa) — mensagens passadas não estão mais disponíveis para o modelo.")
 			}
@@ -645,13 +645,11 @@ func statusRunLogSummary(rl runlog.Store, chatID int64, threadID int) []string {
 	return lines
 }
 
-
-
-func (bc *BotController) currentWorkStatus(chatID int64, threadID int) (string, int) {
+func (bc *BotController) currentWorkStatus(chatID int64, threadID int, userID int64) (string, int) {
 	if bc == nil || bc.pipeline == nil {
 		return "", 0
 	}
-	return bc.pipeline.WorkStatus(chatID, threadID)
+	return bc.pipeline.WorkStatus(chatID, threadID, userID)
 }
 
 func statusWorkLines(description string, queueSize int) []string {
@@ -807,8 +805,12 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 }
 
 func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int, userID ...int64) string {
+	uid := int64(0)
+	if len(userID) > 0 {
+		uid = userID[0]
+	}
 	if bc.sessions != nil {
-		bc.sessions.ClearSession(chatID, threadID)
+		bc.sessions.ClearSessionForUser(chatID, threadID, uid)
 	}
 	return formatModelResetSummary(threadID, session.Usage{})
 }

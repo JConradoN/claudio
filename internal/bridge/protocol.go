@@ -23,7 +23,7 @@ type ImageAttachment struct {
 // supported. Those fields were dropped during the migration; revisit if PI
 // adds equivalents in a future release.
 //
-// ChatID and ThreadID identify the chat session for bridge-side session indexing.
+// ChatID, ThreadID, and UserID identify the chat session for bridge-side session indexing.
 // StreamingBehavior controls how the bridge queues the prompt on an active session:
 // "steer" interrupts the current turn, "followUp" queues for after completion.
 type RequestOptions struct {
@@ -41,6 +41,7 @@ type RequestOptions struct {
 	Security          *SecurityContext  `json:"security,omitempty"`
 	ChatID            int64             `json:"chat_id,omitempty"`
 	ThreadID          int               `json:"thread_id,omitempty"`
+	UserID            int64             `json:"user_id,omitempty"`
 	StreamingBehavior string            `json:"streaming_behavior,omitempty"`
 }
 

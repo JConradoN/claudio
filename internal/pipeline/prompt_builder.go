@@ -101,14 +101,14 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	// Injected before memory so it is never evicted by large memory budgets.
 	// Placed before the last-run-state checkpoint section and memory sections,
 	// immediately after Telegram/cwd instructions (per spec priority order).
-	if continuitySection := bc.buildContinuitySection(chatID, threadID, userText); continuitySection != "" {
+	if continuitySection := bc.buildContinuitySection(chatID, threadID, userText, userID); continuitySection != "" {
 		sections = append(sections, continuitySection)
 	}
 
 	// Last known run state — injects checkpoint when the previous run failed,
 	// the session is cold, or the user text looks like a continuation.
 	// Placed before memory so the model sees it as contextual guidance.
-	if lastRunSection := bc.buildLastRunStateSection(chatID, threadID, userText); lastRunSection != "" {
+	if lastRunSection := bc.buildLastRunStateSection(chatID, threadID, userText, userID); lastRunSection != "" {
 		sections = append(sections, lastRunSection)
 	}
 
@@ -586,7 +586,7 @@ func truncateToBudget(content string, budget int) string {
 // when the session is cold/inactive, or when userText suggests a continuation.
 // The checkpoint data is wrapped in <checkpoint_untrusted> to prevent prompt injection.
 // Returns empty string when no relevant last-run state exists.
-func (bc *Service) buildLastRunStateSection(chatID int64, threadID int, userText string) string {
+func (bc *Service) buildLastRunStateSection(chatID int64, threadID int, userText string, userID ...int64) string {
 	if bc.runLog == nil {
 		return ""
 	}
@@ -610,7 +610,7 @@ func (bc *Service) buildLastRunStateSection(chatID int64, threadID int, userText
 	}
 
 	if bc.sessions != nil {
-		_, active := bc.sessions.GetWithState(chatID, threadID)
+		_, active := bc.sessions.GetSessionWithState(chatID, threadID, sessionUserID(userID...))
 		if !active {
 			// Cold session with completed run — inject for context
 			return bc.formatCheckpointSection(record)
@@ -671,7 +671,7 @@ func (bc *Service) buildSecurityPromptSection(chatID int64, threadID int, agent 
 	return sb.String()
 }
 
-func (bc *Service) buildContinuitySection(chatID int64, threadID int, userText string) string {
+func (bc *Service) buildContinuitySection(chatID int64, threadID int, userText string, userID ...int64) string {
 	if bc.continuity == nil {
 		return ""
 	}
@@ -697,7 +697,7 @@ func (bc *Service) buildContinuitySection(chatID int64, threadID int, userText s
 	// unavailable (should not happen in practice, but nil-safe).
 	sessionIsActive := false
 	if bc.sessions != nil {
-		_, sessionIsActive = bc.sessions.GetWithState(chatID, threadID)
+		_, sessionIsActive = bc.sessions.GetSessionWithState(chatID, threadID, sessionUserID(userID...))
 	}
 
 	switch freshness := continuity.Freshness(state); {

@@ -29,31 +29,34 @@ One persistent Go daemon, many projects, many agents.
 - Persona system: IDENTITY.md + SOUL.md + USER.md assembled into system prompts
 - Cron scheduler: SQLite-backed, recurring and one-time jobs, Telegram delivery
 - Multi-modal input: text, photos (albums), voice (Groq STT), documents
-- Session continuity: resume via session ID, auto-reset on token threshold
-- Agent registry: markdown-defined agents with model/tool/MCP overrides
+- Session continuity: resume via PI `session_file`; context pruning delegated to PI SDK compaction
+- Agent registry: markdown-defined Aurelia specialists with model/tool/MCP overrides (migration to PI-native agents remains open)
 - Onboarding CLI: interactive setup for providers, tokens, and configuration
 - Vision model fallback + Groq STT + bridge image format (PI SDK compatible)
 
-### Recently completed (v0.7.16–v0.8.0)
-- **Security Guard-Rails** (100%): CapabilityProfile governance, PI tool_call hooks, policy engine, audit trail, fail-closed. 5 profiles: observe→privileged.
-- **Persistent Project Binding** (95%): SQLite-backed `/cwd` that survives restart, topic→group fallback, explicit clear, pipeline integration.
+### Recently completed (v0.11.0–v0.13.0)
+- **User Isolation MVP**: user profiles, owner gate, per-user persona/memory loading, user-scoped sessions, cron ownership, `/users`, `/forget-me`, migration CLI.
+- **Delegate to PI SDK Native — core slice**: PI model resolution, PI context-file loading, PI compaction, `session_file` resume, Bridge-side session lifecycle (`steer`/`followUp`/`abort`).
+- **Security Guard-Rails**: CapabilityProfile governance, PI tool_call hooks in the Bridge, audit trail, fail-closed. 5 profiles: observe→privileged.
+- **Persistent Project Binding**: SQLite-backed `/cwd` that survives restart, topic→group fallback, explicit clear, pipeline integration.
 - **Continuity Engine v1**: Persistent conversation state, progressive summarization, checkpoint/run journal.
 - **UX Polish**: Streaming text, idle timeout, live progress metrics, `/stop`, `/status`, queue system, Telegram ack flow.
 - **Bridge Resilience**: Circuit breaker, retry with backoff, translated error messages, scanner-based NDJSON with 10MB limit.
 - **Orchestrator scaffold** (~40%): Worktree management, wave execution, validate prompts, git helpers, tasks status — but the cycle doesn't close.
 
 ### In progress
-- **~8.5K Go LOC + ~550 TS LOC**, comprehensive test coverage (200+ tests)
-- Continuity Engine with Progressive Summarization, thinking heartbeat
-- 3-message queue per chat/thread
+- Closing the conceptual boundary: PI owns model/session/context/tool execution; Aurelia owns Telegram UX, identity/persona, persistence, scheduling, memory, project binding and orchestration.
+- User Isolation hardening: bridge active session commands are now user-scoped; remaining audit is `CancelAllForUser` broadcast semantics and stale spec checkboxes.
+- Agent registry migration decision: keep Aurelia specialists as product-layer feature or migrate parsing/execution to PI-native agents.
+- Orchestration Cycle: existing scaffold must be connected to validation, commit/PR, task-status updates and artifact manifests.
 
 ## Roadmap
 
 Ver `.specs/project/ROADMAP.md` para o sequenciamento completo. Resumo:
 
 ```
-Sprint 0 → Delegate to PI SDK Native (eliminar ~1.816 linhas duplicadas)
-Sprint A → User Isolation MVP
+Sprint 0 → Delegate to PI SDK Native core ✅; remaining: agent registry boundary + docs/spec cleanup
+Sprint A → User Isolation MVP ✅; active session scoping fixed; remaining: cleanup/audit
 Sprint B → Close Orchestration Cycle (conectar scaffold existente)
 Sprint C → Plan Mode Architecture explícito
 Sprint D → User-Scoped Project Memory

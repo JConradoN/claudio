@@ -53,6 +53,7 @@ interface RequestOptions {
   security?: SecurityContext;
   chat_id?: number;
   thread_id?: number;
+  user_id?: number;
 }
 
 interface Request {
@@ -99,8 +100,8 @@ interface ChatSessionState {
 const activeRequests = new Map<string, ActiveRequest>();
 const chatSessions = new Map<string, ChatSessionState>();
 
-function chatKey(chatID: number, threadID: number): string {
-  return `${chatID}:${threadID}`;
+function chatKey(chatID: number, threadID: number, userID = 0): string {
+  return `${chatID}:${threadID}:${userID}`;
 }
 
 function cleanupChatSession(key: string): void {
@@ -699,11 +700,12 @@ async function handleQuery(req: Request): Promise<void> {
   const opts = req.options;
   const chatID = opts?.chat_id || opts?.security?.chat_id || 0;
   const threadID = opts?.thread_id ?? opts?.security?.thread_id ?? 0;
-  const cKey = chatKey(chatID, threadID);
+  const userID = opts?.user_id ?? opts?.security?.user_id ?? 0;
+  const cKey = chatKey(chatID, threadID, userID);
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   redactedLog(
-    `query start — rid=${reqId} chat=${chatID} thread=${threadID} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
+    `query start — rid=${reqId} chat=${chatID} thread=${threadID} user=${userID} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
   );
 
   const timeoutMs = 30 * 60 * 1000;
@@ -912,7 +914,8 @@ async function handleSteer(req: Request): Promise<void> {
   const reqId = req.request_id || "";
   const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
   const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
-  const cKey = chatKey(chatID, threadID);
+  const userID = req.options?.user_id ?? req.options?.security?.user_id ?? 0;
+  const cKey = chatKey(chatID, threadID, userID);
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   const cs = chatSessions.get(cKey);
@@ -923,7 +926,7 @@ async function handleSteer(req: Request): Promise<void> {
 
   clearTimeout(cs.idleTimer);
   cs.currentReqId = reqId;
-  redactedLog(`steer — rid=${reqId} chat=${chatID} thread=${threadID}`);
+  redactedLog(`steer — rid=${reqId} chat=${chatID} thread=${threadID} user=${userID}`);
 
   try {
     await cs.session.steer(req.prompt);
@@ -942,7 +945,8 @@ async function handleFollowUp(req: Request): Promise<void> {
   const reqId = req.request_id || "";
   const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
   const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
-  const cKey = chatKey(chatID, threadID);
+  const userID = req.options?.user_id ?? req.options?.security?.user_id ?? 0;
+  const cKey = chatKey(chatID, threadID, userID);
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   const cs = chatSessions.get(cKey);
@@ -953,7 +957,7 @@ async function handleFollowUp(req: Request): Promise<void> {
 
   clearTimeout(cs.idleTimer);
   cs.currentReqId = reqId;
-  redactedLog(`followUp — rid=${reqId} chat=${chatID} thread=${threadID}`);
+  redactedLog(`followUp — rid=${reqId} chat=${chatID} thread=${threadID} user=${userID}`);
 
   try {
     await cs.session.followUp(req.prompt);
@@ -972,7 +976,8 @@ async function handleAbort(req: Request): Promise<void> {
   const reqId = req.request_id || "";
   const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
   const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
-  const cKey = chatKey(chatID, threadID);
+  const userID = req.options?.user_id ?? req.options?.security?.user_id ?? 0;
+  const cKey = chatKey(chatID, threadID, userID);
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   const cs = chatSessions.get(cKey);
@@ -981,7 +986,7 @@ async function handleAbort(req: Request): Promise<void> {
     return;
   }
 
-  redactedLog(`abort — rid=${reqId} chat=${chatID} thread=${threadID}`);
+  redactedLog(`abort — rid=${reqId} chat=${chatID} thread=${threadID} user=${userID}`);
 
   try {
     await cs.session.abort();
@@ -1000,7 +1005,8 @@ async function handleGetState(req: Request): Promise<void> {
   const reqId = req.request_id || "";
   const chatID = req.options?.chat_id || req.options?.security?.chat_id || 0;
   const threadID = req.options?.thread_id ?? req.options?.security?.thread_id ?? 0;
-  const cKey = chatKey(chatID, threadID);
+  const userID = req.options?.user_id ?? req.options?.security?.user_id ?? 0;
+  const cKey = chatKey(chatID, threadID, userID);
   const emitReq = (obj: OutEvent) => emit({ ...obj, request_id: reqId });
 
   const cs = chatSessions.get(cKey);

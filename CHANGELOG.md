@@ -6,23 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-05-21
+
+### Fixed
+- Reinstated per-user session scoping for bridge resume/session storage and bridge-side active session commands (`steer`, `follow-up`, `abort`, `get-state`), preserving User Isolation semantics.
+- Migrated runtime reset, retry, timeout, empty-result, prompt continuity and status flows to user-scoped session APIs so two users in the same chat/topic do not share or clear each other's PI session.
+- Increased the bridge idle watchdog from 2 to 15 minutes and aligned orchestration timeout to 30 minutes to avoid premature cancellation of long PI-managed runs.
+- Timeout runlog/continuity entries now distinguish `max_execution_timeout`, `idle_bridge_timeout`, `bridge_query_timeout`, and `provider/pi_timeout` origins.
+
 ## [0.13.0] - 2026-05-21
 
 ### Changed
 - Bridge model resolution: replaced custom `resolveModelFromRegistry()` (~42 lines of fuzzy matching) with native PI SDK `ModelRegistry.find()` + exact-ID fallback
-- Bridge security hooks: simplified to single source of truth in TypeScript; removed duplicated Go policy engine (`internal/security/policy.go`, ~514 lines)
+- Bridge security hooks: simplified to single source of truth in TypeScript; Go now keeps only security config/profile types while enforcement runs in the Bridge
 - Bridge session management: simplified `internal/session/store.go` to track `sessionFile` (disk path) instead of opaque `sessionID`; Bridge emits `session_file` in `system` and `result` events
-- Bridge context pruning: enabled PI SDK `SettingsManager.compaction` (`enabled: true`); removed Go `session.Tracker` (~131 lines) and auto-reset logic
+- Bridge context pruning: enabled PI SDK `SettingsManager.compaction` (`enabled: true`); removed manual token-threshold auto-reset logic from the pipeline
 - Bridge prompt assembly: delegated `CLAUDE.md`/`AGENTS.md` discovery to PI SDK `DefaultResourceLoader` (`noContextFiles: false`); removed `buildProjectDocsSection()` from prompt builder (~24 lines)
 - `/usage` command now reports that token usage is managed by PI SDK compaction instead of manual tracking
 
 ### Removed
-- `internal/security/policy.go` — policy engine moved to Bridge (TypeScript), Go side now holds only config types and constants
-- `internal/security/security_test.go` — tests for removed policy engine
-- `internal/session/tracker.go` — token tracker; PI SDK compaction replaces auto-reset logic
-- `internal/session/tracker_test.go` — tests for removed tracker
-- `internal/pipeline/prompt_builder.go` — `buildProjectDocsSection()` function; PI SDK discovers context files natively
-- Auto-reset logic in pipeline (`resetSessionAfterSuccessfulTurn`, `recordUsage` threshold checks)
+- `internal/security/security_test.go` — tests for removed Go policy evaluator
+- `internal/session/tracker_test.go` — tests for removed manual tracker/reset behavior
+- `buildProjectDocsSection()` from `internal/pipeline/prompt_builder.go`; PI SDK discovers context files natively
+- Auto-reset logic in pipeline (`resetSessionAfterSuccessfulTurn`, token threshold checks)
 
 ### Fixed
 - Reduced total codebase by ~1.312 lines while preserving all user-facing functionality

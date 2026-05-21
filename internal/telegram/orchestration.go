@@ -12,7 +12,7 @@ import (
 	"gopkg.in/telebot.v3"
 )
 
-const orchestrationTimeout = 15 * time.Minute
+const orchestrationTimeout = 30 * time.Minute
 
 // executeApprovedPlan runs the full TLC Implement+Validate cycle:
 // ensure docs → spawn workers per wave → validate → merge → consolidate.

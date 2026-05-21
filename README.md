@@ -44,8 +44,8 @@ It is built around a practical execution model:
 - TypeScript Bridge wrapping the PI SDK
 - PI coding agent as the brain (tools, skills, extensions, sessions)
 - Canonical Go module and repository under `github.com/igormaneschy/aurelia`
-- Session management with token tracking and auto-reset
-- Persistent 3-layer memory system with automatic extraction
+- PI-backed session management with `session_file` resume and SDK compaction
+- Persistent scoped memory system with automatic extraction
 - Configurable agents in markdown with cron scheduling
 - Multi-provider: OpenRouter (recommended), opencode-go, Anthropic, Kimi, Z.ai, Alibaba
 - API key authentication (OpenRouter, opencode-go)
@@ -63,7 +63,7 @@ The goal is to orchestrate it — adding persistence, memory, scheduling, multi-
 - **Learning nudge** — automatic memory extraction from conversations on session reset
 - **Dream consolidation** — periodic background review that organizes and deduplicates memories
 - **Multi-provider** — OpenRouter (recommended), opencode-go, Anthropic, Kimi, Z.ai, Alibaba
-- **Session continuity** — conversation context persists across messages via session resume with auto-reset on token threshold
+- **Session continuity** — conversation context persists across messages via PI session resume and SDK compaction
 - **Smart routing** — LLM-based classification routes messages to the right agent
 - **Persistent scheduling** — create cron jobs via natural conversation, results delivered to Telegram
 - **Bridge recovery** — automatic retry with session resume when the Bridge process crashes
@@ -81,7 +81,7 @@ Aurelia uses a TypeScript Bridge wrapping the PI SDK as its inference engine:
 - **Bridge** — `bridge/index.ts` wraps `@earendil-works/pi-coding-agent` and is embedded into the Go binary.
 - **API key auth** — provider keys are configured during onboarding and exported to the bridge runtime environment.
 - **Streaming progress** — PI tool events are mapped back into Telegram progress messages.
-- **Long-lived sessions** — Bridge requests preserve session IDs for continuity and token tracking.
+- **Long-lived sessions** — Bridge requests preserve PI `session_file` paths for continuity; context pruning is handled by PI SDK compaction.
 
 ## Runtime Model
 
@@ -118,7 +118,7 @@ flowchart LR
 6. Bridge calls PI SDK → PI agent executes
 7. Events streamed back: tool_use → progress, assistant → text, result → response
 8. Response delivered to Telegram (reply-to original message)
-9. Session token usage tracked, auto-reset if threshold exceeded
+9. PI SDK manages context compaction; Aurelia stores the returned `session_file` for resume
 ```
 
 ### Cron Flow
@@ -136,7 +136,7 @@ flowchart LR
 cmd/aurelia/              CLI entry point, onboarding, cron CLI, telegram CLI
 internal/bridge/          Go <> Bridge client (long-lived, multiplexed, bundle embedded via go:embed)
 internal/telegram/        Telegram I/O, async pipeline, progress, reactions, commands
-internal/session/         Session store, token tracking, nudge buffer
+internal/session/         Session file store, conversation CWD state, nudge buffer
 internal/agents/          Agent registry (markdown definitions, LLM classification)
 internal/persona/         Persona loader (IDENTITY / SOUL / USER)
 internal/dream/           Memory consolidation (dream) and extraction (nudge)
@@ -164,10 +164,10 @@ With image attachments:
 
 **Bridge → Go (stdout):**
 ```json
-{"event":"system","request_id":"req-1","session_id":"abc-123","tools":["Read","Write"]}
+{"event":"system","request_id":"req-1","session_id":"abc-123","session_file":"/path/to/session.jsonl","tools":["Read","Write"]}
 {"event":"tool_use","request_id":"req-1","name":"Read","input":{"file_path":"src/main.go"}}
 {"event":"assistant","request_id":"req-1","text":"The project has..."}
-{"event":"result","request_id":"req-1","content":"...","cost_usd":0.12,"session_id":"abc-123"}
+{"event":"result","request_id":"req-1","content":"...","cost_usd":0.12,"session_id":"abc-123","session_file":"/path/to/session.jsonl"}
 ```
 
 Multiple requests run concurrently — each with its own `request_id`.
@@ -217,7 +217,7 @@ Aurelia has a 3-layer persistent memory that survives across sessions:
 | **Project Team** | `~/.aurelia/projects/<cwd>/memory/team/` | Stack, conventions, architecture (shareable) |
 
 Memory is populated automatically:
-- **Nudge** — extracts facts from conversations when a session resets (`/new` or auto-reset)
+- **Nudge** — extracts facts from conversations when a session is explicitly reset or flushed
 - **Dream** — periodic background consolidation that organizes, deduplicates, and prunes memory files
 
 The model sees all memory layers in its system prompt and can read/write them during conversation.

@@ -86,7 +86,7 @@ func TestBuildEmptyResultRecoveryMessage_TruncatesLongSummary(t *testing.T) {
 func TestHandleResultEvent_EmptyAfterWork_DeactivatesSession(t *testing.T) {
 	fo := &fakeOutput{}
 	ss := session.NewStore()
-	ss.Set(1, 0, "sid-123")
+	ss.SetSession(1, 0, 100, "sid-123")
 	s := &Service{
 		output:   fo,
 		sessions: ss,
@@ -109,7 +109,7 @@ func TestHandleResultEvent_EmptyAfterWork_DeactivatesSession(t *testing.T) {
 	}
 
 	// Session should be deactivated (not cleared)
-	_, active := ss.GetWithState(1, 0)
+	_, active := ss.GetSessionWithState(1, 0, 100)
 	if active {
 		t.Fatal("expected session to be deactivated after empty result with work")
 	}
@@ -130,7 +130,7 @@ func TestHandleResultEvent_EmptyAfterWork_DeactivatesSession(t *testing.T) {
 func TestHandleResultEvent_EmptyNoWork_UsesGenericMessage(t *testing.T) {
 	fo := &fakeOutput{}
 	ss := session.NewStore()
-	ss.Set(1, 0, "sid-123")
+	ss.SetSession(1, 0, 100, "sid-123")
 	s := &Service{
 		output:   fo,
 		sessions: ss,
@@ -146,7 +146,7 @@ func TestHandleResultEvent_EmptyNoWork_UsesGenericMessage(t *testing.T) {
 	}
 
 	// Session should still be active (no deactivation)
-	_, active := ss.GetWithState(1, 0)
+	_, active := ss.GetSessionWithState(1, 0, 100)
 	if !active {
 		t.Fatal("expected session to remain active when no work was done")
 	}
@@ -159,7 +159,7 @@ func TestHandleResultEvent_EmptyNoWork_UsesGenericMessage(t *testing.T) {
 func TestHandleResultEvent_EmptyAfterWorkWithToolSummary_IncludesToolSummary(t *testing.T) {
 	fo := &fakeOutput{}
 	ss := session.NewStore()
-	ss.Set(1, 0, "sid-123")
+	ss.SetSession(1, 0, 100, "sid-123")
 
 	// Create a service with a fake runlog store and pre-populated tool summary
 	runLogStore := &fakeRunLogStore{}
@@ -206,8 +206,12 @@ func TestHandleResultEvent_EmptyAfterWorkWithToolSummary_IncludesToolSummary(t *
 // fakeRunLogStore is a no-op runlog.Store for tests that need a non-nil runLog.
 type fakeRunLogStore struct{}
 
-func (f *fakeRunLogStore) Start(_ context.Context, _ runlog.RunRecord) error { return nil }
+func (f *fakeRunLogStore) Start(_ context.Context, _ runlog.RunRecord) error  { return nil }
 func (f *fakeRunLogStore) Update(_ context.Context, _ runlog.RunUpdate) error { return nil }
-func (f *fakeRunLogStore) Complete(_ context.Context, _ string, _ runlog.RunStatus, _, _ string) error { return nil }
-func (f *fakeRunLogStore) Latest(_ context.Context, _ int64, _ int) (*runlog.RunRecord, error) { return nil, nil }
+func (f *fakeRunLogStore) Complete(_ context.Context, _ string, _ runlog.RunStatus, _, _ string) error {
+	return nil
+}
+func (f *fakeRunLogStore) Latest(_ context.Context, _ int64, _ int) (*runlog.RunRecord, error) {
+	return nil, nil
+}
 func (f *fakeRunLogStore) Close() error { return nil }

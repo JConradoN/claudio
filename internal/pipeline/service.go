@@ -72,33 +72,33 @@ type Config struct {
 
 // Service owns the LLM/message pipeline independent from Telegram routing.
 type Service struct {
-	config         *config.AppConfig
-	bridge         *bridge.Bridge
-	resilient      *ResilientBridge
-	agents         *agents.Registry
-	persona        *persona.CanonicalIdentityService
-	sessions       *session.Store
-	resolver       *runtime.PathResolver
-	memoryDir      string
-	exePath        string
-	botCwd         string
-	output         Output
-	orchestrator   *orchestrator.Orchestrator
-	dreamer        Dreamer
-	nudgeBuffer    *session.NudgeBuffer
-	memoryCache    *memoryCache
-	projectIndex   *runtime.ProjectIndex
-	bindings       projectbinding.Store
-	bridgeFailures FailureTracker
-	activeSessions sync.Map // "chatID:threadID" → context.CancelFunc
-	runLog         runlog.Store
-	runLogMu       sync.Mutex
-	runLogStates   map[string]*runLogState
-	continuity     continuity.Store
-	summaryCounter *summaryCounter
+	config          *config.AppConfig
+	bridge          *bridge.Bridge
+	resilient       *ResilientBridge
+	agents          *agents.Registry
+	persona         *persona.CanonicalIdentityService
+	sessions        *session.Store
+	resolver        *runtime.PathResolver
+	memoryDir       string
+	exePath         string
+	botCwd          string
+	output          Output
+	orchestrator    *orchestrator.Orchestrator
+	dreamer         Dreamer
+	nudgeBuffer     *session.NudgeBuffer
+	memoryCache     *memoryCache
+	projectIndex    *runtime.ProjectIndex
+	bindings        projectbinding.Store
+	bridgeFailures  FailureTracker
+	activeSessions  sync.Map // "chatID:threadID:userID" → context.CancelFunc
+	runLog          runlog.Store
+	runLogMu        sync.Mutex
+	runLogStates    map[string]*runLogState
+	continuity      continuity.Store
+	summaryCounter  *summaryCounter
 	summaryInterval int
-	usersStore     *users.Store
-	userResolver   *users.Resolver
+	usersStore      *users.Store
+	userResolver    *users.Resolver
 }
 
 const defaultSummaryInterval = 5
@@ -106,22 +106,22 @@ const defaultSummaryInterval = 5
 // NewService builds a pipeline service with explicit dependencies.
 func NewService(cfg Config) *Service {
 	s := &Service{
-		config:       cfg.AppConfig,
-		bridge:       cfg.Bridge,
-		agents:       cfg.Agents,
-		persona:      cfg.Persona,
-		sessions:     cfg.Sessions,
-		resolver:     cfg.Resolver,
-		memoryDir:    cfg.MemoryDir,
-		exePath:      cfg.ExePath,
-		botCwd:       cfg.BotCwd,
-		output:       cfg.Output,
-		orchestrator: cfg.Orchestrator,
-		dreamer:      cfg.Dreamer,
-		nudgeBuffer:  session.NewNudgeBuffer(),
-		memoryCache:  newMemoryCache(),
-		projectIndex:  cfg.ProjectIndex,
-		bindings:      cfg.Bindings,
+		config:          cfg.AppConfig,
+		bridge:          cfg.Bridge,
+		agents:          cfg.Agents,
+		persona:         cfg.Persona,
+		sessions:        cfg.Sessions,
+		resolver:        cfg.Resolver,
+		memoryDir:       cfg.MemoryDir,
+		exePath:         cfg.ExePath,
+		botCwd:          cfg.BotCwd,
+		output:          cfg.Output,
+		orchestrator:    cfg.Orchestrator,
+		dreamer:         cfg.Dreamer,
+		nudgeBuffer:     session.NewNudgeBuffer(),
+		memoryCache:     newMemoryCache(),
+		projectIndex:    cfg.ProjectIndex,
+		bindings:        cfg.Bindings,
 		runLog:          cfg.RunLog,
 		runLogStates:    make(map[string]*runLogState),
 		continuity:      cfg.Continuity,
@@ -152,7 +152,8 @@ func (s *Service) Cancel(chatID int64, threadID int, userID ...int64) bool {
 	if s == nil {
 		return false
 	}
-	key := sessionKey(chatID, threadID)
+	uid := firstUserID(userID)
+	key := sessionKey(chatID, threadID, uid)
 
 	// Stop the old goroutine so it doesn't retry after abort
 	if cancelVal, loaded := s.activeSessions.LoadAndDelete(key); loaded {
@@ -167,7 +168,7 @@ func (s *Service) Cancel(chatID int64, threadID int, userID ...int64) bool {
 	defer cancel()
 	_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
 		Command: "abort",
-		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID, UserID: uid},
 	})
 	return err == nil
 }
@@ -204,7 +205,8 @@ func (s *Service) WorkStatus(chatID int64, threadID int, userID ...int64) (strin
 	if s == nil {
 		return "", 0
 	}
-	key := sessionKey(chatID, threadID)
+	uid := firstUserID(userID)
+	key := sessionKey(chatID, threadID, uid)
 	if _, active := s.activeSessions.Load(key); !active {
 		return "", 0
 	}
@@ -213,7 +215,7 @@ func (s *Service) WorkStatus(chatID int64, threadID int, userID ...int64) (strin
 	defer cancel()
 	ev, err := s.bridge.ExecuteSync(ctx, bridge.Request{
 		Command: "get-state",
-		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID},
+		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID, UserID: uid},
 	})
 	if err != nil {
 		return "", 0
@@ -273,9 +275,16 @@ func (s *Service) getSecurityConfig() security.SecurityConfig {
 	return security.DefaultConfig()
 }
 
-// sessionKey builds a string key for the activeSessions map.
-func sessionKey(chatID int64, threadID int) string {
-	return fmt.Sprintf("%d:%d", chatID, threadID)
+// sessionKey builds a user-scoped key for the activeSessions map.
+func sessionKey(chatID int64, threadID int, userID int64) string {
+	return fmt.Sprintf("%d:%d:%d", chatID, threadID, userID)
+}
+
+func firstUserID(userID []int64) int64 {
+	if len(userID) == 0 {
+		return 0
+	}
+	return userID[0]
 }
 
 const bridgeCommandTimeout = 10 * time.Second

@@ -277,7 +277,8 @@ func (bc *BotController) handleUsageCommand(c telebot.Context) error {
 func (bc *BotController) handleStatusCommand(c telebot.Context) error {
 	defer bc.confirmMessage(c.Message())
 	threadID := c.Message().ThreadID
-	reply, err := bc.cmdStatus(c.Chat().ID, threadID)
+	userID := safeSenderID(c.Sender())
+	reply, err := bc.cmdStatus(c.Chat().ID, threadID, userID)
 	if err != nil {
 		return SendErrorWithThread(bc.bot, c.Chat(), err.Error(), threadID)
 	}

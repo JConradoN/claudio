@@ -245,3 +245,37 @@ func TestStore_Cwd_TopicFallback(t *testing.T) {
 		t.Fatalf("after general clear, topic should return empty, got %q", cwd)
 	}
 }
+
+func TestStore_UserSessionIsolation(t *testing.T) {
+	s := NewStore()
+	s.SetSession(1, 2, 100, "sess-user-100")
+	s.SetSession(1, 2, 200, "sess-user-200")
+
+	if got := s.GetSession(1, 2, 100); got != "sess-user-100" {
+		t.Fatalf("user 100 session = %q, want sess-user-100", got)
+	}
+	if got := s.GetSession(1, 2, 200); got != "sess-user-200" {
+		t.Fatalf("user 200 session = %q, want sess-user-200", got)
+	}
+	if got := s.GetSession(1, 2, 300); got != "" {
+		t.Fatalf("unrelated user should not see session, got %q", got)
+	}
+
+	s.DeactivateSession(1, 2, 100)
+	_, active100 := s.GetSessionWithState(1, 2, 100)
+	_, active200 := s.GetSessionWithState(1, 2, 200)
+	if active100 {
+		t.Fatal("user 100 session should be inactive")
+	}
+	if !active200 {
+		t.Fatal("user 200 session should remain active")
+	}
+
+	s.ClearSessionForUser(1, 2, 100)
+	if got := s.GetSession(1, 2, 100); got != "" {
+		t.Fatalf("user 100 session should be cleared, got %q", got)
+	}
+	if got := s.GetSession(1, 2, 200); got != "sess-user-200" {
+		t.Fatalf("user 200 session should be preserved, got %q", got)
+	}
+}

@@ -115,7 +115,8 @@ func TestCmdSessionReset(t *testing.T) {
 	t.Parallel()
 
 	sessions := session.NewStore()
-	sessions.Set(42, 0, "/tmp/test-session.jsonl")
+	sessions.SetSession(42, 0, 100, "/tmp/test-session.jsonl")
+	sessions.SetSession(42, 0, 200, "/tmp/other-user-session.jsonl")
 
 	bc := &BotController{
 		config:   &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
@@ -127,9 +128,12 @@ func TestCmdSessionReset(t *testing.T) {
 		t.Fatalf("cmdSessionReset() error = %v", err)
 	}
 
-	// Session should be cleared
-	if sid := sessions.Get(42, 0); sid != "" {
-		t.Fatalf("session should be cleared, got %q", sid)
+	// Sender session should be cleared without affecting another user in the same chat/thread.
+	if sid := sessions.GetSession(42, 0, 100); sid != "" {
+		t.Fatalf("sender session should be cleared, got %q", sid)
+	}
+	if sid := sessions.GetSession(42, 0, 200); sid != "/tmp/other-user-session.jsonl" {
+		t.Fatalf("other user session should be preserved, got %q", sid)
 	}
 
 	// Since tracker is removed, we only check that reset reply still works
@@ -338,7 +342,7 @@ func TestCmdStatus(t *testing.T) {
 		sessions:    sessions,
 	}
 
-	reply, err := bc.cmdStatus(42, 0)
+	reply, err := bc.cmdStatus(42, 0, 123)
 	if err != nil {
 		t.Fatalf("cmdStatus() error = %v", err)
 	}
@@ -377,7 +381,7 @@ func TestCmdStatus_NoActiveSession(t *testing.T) {
 		sessions: session.NewStore(),
 	}
 
-	reply, err := bc.cmdStatus(42, 0)
+	reply, err := bc.cmdStatus(42, 0, 123)
 	if err != nil {
 		t.Fatalf("cmdStatus() error = %v", err)
 	}
@@ -401,7 +405,7 @@ func TestCmdStatus_UsesTopicCwd(t *testing.T) {
 		sessions: sessions,
 	}
 
-	reply, err := bc.cmdStatus(42, 99)
+	reply, err := bc.cmdStatus(42, 99, 123)
 	if err != nil {
 		t.Fatalf("cmdStatus() error = %v", err)
 	}
@@ -427,7 +431,7 @@ func TestCmdStatus_FallsBackToGroupCwd(t *testing.T) {
 		sessions: sessions,
 	}
 
-	reply, err := bc.cmdStatus(42, 99)
+	reply, err := bc.cmdStatus(42, 99, 123)
 	if err != nil {
 		t.Fatalf("cmdStatus() error = %v", err)
 	}
@@ -585,7 +589,7 @@ type fakeRunLog struct {
 	latest *runlog.RunRecord
 }
 
-func (f *fakeRunLog) Start(ctx context.Context, record runlog.RunRecord) error { return nil }
+func (f *fakeRunLog) Start(ctx context.Context, record runlog.RunRecord) error  { return nil }
 func (f *fakeRunLog) Update(ctx context.Context, update runlog.RunUpdate) error { return nil }
 func (f *fakeRunLog) Complete(ctx context.Context, runID string, status runlog.RunStatus, checkpoint, errMsg string) error {
 	return nil
@@ -650,17 +654,21 @@ func TestResetCurrentModelSession_ClearsOnlyCurrentThread(t *testing.T) {
 	t.Parallel()
 
 	sessions := session.NewStore()
-	sessions.Set(42, 0, "/tmp/general-session.jsonl")
-	sessions.Set(42, 99, "/tmp/topic-session.jsonl")
+	sessions.SetSession(42, 0, 100, "/tmp/general-session.jsonl")
+	sessions.SetSession(42, 99, 100, "/tmp/topic-session.jsonl")
+	sessions.SetSession(42, 99, 200, "/tmp/other-user-topic-session.jsonl")
 	sessions.SetCwd(42, 99, "/topic/repo")
 
 	bc := &BotController{sessions: sessions}
-	msg := bc.resetCurrentModelSession(42, 99)
+	msg := bc.resetCurrentModelSession(42, 99, 100)
 
-	if sid := sessions.Get(42, 99); sid != "" {
+	if sid := sessions.GetSession(42, 99, 100); sid != "" {
 		t.Fatalf("current topic session should be cleared, got %q", sid)
 	}
-	if sid := sessions.Get(42, 0); sid != "/tmp/general-session.jsonl" {
+	if sid := sessions.GetSession(42, 99, 200); sid != "/tmp/other-user-topic-session.jsonl" {
+		t.Fatalf("other user topic session should be preserved, got %q", sid)
+	}
+	if sid := sessions.GetSession(42, 0, 100); sid != "/tmp/general-session.jsonl" {
 		t.Fatalf("general session should be preserved, got %q", sid)
 	}
 	if cwd := sessions.GetCwd(42, 99); cwd != "/topic/repo" {
@@ -675,13 +683,17 @@ func TestResetCurrentModelSession_ClearsPrivateChatSession(t *testing.T) {
 	t.Parallel()
 
 	sessions := session.NewStore()
-	sessions.Set(42, 0, "/tmp/private-session.jsonl")
+	sessions.SetSession(42, 0, 100, "/tmp/private-session.jsonl")
+	sessions.SetSession(42, 0, 200, "/tmp/other-private-session.jsonl")
 
 	bc := &BotController{sessions: sessions}
-	msg := bc.resetCurrentModelSession(42, 0)
+	msg := bc.resetCurrentModelSession(42, 0, 100)
 
-	if sid := sessions.Get(42, 0); sid != "" {
+	if sid := sessions.GetSession(42, 0, 100); sid != "" {
 		t.Fatalf("private chat session should be cleared, got %q", sid)
+	}
+	if sid := sessions.GetSession(42, 0, 200); sid != "/tmp/other-private-session.jsonl" {
+		t.Fatalf("other private session should be preserved, got %q", sid)
 	}
 	if !strings.Contains(msg, "Sessão privada resetada") {
 		t.Fatalf("expected private-session reset message, got %q", msg)

@@ -11,10 +11,9 @@ type Usage struct {
 	NumTurns        int
 }
 
-// TotalTokens returns the gate value for auto-reset decisions.
-// Uses the larger of real tokens and estimated tokens to avoid underestimation
-// (which could prevent timely reset) or overestimation (which could trigger
-// premature reset when real tokens are available).
+// TotalTokens returns the best available display total.
+// Uses the larger of real tokens and estimated tokens so /usage remains useful
+// when the bridge does not return exact token counts.
 func (u Usage) TotalTokens() int {
 	realTokens := u.InputTokens + u.OutputTokens
 	if u.EstimatedTokens > realTokens {
