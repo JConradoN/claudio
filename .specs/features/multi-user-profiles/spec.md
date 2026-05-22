@@ -7,7 +7,7 @@
 
 > Working directory name remains `multi-user-profiles` for compatibility with existing references, but the product framing is **User Isolation**: isolate data for each whitelisted Telegram `user_id`, not turn Aurelia into a multi-tenant platform.
 >
-> Implementation note 2026-05-22: the current audited task/status summary lives in `tasks.md`. Session/runtime isolation is closed; user×project private memory moved to Sprint D (`.specs/features/project-memory/`).
+> Implementation note 2026-05-22: the current audited task/status summary lives in `tasks.md`. Session/runtime isolation is closed; user×project private memory moved to Sprint E (`.specs/features/project-memory/`).
 
 ## Problem Statement
 
@@ -29,7 +29,7 @@ Esta spec resolve **isolamento interno de dados entre os users já autorizados p
 ## Goals — status auditado
 
 - [x] Memória pessoal base (fatos, `USER.md`, dream output) isolada por `user_id`.
-- [ ] Project memory privada por `(user_id, project_slug)` — movida para Sprint D.
+- [ ] Project memory privada por `(user_id, project_slug)` — movida para Sprint E.
 - [x] IDENTITY.md e SOUL.md continuam globais — Aurelia é uma só.
 - [x] Cron jobs têm `owner_user_id` normalizado; user só vê/cancela seus próprios.
 

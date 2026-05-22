@@ -79,7 +79,7 @@ A análise completa (ver research session) identificou **7 áreas** de duplicaç
 
 - **Persona system** (`internal/persona/`) — sem equivalente no PI SDK; é diferencial do Aurélia
 - **Memory layers** (`internal/dream/`, `internal/pipeline/memory_*`, nudge) — PI não tem memória cross-session
-- **Wiki Memory Gateway** (Sprint E) — diferencial estratégico, não existe no PI
+- **Wiki Memory Gateway** (Sprint F) — diferencial estratégico, não existe no PI
 - **Cron scheduler** (`internal/cron/`) — PI não tem scheduling
 - **Telegram interface** (`internal/telegram/`) — PI é agnóstico de interface
 - **Orchestrator** (`internal/orchestrator/`) — específico do fluxo Aurélia

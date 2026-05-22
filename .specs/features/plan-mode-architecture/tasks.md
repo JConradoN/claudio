@@ -1,7 +1,7 @@
 # Plan Mode Architecture — Tasks
 
 **Design:** `.specs/features/plan-mode-architecture/design.md`
-**Roadmap step:** 3
+**Roadmap step:** 4
 **Status:** 🔴 A implementar (parcial: detecção heurística existe)
 **Depende de:** User Isolation + Orchestration Cycle (ExecutionContext, handoff)
 

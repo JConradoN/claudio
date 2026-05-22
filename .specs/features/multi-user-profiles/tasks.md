@@ -65,7 +65,7 @@ Resultado relevante:
 | T10 — `BuildPromptForUser` | ✅ | Persona global + `USER.md` per-user + owner docs condicionais |
 | T11 — SessionKey/memory cache callers per-user | ✅ | Sessões user-scoped; user memory por path; CWD conversation-scoped |
 | T12 — Dream/nudge em user dir | ✅ | `AfterTurn`, `AfterTurnNudge`, `FlushNudge` recebem `userID` |
-| T13 — Project memory paths per-user | ➡️ Movido | Fechado como Sprint D: User-Scoped Project Memory |
+| T13 — Project memory paths per-user | ➡️ Movido | Fechado como Sprint E: User-Scoped Project Memory |
 | T13b — Logging estruturado com `TurnContext` | ✅ | Runtime logs incluem `user_id` nos caminhos críticos |
 | T14 — Pipeline.Service + Users deps | ✅ | Pipeline usa profile, resolver e persona per-user |
 | T15 — Onboarder + SQLite state | ✅ | `internal/users/onboarder.go`, `onboarding_store.go` |
@@ -80,7 +80,7 @@ Resultado relevante:
 
 ## Gaps fora deste sprint
 
-### 1. User-Scoped Project Memory — Sprint D
+### 1. User-Scoped Project Memory — Sprint E
 
 A memória pessoal por usuário existe, mas a memória privada de projeto ainda não está totalmente escopada como `(user_id, project_slug)` no runtime principal.
 
@@ -89,7 +89,7 @@ Evidência atual:
 - `internal/users.Resolver.ProjectMemoryDir(userID, slug)` existe.
 - `internal/runtime.PathResolver.ProjectMemoryDir(cwd)` e `ConversationProjectMemoryDir(cwd, chatID, threadID)` ainda são usados por pipeline/dream/memory UX.
 
-Esse trabalho pertence a `.specs/features/project-memory/` e ao roadmap Sprint D.
+Esse trabalho pertence a `.specs/features/project-memory/` e ao roadmap Sprint E.
 
 ### 2. Continuity store privado por usuário — decisão futura
 

@@ -46,15 +46,16 @@ O objetivo é evitar dois extremos: o Aurélia não deve virar apenas um wrapper
 A próxima onda foca em tornar o sistema seguro e estável para trabalho autônomo em projetos reais:
 
 1. manter fechado o hardening pós-v0.13 do limite PI↔Aurelia;
-2. usar a base de User Isolation já auditada para fechar o ciclo de execução orquestrada;
-3. transformar plan mode em modo explícito, persistente e retomável;
-4. escopar memória por usuário/projeto com semântica estável;
-5. promover a memória para uma Wiki transversal via MCP;
-6. só então ativar nudge profundo, agent comms e auto-skills.
+2. criar base de observabilidade operacional antes de ampliar execução autônoma;
+3. usar a base de User Isolation já auditada para fechar o ciclo de execução orquestrada;
+4. transformar plan mode em modo explícito, persistente e retomável;
+5. escopar memória por usuário/projeto com semântica estável;
+6. promover a memória para uma Wiki transversal via MCP;
+7. só então ativar nudge profundo, agent comms e auto-skills.
 
 **Ordem é importante:** cada spec depende da anterior, técnica e conceitualmente. O refactoring do PI SDK pode ser feito em paralelo com User Isolation, mas deve ser merged antes para reduzir a superfície de código.
 
-> **Nota sobre o delta real:** Security Guard-Rails e Project Binding já foram implementados (revisão de Maio 2026), então o roadmap foi reordenado para refletir o estado real da codebase. Agent Orchestration subiu do passo 8 para o passo 2 porque ~40% do código já existe em `internal/orchestrator/` e precisa ser fechado antes de Plan Mode poder fazer handoff.
+> **Nota sobre o delta real:** Security Guard-Rails e Project Binding já foram implementados (revisão de Maio 2026), então o roadmap foi reordenado para refletir o estado real da codebase. Antes de fechar Orchestration, entrou uma fundação curta de Observability porque execução autônoma só é segura se cada run puder ser depurado por `run_id`, timeline, provider/model, tokens/custo, erro e fase de falha.
 
 ---
 
@@ -117,20 +118,43 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 **Fora deste sprint:**
 
-- Memória privada de projeto por `(user_id, project_slug)` continua no Sprint D (`User-Scoped Project Memory`). Hoje há memória pessoal por usuário, mas `runtime.ProjectMemoryDir/ConversationProjectMemoryDir` ainda é principalmente cwd/chat/thread-scoped.
+- Memória privada de projeto por `(user_id, project_slug)` continua no Sprint E (`User-Scoped Project Memory`). Hoje há memória pessoal por usuário, mas `runtime.ProjectMemoryDir/ConversationProjectMemoryDir` ainda é principalmente cwd/chat/thread-scoped.
 - O `continuity.Store` permanece `ConversationKey{chat_id, thread_id}` por semântica atual de conversa/tópico. Os patches usam o `session_file` user-scoped correto; continuidade privada por usuário fica como decisão futura antes de Nudge profundo, se necessário.
 
 **Por que era P0:** sem `user_id` propagado integralmente, Plan Mode, Auto-Skills, memória e nudge poderiam vazar estado entre usuários autorizados. O caminho crítico de sessão/runtime está fechado.
 
 ---
 
-## 2. Close Orchestration Cycle
+## 2. Operational Observability
+
+**Spec:** `.specs/features/operational-observability/`  
+**Design:** `.specs/features/operational-observability/design.md`  
+**Tasks:** `.specs/features/operational-observability/tasks.md`  
+**Status:** 🔴 Spec pronta; implementação pendente  
+**Prioridade:** P0 antes de execução autônoma
+
+**Problem:** Aurelia já tem `runlog`, `/status`, progresso Telegram, audit log e cron executions, mas a observabilidade é fragmentada. Para depurar produção, ainda é preciso correlacionar manualmente Telegram input, `request_id`, Bridge events, session_file, runlog, audit.log e logs do daemon.
+
+**Scope:**
+
+- `run_id` propagado de Telegram/cron/orchestration até Bridge/runlog/audit;
+- logs estruturados com campos estáveis (`run_id`, `request_id`, `chat_id`, `thread_id`, `user_id`, `phase`);
+- expansão de `run_journal` com provider/model/agent/profile/duração/tokens/custo/fallback/timeout/error_class;
+- tabela `run_events` com timeline fase-a-fase;
+- `/debug` e `aurelia debug` para latest run, run específico, erros recentes e métricas;
+- métricas locais por SQLite: sucesso/falha, latência, tokens, custo, fallback, provider/model e cron.
+
+**Por que agora:** Orchestration e Plan Mode vão aumentar muito a complexidade operacional. Antes de executar workflows autônomos mais longos, precisamos conseguir responder rapidamente “qual run falhou, em que fase, com qual modelo, custo, tools e erro?”.
+
+---
+
+## 3. Close Orchestration Cycle
 
 **Spec:** `.specs/features/agent-orchestration-execution/`
 **Design:** `.specs/features/agent-orchestration-execution/design.md`
 **Tasks:** `.specs/features/agent-orchestration-execution/tasks.md`
 **Status:** 🟡 Parcial (scaffold ~40%, ciclo não fecha)
-**Depende de:** User Isolation partial para `TurnContext`/`user_id` no handoff; Project Binding já disponível
+**Depende de:** Operational Observability; User Isolation runtime hardening; Project Binding já disponível
 
 **Problem:** Aurelia já tem `internal/orchestrator/` com worktree, waves, git.go, validate.go, tasks_status.go (80% do código), mas **o ciclo não fecha**: `Validate`, `CommitChanges`, `CreatePR`, `UpdateTasksStatus` não são chamados no fluxo real. `currentBranch()` retorna hardcoded `"HEAD"`. Thread ID é perdido no handoff. O executor funcional prometido pela spec nunca foi entregue.
 
@@ -148,13 +172,13 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 3. Plan Mode Architecture
+## 4. Plan Mode Architecture
 
 **Spec:** `.specs/features/plan-mode-architecture/`
 **Design:** `.specs/features/plan-mode-architecture/design.md`
 **Tasks:** `.specs/features/plan-mode-architecture/tasks.md`
 **Status:** 🟡 Parcial (detecção heurística + parsing de `aurelia-plan` existem)
-**Depende de:** User Isolation + Orchestration Cycle (ExecutionContext, handoff)
+**Depende de:** User Isolation + Operational Observability + Orchestration Cycle (ExecutionContext, handoff)
 
 **Problem:** hoje planejamento é implícito: keywords disparam prompt de orquestração sem permissão, e `aurelia-plan` executa sem estado persistente. Precisa virar modo explícito, persistente e retomável.
 
@@ -171,7 +195,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 4. User-Scoped Project Memory
+## 5. User-Scoped Project Memory
 
 **Spec:** `.specs/features/project-memory/`
 **Status:** 🟡 Parcial (70% — layers existem, mas não são isoladas por usuário)
@@ -192,7 +216,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 5. Wiki Memory Gateway
+## 6. Wiki Memory Gateway
 
 **Spec:** `.specs/features/wiki-memory/`
 **Status:** 🔴 Spec arquitetural apenas
@@ -213,7 +237,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 6. Learning Nudge — Scoped Memory Review
+## 7. Learning Nudge — Scoped Memory Review
 
 **Spec:** `.specs/features/learning-nudge/`
 **Status:** 🔴 Draft revisado
@@ -231,7 +255,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 7. Agent Comms
+## 8. Agent Comms
 
 **Spec:** `.specs/features/agent-comms/`
 **Status:** 🔴 Draft
@@ -252,7 +276,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 8. Auto-Skills
+## 9. Auto-Skills
 
 **Spec:** `.specs/features/auto-skills/`
 **Status:** 🔴 Draft revisado
@@ -285,25 +309,28 @@ Foundation validada (Security Guard-Rails + Project Binding + Bridge Resilience)
 1. User Isolation MVP + runtime hardening ✅
       │
       ▼
-2. Close Orchestration Cycle
+2. Operational Observability
       │
       ▼
-3. Plan Mode Architecture
+3. Close Orchestration Cycle
       │
       ▼
-4. User-Scoped Project Memory
+4. Plan Mode Architecture
       │
       ▼
-5. Wiki Memory Gateway
+5. User-Scoped Project Memory
       │
       ▼
-6. Learning Nudge
+6. Wiki Memory Gateway
       │
       ▼
-7. Agent Comms
+7. Learning Nudge
       │
       ▼
-8. Auto-Skills
+8. Agent Comms
+      │
+      ▼
+9. Auto-Skills
 ```
 
 ## Mapa de implementação por sprint
@@ -329,9 +356,20 @@ Sprint A: User Isolation MVP + runtime hardening
   ├─ ✅ pipeline integration + UserGate
   ├─ ✅ owner-only commands
   ├─ ✅ CancelAllForUser + active run/cancel/status/get-state user-scoped
-  └─ ➡️ User×project private memory movida para Sprint D
+  └─ ➡️ User×project private memory movida para Sprint E
 
-Sprint B: Close Orchestration Cycle (T0–T12 do tasks.md)
+Sprint B: Operational Observability (T0–T12 do tasks.md)
+  ├─ RunContext + field map
+  ├─ slog estruturado configurável
+  ├─ run_journal expandido
+  ├─ run_events timeline
+  ├─ pipeline/Bridge retry/fallback/timeout events
+  ├─ /status com run_id curto
+  ├─ aurelia debug CLI
+  ├─ /debug owner-only
+  └─ métricas locais por SQLite
+
+Sprint C: Close Orchestration Cycle (T0–T12 do tasks.md)
   ├─ ExecutionContext com cwd+threadID
   ├─ git preflight
   ├─ artifact collection + verify command
@@ -341,7 +379,7 @@ Sprint B: Close Orchestration Cycle (T0–T12 do tasks.md)
   ├─ orphan cleanup no startup
   └─ integration smoke test
 
-Sprint C: Plan Mode (T0–T13 do tasks.md)
+Sprint D: Plan Mode (T0–T13 do tasks.md)
   ├─ internal/planning/ types + SQLite store
   ├─ context discovery
   ├─ BuildPlanningPrompt + observer
@@ -349,27 +387,27 @@ Sprint C: Plan Mode (T0–T13 do tasks.md)
   ├─ /plan commands
   └─ handoff com ExecutionContext
 
-Sprint D: User-Scoped Project Memory
+Sprint E: User-Scoped Project Memory
   ├─ runtime.PathResolver per-user
   ├─ prompt assembly com camadas corretas
   └─ dream/nudge com targets escopados
 
-Sprint E: Wiki Memory Gateway
+Sprint F: Wiki Memory Gateway
   ├─ MCP server interno
   ├─ wiki_query/save/status
   └─ query-before-inject
 
-Sprint F: Learning Nudge
+Sprint G: Learning Nudge
   ├─ transcript recorder por SessionKey
   ├─ redaction + profile edit_project
   └─ escrita via Wiki scopes
 
-Sprint G: Agent Comms
+Sprint H: Agent Comms
   ├─ Agent Bus local por run
   ├─ peers explícitos + limites
   └─ manifest + audit
 
-Sprint H: Auto-Skills
+Sprint I: Auto-Skills
   ├─ skill recorder
   ├─ /skill save + generator
   ├─ validator de SKILL.md

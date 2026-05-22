@@ -1,6 +1,6 @@
 # User-Scoped Project Memory — Specification
 
-**Roadmap step:** 4  
+**Roadmap step:** 5  
 **Status:** 🟡 Parcial (70% — camadas existem, paths não são per-user)  
 **Depende de:** `.specs/features/multi-user-profiles/` (para paths `users/<id>/`)  
 **Depende de:** `.specs/features/project-binding/` (✅ done — project slug/effective cwd persistente)  

@@ -75,7 +75,8 @@ The strategic differentiator is the future **Wiki Memory Gateway**: local-first,
 ### In progress
 - Closing the conceptual boundary: PI owns model/session/context/tool execution; Aurelia owns Telegram UX, identity/persona, persistence, scheduling, memory, project binding, policy/audit and orchestration.
 - Agent registry boundary decision: keep Aurelia specialists as a product-layer feature for now; investigate PI-native parsing/discovery later via `agentsFilesOverride` rather than forcing a user-facing migration.
-- Orchestration Cycle: existing scaffold must be connected to validation, commit/PR, task-status updates and artifact manifests.
+- Operational Observability: new spec defines the correlation, run timeline, debug commands and local metrics needed before expanding autonomous execution.
+- Orchestration Cycle: existing scaffold must be connected to validation, commit/PR, task-status updates and artifact manifests after observability foundation.
 - Memory/Wiki preparation: project memory scopes must become user×project private plus project-team shared before exposing Wiki MCP.
 
 ## Roadmap
@@ -84,12 +85,13 @@ Ver `.specs/project/ROADMAP.md` para o sequenciamento completo. Resumo:
 
 ```
 Sprint 0 → Delegate to PI SDK Native core ✅; remaining: agent registry boundary decision
-Sprint A → User Isolation MVP + runtime hardening ✅; remaining user×project memory moved to Sprint D
-Sprint B → Close Orchestration Cycle (conectar scaffold existente)
-Sprint C → Plan Mode Architecture explícito
-Sprint D → User-Scoped Project Memory
-Sprint E → Wiki Memory Gateway (MCP)
-Sprint F → Learning Nudge escopado
-Sprint G → Agent Comms
-Sprint H → Auto-Skills
+Sprint A → User Isolation MVP + runtime hardening ✅; remaining user×project memory moved to Sprint E
+Sprint B → Operational Observability (run_id, timeline, /debug, métricas locais)
+Sprint C → Close Orchestration Cycle (conectar scaffold existente)
+Sprint D → Plan Mode Architecture explícito
+Sprint E → User-Scoped Project Memory
+Sprint F → Wiki Memory Gateway (MCP)
+Sprint G → Learning Nudge escopado
+Sprint H → Agent Comms
+Sprint I → Auto-Skills
 ```

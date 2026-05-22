@@ -1,6 +1,6 @@
 # Auto-Skills
 
-**Roadmap step:** 8  
+**Roadmap step:** 9  
 **Status:** 🔴 Draft revisado  
 **Depende de:** User Isolation (`multi-user-profiles`) para `TurnContext`, `SessionKey`, `UserGate` e diretórios privados por `user_id`
 **Depende de:** Security Guard-Rails (✅ done)

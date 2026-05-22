@@ -1,6 +1,6 @@
 # Learning Nudge — Scoped Memory Review
 
-**Roadmap step:** 6  
+**Roadmap step:** 7  
 **Status:** 🔴 Draft revisado  
 **Depende de:** `.specs/features/multi-user-profiles/`, `.specs/features/project-binding/` (✅ done), `.specs/features/project-memory/`, `.specs/features/security-guard-rails/` (✅ done), `.specs/features/wiki-memory/`  
 **Complementa:** `.specs/features/auto-skills/`

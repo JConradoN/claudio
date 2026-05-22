@@ -1,6 +1,6 @@
 # Wiki Memory Gateway — Specification
 
-**Roadmap step:** 5  
+**Roadmap step:** 6  
 **Status:** 🔴 Spec arquitetural apenas  
 **Depende de:** `.specs/features/multi-user-profiles/`, `.specs/features/project-binding/` (✅ done), `.specs/features/security-guard-rails/` (✅ done), `.specs/features/project-memory/`  
 **Complementa:** `.specs/features/learning-nudge/`, `.specs/features/plan-mode-architecture/`, `.specs/features/auto-skills/`
