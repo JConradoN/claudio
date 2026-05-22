@@ -651,7 +651,7 @@ async function createPiSession(opts: RequestOptions | undefined) {
   const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
   const model = resolveModelFromRegistry(modelRegistry, opts?.provider, opts?.model);
   if (opts?.model && !model) {
-    redactedLog(`model not found in PI registry: provider=${opts.provider ?? ""} model=${opts.model}`);
+    throw new Error(`Modelo não encontrado no PI registry: provider=${opts.provider ?? ""} model=${opts.model}. Use /model para listar os disponíveis.`);
   }
 
   const resourceLoader = new DefaultResourceLoader({

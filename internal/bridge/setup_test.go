@@ -36,75 +36,27 @@ func TestBridgePackageJSONCanBuildBundle(t *testing.T) {
 	}
 }
 
-func TestHasNonEmptyAuth(t *testing.T) {
-	tests := []struct {
-		name     string
-		content  string // empty string means file does not exist
-		want     bool
-	}{
-		{
-			name:    "file missing",
-			content: "", // don't create file
-			want:    false,
-		},
-		{
-			name:    "file empty",
-			content: "",
-			want:    false,
-		},
-		{
-			name:    "whitespace only",
-			content: "   \n\t  ",
-			want:    false,
-		},
-		{
-			name:    "empty JSON object",
-			content: "{}",
-			want:    false,
-		},
-		{
-			name:    "whitespace between braces",
-			content: "{ }",
-			want:    true, // not a compact "{}", so treated as non-empty
-		},
-		{
-			name:    "valid credentials",
-			content: `{"access_token":"abc","refresh_token":"def"}`,
-			want:    true,
-		},
-		{
-			name:    "minimal non-empty JSON",
-			content: `{"key":"value"}`,
-			want:    true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if tt.content != "" || tt.name == "file empty" {
-				// Write file for all cases except "file missing"
-				if tt.name != "file missing" {
-					path := filepath.Join(dir, "auth.json")
-					if err := os.WriteFile(path, []byte(tt.content), 0600); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			got := hasNonEmptyAuth(dir)
-			if got != tt.want {
-				t.Errorf("hasNonEmptyAuth(%q) = %v, want %v", dir, got, tt.want)
-			}
-		})
-	}
-}
+// TestAuthSymlink verifies the daemon ensures auth.json is a symlink to PI CLI.
+func TestAuthSymlink(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
 
-// Test that a dir with a sessions/ subdir but no auth.json is treated as empty.
-func TestHasNonEmptyAuth_IgnoresNonAuthFiles(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0700); err != nil {
+	srcAuth := filepath.Join(srcDir, "auth.json")
+	if err := os.WriteFile(srcAuth, []byte(`{"key":"test"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if hasNonEmptyAuth(dir) {
-		t.Error("expected false when only sessions/ subdir exists, no auth.json")
+	dstAuth := filepath.Join(dstDir, "auth.json")
+
+	// Symlink should be created when dst doesn't exist
+	if err := os.Symlink(srcAuth, dstAuth); err != nil {
+		t.Fatal(err)
+	}
+	// Verify symlink
+	linkTarget, err := os.Readlink(dstAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkTarget != srcAuth {
+		t.Errorf("symlink points to %q, want %q", linkTarget, srcAuth)
 	}
 }

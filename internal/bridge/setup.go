@@ -2,12 +2,10 @@ package bridge
 
 import (
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 const bridgePackageJSON = `{
@@ -49,10 +47,12 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		}
 	}
 
-	// Ensure isolated PI agent directory exists and inherit credentials
-	// from PI CLI on first run. This MUST happen before the early return
-	// so that restarts also pick up credentials (the hasNonEmptyAuth
-	// guard ensures one-time-only inheritance).
+	// Ensure isolated PI agent directory exists and symlink auth.json
+	// from PI CLI so credentials are always in sync. The isolated directory
+	// prevents session/settings collisions between the daemon and interactive
+	// PI usage, but auth.json must be shared — stale credentials cause silent
+	// failures (the daemon uses a valid-looking old key while PI CLI uses a
+	// different, working key).
 	home, err := os.UserHomeDir()
 	if err != nil {
 		slog.Warn("cannot determine home directory for PI agent dir", "error", err)
@@ -61,13 +61,20 @@ func EnsureBridge(targetDir string, bundleJS []byte) (string, error) {
 		if err := os.MkdirAll(aureliaPiAgentDir, 0700); err != nil {
 			slog.Warn("failed to create isolated PI agent dir", "error", err)
 		} else {
-			piCliDir := filepath.Join(home, ".pi", "agent")
-			if _, statErr := os.Stat(piCliDir); statErr == nil {
-				if !hasNonEmptyAuth(aureliaPiAgentDir) {
-					if err := copyDirContents(piCliDir, aureliaPiAgentDir); err != nil {
-						slog.Warn("failed to inherit PI CLI config", "error", err)
+			piCliAuthPath := filepath.Join(home, ".pi", "agent", "auth.json")
+			aureliaAuthPath := filepath.Join(aureliaPiAgentDir, "auth.json")
+			if _, statErr := os.Stat(piCliAuthPath); statErr == nil {
+				// Check if existing auth is already a valid symlink.
+				linkTarget, linkErr := os.Readlink(aureliaAuthPath)
+				if linkErr != nil || linkTarget != piCliAuthPath {
+					// Remove stale regular file or broken symlink.
+					if err := os.Remove(aureliaAuthPath); err != nil && !os.IsNotExist(err) {
+						slog.Warn("failed to remove stale auth.json", "error", err)
+					}
+					if err := os.Symlink(piCliAuthPath, aureliaAuthPath); err != nil {
+						slog.Warn("failed to symlink auth.json from PI CLI", "error", err)
 					} else {
-						slog.Info("Inherited PI CLI config into isolated agent directory")
+						slog.Info("Linked auth.json from PI CLI")
 					}
 				}
 			}
@@ -154,36 +161,6 @@ func writeBridgeSource(targetDir string) error {
 	return nil
 }
 
-// hasNonEmptyAuth returns true if the directory contains a non-empty auth.json.
-func hasNonEmptyAuth(dir string) bool {
-	data, err := os.ReadFile(filepath.Join(dir, "auth.json"))
-	if err != nil || len(data) == 0 {
-		return false
-	}
-	return len(strings.TrimSpace(string(data))) > 0 && string(data) != "{}"
-}
 
-// copyDirContents copies all files from src to dst recursively.
-func copyDirContents(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0700)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0600)
-	})
-}
+
+

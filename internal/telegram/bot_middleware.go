@@ -246,8 +246,9 @@ func (bc *BotController) handleStopCommand(c telebot.Context) error {
 	defer bc.confirmMessage(c.Message())
 	chatID := c.Chat().ID
 	threadID := c.Message().ThreadID
+	userID := safeSenderID(c.Sender())
 
-	if bc.cancelActiveRun(chatID, threadID) {
+	if bc.cancelActiveRun(chatID, threadID, userID) {
 		return SendTextWithThread(bc.bot, c.Chat(), "🛑 Processamento interrompido. A sessão foi preservada.", threadID)
 	}
 	return SendTextWithThread(bc.bot, c.Chat(), "Nenhum processamento ativo para interromper.", threadID)

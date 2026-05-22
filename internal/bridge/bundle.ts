@@ -20,6 +20,21 @@ interface ImageAttachment {
   media_type?: string;
 }
 
+// Mirrors SecurityContext in internal/bridge/protocol.go.
+interface SecurityContext {
+  enabled: boolean;
+  profile: "observe" | "read_only" | "edit_project" | "execute_safe" | "privileged";
+  mode: "warn" | "block";
+  cwd: string;
+  sensitive_paths?: string[];
+  allowed_outside_cwd?: string[];
+  chat_id?: number;
+  thread_id?: number;
+  user_id?: number;
+  agent_name?: string;
+  request_id?: string;
+}
+
 // Mirrors RequestOptions in internal/bridge/protocol.go. The legacy Claude SDK
 // fields (max_turns, permission_mode, mcp_servers, agents, disabled_tools)
 // have no analogue in the PI SDK and were dropped.
@@ -35,6 +50,7 @@ interface RequestOptions {
   no_user_settings?: boolean;
   persist_session?: boolean;
   images?: ImageAttachment[];
+  security?: SecurityContext;
 }
 
 interface Request {
@@ -220,6 +236,323 @@ function translateAllowedTools(
   return result;
 }
 
+// ── Security Policy Evaluation ──────────────────────────────────────────────
+
+interface PolicyDecision {
+  decision: "allow" | "block" | "rewrite";
+  reason?: string;
+  input?: Record<string, unknown>;
+}
+
+interface AuditEntry {
+  timestamp?: string;
+  decision: string;
+  tool_name: string;
+  reason: string;
+  chat_id?: number;
+  thread_id?: number;
+  agent_name?: string;
+  profile: string;
+  cwd: string;
+  redacted: boolean;
+}
+
+const DEFAULT_SENSITIVE_PATTERNS = [
+  ".env", ".env.*", "*.pem", "*.key",
+  "id_rsa", "id_ed25519",
+  "config.json", "credentials.json", "*.credentials",
+  "service-account*.json",
+  ".ssh/*", ".pi/*", ".aurelia/config/*", ".git/config",
+];
+
+function matchesGlob(pattern: string, name: string): boolean {
+  // Convert simple glob pattern to regex.
+  const regexStr = "^" + pattern
+    .replace(/\./g, "\\.")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".")
+    + "$";
+  try {
+    return new RegExp(regexStr).test(name);
+  } catch {
+    return false;
+  }
+}
+
+function isSensitivePath(path: string, patterns: string[]): boolean {
+  const clean = path.replace(/\\/g, "/");
+  const parts = clean.split("/");
+  const base = parts[parts.length - 1] || "";
+
+  for (const pat of patterns) {
+    if (matchesGlob(pat, base)) return true;
+    if (matchesGlob(pat, clean)) return true;
+  }
+
+  // Check for known sensitive directories anywhere in the path.
+  for (const dir of [".ssh", ".aurelia/config", ".pi"]) {
+    if (clean.includes("/" + dir + "/") || clean.startsWith(dir + "/")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isDestructiveCommand(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+
+  // rm -rf with absolute/system paths.
+  if (/^rm\s+.*-rf/i.test(lower) || /^rm\s+.*-fr/i.test(lower)) {
+    for (const bad of ["/ ", "/*", "/.", "~/", "/etc", "/usr", "/bin", "/lib", "/home", "/root", "/var"]) {
+      if (lower.includes(bad)) return true;
+    }
+  }
+  if (/rm\s+\//.test(lower) || /rm -rf \//.test(lower)) return true;
+
+  // sudo (always blocked).
+  if (/^sudo\s/.test(lower)) return true;
+
+  // chmod -R on system paths.
+  if (/chmod.*-r/i.test(lower)) {
+    for (const bad of ["/ ", "/etc", "/usr", "/bin", "/lib"]) {
+      if (lower.includes(bad)) return true;
+    }
+  }
+
+  // chown -R.
+  if (/chown.*-r/i.test(lower)) return true;
+
+  // dd with of= (disk destroyer).
+  if (/^dd\s/.test(lower) && /of=/.test(lower)) return true;
+
+  // Fork bomb patterns.
+  if (lower.includes(":(){") || lower.includes(":()")) return true;
+
+  // mkfs, fdisk, parted.
+  if (/^mkfs/.test(lower) || /^fdisk/.test(lower) || /^parted/.test(lower)) return true;
+
+  return false;
+}
+
+function isExfiltrationCommand(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+
+  const hasNetworkTool = ["curl ", "wget ", "nc ", "ncat ", "scp ", "rsync "].some(
+    (t) => lower.includes(t),
+  );
+  if (!hasNetworkTool) return false;
+
+  const suspicious = [
+    "$(cat ", "`cat `", "`env`", "$(env)",
+    "<~", ".env", "id_rsa", "token", "secret", "password",
+    "-d @", " --data @", "--data-raw", "--data-binary",
+    "-F ", "--form ", "file=@",
+    "| nc ", "| ncat ",
+  ];
+  return suspicious.some((s) => lower.includes(s));
+}
+
+function matchesEnvAccess(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+  if (/^env$/.test(lower) || /^printenv/.test(lower) || /^export($|\s)/.test(lower)) return true;
+  if (lower.includes(".aurelia/config")) return true;
+  if (/echo\s+\$/.test(lower) || /echo \${/.test(lower)) return true;
+  if (lower.includes("cat ~/.aurelia")) return true;
+  return false;
+}
+
+function isDangerousGit(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+  if (!lower.startsWith("git ")) return false;
+  const dangerous = [
+    "git push --force", "git push -f",
+    "git remote add", "git remote set-url",
+    "git reset --hard", "git clean -f",
+    "git reflog delete", "git update-ref -d",
+    "git credential", "git gc",
+  ];
+  return dangerous.some((d) => lower.includes(d));
+}
+
+function matchesBuildOrTest(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+  const buildPatterns = [
+    /^go\s+(build|install|mod)/,
+    /^npm\s+run\s+(build|prod|compile)/,
+    /^npx\s+(tsc|esbuild|webpack)/,
+    /^make(\s|$)/,
+    /^cargo\s+(build|check)/,
+    /^dotnet\s+(build|publish)/,
+    /^(gradle\s+build|mvn\s+(compile|package))/,
+    /^bun\s+run\s+build/,
+    /^yarn(\s+run)?\s+build/,
+    /^tsc(\s|$)/,
+  ];
+  const testPatterns = [
+    /^go\s+(test|vet|fmt)/,
+    /^npm\s+(test|run\s+test)/,
+    /^npx\s+(jest|mocha|vitest)/,
+    /^yarn\s+(test|run\s+test)/,
+    /^bun\s+test/,
+    /^cargo\s+test/,
+    /^dotnet\s+test/,
+    /^gradle\s+test/,
+    /^mvn\s+test/,
+    /^pytest/,
+    /^rspec/,
+    /^rails\s+test/,
+  ];
+  return [...buildPatterns, ...testPatterns].some((p) => p.test(lower));
+}
+
+function matchesSafeGit(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+  const safePrefixes = [
+    "git status", "git diff", "git log", "git show",
+    "git branch", "git checkout", "git stash list",
+    "git describe", "git rev-parse", "git rev-list",
+    "git config", "git ls-files", "git ls-tree",
+    "git tag", "git blame", "git shortlog",
+    "git cherry", "git cherry-pick --abort",
+  ];
+  return safePrefixes.some((p) => lower.startsWith(p));
+}
+
+function isPathInsideCwd(path: string, cwd: string, allowedOutside: string[]): boolean {
+  if (!path || !cwd) return true;
+  const clean = path.replace(/\\/g, "/");
+  const cwdNorm = cwd.replace(/\\/g, "/");
+
+  // Relative path starting with .. is outside.
+  if (clean === ".." || clean.startsWith("../") || clean === ".") return false;
+
+  // Absolute path: must be within cwd.
+  if (clean.startsWith("/")) {
+    if (clean.startsWith(cwdNorm)) {
+      const rel = clean.slice(cwdNorm.length);
+      if (!rel.startsWith("/..") && rel !== "") return true;
+    }
+    // Check allowlist.
+    for (const allowed of allowedOutside) {
+      if (clean.startsWith(allowed)) return true;
+    }
+    return false;
+  }
+
+  // Relative path is assumed to be inside cwd.
+  return true;
+}
+
+function evaluateToolPolicy(
+  toolName: string,
+  input: Record<string, unknown>,
+  security: SecurityContext,
+): PolicyDecision {
+  const cfg = security;
+  const mode = cfg.mode || "block";
+
+  switch (toolName) {
+    case "Read":
+    case "Grep":
+    case "Glob":
+    case "LS": {
+      const path = (input.path as string) || "";
+      if (!path) return { decision: "allow" };
+
+      // Check sensitive paths.
+      const patterns = cfg.sensitive_paths || DEFAULT_SENSITIVE_PATTERNS;
+      if (isSensitivePath(path, patterns)) {
+        const reason = `access to sensitive path blocked: ${path}`;
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+
+      // Check cwd boundary for reads that access file contents.
+      if (toolName === "Read" && cfg.cwd && !isPathInsideCwd(path, cfg.cwd, cfg.allowed_outside_cwd || [])) {
+        const reason = `path outside working directory: ${path}`;
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+      return { decision: "allow" };
+    }
+
+    case "Write":
+    case "Edit": {
+      const path = (input.path as string) || "";
+      if (!path) return { decision: "allow" };
+
+      // Check sensitive paths.
+      const patterns = cfg.sensitive_paths || DEFAULT_SENSITIVE_PATTERNS;
+      if (isSensitivePath(path, patterns)) {
+        return { decision: "block", reason: `write to sensitive path blocked: ${path}` };
+      }
+
+      // Check cwd boundary.
+      if (cfg.cwd && !isPathInsideCwd(path, cfg.cwd, cfg.allowed_outside_cwd || [])) {
+        const reason = `write to path outside working directory: ${path}`;
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+      return { decision: "allow" };
+    }
+
+    case "Bash": {
+      const command = (input.command as string) || "";
+      if (!command) return { decision: "allow" };
+
+      // Build and test commands are always allowed.
+      if (matchesBuildOrTest(command)) {
+        return { decision: "allow", reason: "build/test command allowed" };
+      }
+
+      // Safe git commands allowed.
+      if (matchesSafeGit(command)) {
+        return { decision: "allow", reason: "safe git command allowed" };
+      }
+
+      // Check destructive commands.
+      if (isDestructiveCommand(command)) {
+        const reason = `destructive command blocked: ${command.slice(0, 80)}`;
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+
+      // Check env access.
+      if (matchesEnvAccess(command)) {
+        const reason = "environment access blocked: command reads env vars or secrets";
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+
+      // Check exfiltration.
+      if (isExfiltrationCommand(command)) {
+        const reason = `exfiltration blocked: ${command.slice(0, 80)}`;
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+
+      // Dangerous git operations.
+      if (isDangerousGit(command)) {
+        const reason = "dangerous git operation blocked";
+        if (mode === "warn") return { decision: "allow", reason: "[WARN] " + reason };
+        return { decision: "block", reason };
+      }
+
+      return { decision: "allow" };
+    }
+
+    default:
+      return { decision: "allow" };
+  }
+}
+
+function logAudit(entry: AuditEntry): void {
+  entry.timestamp = new Date().toISOString();
+  entry.redacted = true;
+  process.stderr.write("[security] " + JSON.stringify(entry) + "\n");
+}
+
 function textFromContent(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content
@@ -318,7 +651,7 @@ async function createPiSession(opts: RequestOptions | undefined) {
   const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
   const model = resolveModelFromRegistry(modelRegistry, opts?.provider, opts?.model);
   if (opts?.model && !model) {
-    redactedLog(`model not found in PI registry: provider=${opts.provider ?? ""} model=${opts.model}`);
+    throw new Error(`Modelo não encontrado no PI registry: provider=${opts.provider ?? ""} model=${opts.model}. Use /model para listar os disponíveis.`);
   }
 
   const resourceLoader = new DefaultResourceLoader({
@@ -359,7 +692,7 @@ async function handleQuery(req: Request): Promise<void> {
     `query start — rid=${reqId} provider=${opts?.provider ?? "default"} model=${opts?.model ?? "default"} resume=${opts?.resume ?? "none"} prompt="${req.prompt.slice(0, 80)}..."`,
   );
 
-  const timeoutMs = 10 * 60 * 1000;
+  const timeoutMs = 30 * 60 * 1000;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let canceled = false;
   let terminalEmitted = false;
@@ -387,13 +720,46 @@ async function handleQuery(req: Request): Promise<void> {
 
   activeRequests.set(reqId, { cancel: cancelActive });
   timeout = setTimeout(() => {
-    redactedLog(`query timeout — rid=${reqId} no result after 10 minutes`);
-    cancelActive("query timeout: no result after 10 minutes");
+    redactedLog(`query timeout — rid=${reqId} no result after 30 minutes`);
+    cancelActive("query timeout: no result after 30 minutes");
   }, timeoutMs);
 
   try {
     ({ session } = await createPiSession(opts));
     if (canceled) throw new Error("request canceled");
+
+    // Register security tool_call hook if enabled.
+    let unsubHook: (() => void) | undefined;
+    if (opts?.security?.enabled) {
+      if (typeof session.on !== "function") {
+        throw new Error("security hook not available: PI SDK version too old");
+      }
+      unsubHook = session.on("tool_call", async (event: { toolName: string; args: Record<string, unknown> }) => {
+        const decision = evaluateToolPolicy(event.toolName, event.args, opts.security!);
+
+        logAudit({
+          decision: decision.decision,
+          tool_name: event.toolName,
+          reason: decision.reason || "",
+          chat_id: opts.security!.chat_id,
+          agent_name: opts.security!.agent_name,
+          profile: opts.security!.profile,
+          cwd: opts.security!.cwd,
+          redacted: true,
+        });
+
+        if (decision.decision === "block") {
+          redactedLog(`security block: tool=${event.toolName} reason=${decision.reason}`);
+          return { block: true, reason: decision.reason };
+        }
+        if (decision.decision === "rewrite") {
+          Object.assign(event.args, decision.input);
+          return { rewrite: true };
+        }
+        // allow — let through
+        return undefined;
+      });
+    }
 
     const sessionID = session.sessionId;
     lastSessionID = sessionID;
@@ -458,6 +824,7 @@ async function handleQuery(req: Request): Promise<void> {
       }
     } finally {
       unsubscribe();
+      if (unsubHook) unsubHook();
     }
 
     if (!terminalEmitted) {
