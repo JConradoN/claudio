@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.7] - 2026-05-22
+
+### Fixed
+- Bridge: modelo não encontrado agora lança erro claro em vez de log silencioso
+  que fazia o processamento travar sem resposta.
+- `/stop` agora passa `userID` para cancelar a sessão correta (antes usava
+  `userID=0` que não casava com a chave de sessão).
+- Daemon: `auth.json` agora é symlink para `~/.pi/agent/auth.json` em vez de
+  cópia única, evitando credenciais stale que causavam hangs silenciosos.
+- Config: `telegram_allowed_group_ids` não é mais perdido na serialização
+  (removido `omitempty` que causava ciclo nil→vazio→omissão).
+- Config: `default_owner_user_id` não é mais perdido, e normalize preenche
+  do primeiro whitelist user quando zero.
+- Goroutine `chatActionLoop` agora tem `defer recover()` para não morrer
+  silenciosamente em caso de panic.
+
 ## [0.13.6] - 2026-05-22
 
 ### Fixed
