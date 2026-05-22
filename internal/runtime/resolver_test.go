@@ -349,3 +349,42 @@ func TestProjectMemoryDirs(t *testing.T) {
 		t.Errorf("ConversationProjectMemoryDir() = %q, want %q", gotConversation, wantConversation)
 	}
 }
+
+func TestResolveProjectCwd_RequiresAuthorizedPrefix(t *testing.T) {
+	root := t.TempDir()
+	safe := filepath.Join(root, "safe")
+	project := filepath.Join(safe, "project")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(allowedCwdPrefixesEnv, safe)
+
+	if _, err := ResolveProjectCwd(project); err != nil {
+		t.Fatalf("ResolveProjectCwd(%q) unexpected error: %v", project, err)
+	}
+	if _, err := ResolveProjectCwd(outside); err == nil {
+		t.Fatalf("ResolveProjectCwd(%q) expected authorized-prefix error", outside)
+	}
+}
+
+func TestResolveProjectCwd_CleansTraversalBeforePrefixCheck(t *testing.T) {
+	root := t.TempDir()
+	safe := filepath.Join(root, "safe")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(filepath.Join(safe, "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(allowedCwdPrefixesEnv, safe)
+
+	traversal := filepath.Join(safe, "child", "..", "..", "outside")
+	if _, err := ResolveProjectCwd(traversal); err == nil {
+		t.Fatalf("ResolveProjectCwd(%q) expected traversal outside prefix to be rejected", traversal)
+	}
+}

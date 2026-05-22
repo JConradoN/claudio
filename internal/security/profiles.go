@@ -46,8 +46,9 @@ const (
 	// exfiltrative commands via the policy hook.
 	ProfileExecuteSafe CapabilityProfile = "execute_safe"
 
-	// ProfilePrivileged grants wide tool access including ungoverned Bash.
-	// Requires explicit opt-in via configuration.
+	// ProfilePrivileged grants the broadest built-in tool access and bypasses
+	// normal Bash policy checks in the Bridge. Requires explicit opt-in via
+	// configuration.
 	ProfilePrivileged CapabilityProfile = "privileged"
 )
 
@@ -66,7 +67,7 @@ func ProfileTools(p CapabilityProfile) []string {
 		return []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob", "LS",
 			"WebSearch", "WebSearchPremium", "WebFetch"}
 	case ProfilePrivileged:
-		return []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob", "LS",
+		return []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob", "LS", "List",
 			"WebSearch", "WebSearchPremium", "WebFetch"}
 	default:
 		return nil

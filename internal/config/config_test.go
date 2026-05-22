@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/igormaneschy/aurelia/internal/runtime"
@@ -459,5 +460,64 @@ func TestProviderAPIKey_ReturnsEmptyForMissing(t *testing.T) {
 	}
 	if cfg.ProviderAPIKey("nonexistent") != "" {
 		t.Fatalf("expected empty for nonexistent, got %q", cfg.ProviderAPIKey("nonexistent"))
+	}
+}
+
+func TestLoad_EnvOverridesSecretsWithoutWritingThem(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("AURELIA_HOME", tmpDir)
+	t.Setenv("TELEGRAM_BOT_TOKEN", "env-telegram-token")
+	t.Setenv("ANTHROPIC_API_KEY", "env-anthropic-key")
+	t.Setenv("GROQ_API_KEY", "env-groq-key")
+
+	r, err := runtime.New()
+	if err != nil {
+		t.Fatalf("runtime.New() unexpected error: %v", err)
+	}
+	cfgJSON := `{
+		"default_provider": "anthropic",
+		"default_model": "claude-sonnet-4-6",
+		"providers": {
+			"anthropic": {"api_key": "file-anthropic-key"}
+		},
+		"telegram_bot_token": "file-telegram-token",
+		"telegram_allowed_user_ids": [123456]
+	}`
+	if err := os.MkdirAll(filepath.Dir(r.AppConfig()), 0o700); err != nil {
+		t.Fatalf("MkdirAll() unexpected error: %v", err)
+	}
+	if err := os.WriteFile(r.AppConfig(), []byte(cfgJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	cfg, err := Load(r)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.TelegramBotToken != "env-telegram-token" {
+		t.Fatalf("TelegramBotToken = %q, want env override", cfg.TelegramBotToken)
+	}
+	if cfg.ProviderAPIKey("anthropic") != "env-anthropic-key" {
+		t.Fatalf("anthropic key = %q, want env override", cfg.ProviderAPIKey("anthropic"))
+	}
+	if cfg.ProviderAPIKey("groq") != "env-groq-key" {
+		t.Fatalf("groq key = %q, want env-created provider", cfg.ProviderAPIKey("groq"))
+	}
+
+	onDisk, err := os.ReadFile(r.AppConfig())
+	if err != nil {
+		t.Fatalf("ReadFile() unexpected error: %v", err)
+	}
+	if strings.Contains(string(onDisk), "env-telegram-token") || strings.Contains(string(onDisk), "env-anthropic-key") {
+		t.Fatalf("env secret was written back to config: %s", onDisk)
+	}
+}
+
+func TestProviderAPIKeyEnv_NormalizesProviderName(t *testing.T) {
+	if got := providerAPIKeyEnv("opencode-go"); got != "OPENCODE_GO_API_KEY" {
+		t.Fatalf("providerAPIKeyEnv(opencode-go) = %q", got)
+	}
+	if got := providerAPIKeyEnv("kimi/coding"); got != "KIMI_CODING_API_KEY" {
+		t.Fatalf("providerAPIKeyEnv(kimi/coding) = %q", got)
 	}
 }
