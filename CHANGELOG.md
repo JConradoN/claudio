@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.9] - 2026-05-22
+
+### Security
+- Added environment variable overrides for API keys and Telegram bot token without writing env secrets back to config.
+- Hardened `/cwd` path resolution with cleaned/symlink-resolved authorized prefix validation.
+- Delimited and size-limited uploaded Markdown document content before prompt injection.
+- Added dedicated rotating security audit log at `~/.aurelia/audit.log`.
+- Differentiated `privileged` from `execute_safe` capability profile and added regression coverage.
+
 ## [0.13.8] - 2026-05-22
 
 ### Changed
