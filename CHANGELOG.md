@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.6] - 2026-05-22
+
+### Fixed
+- Model cache pre-warming: bridge agora inicia e popula cache de modelos durante
+  a inicialização do bot, eliminando timeout de 10s e cache vazio por 5 minutos
+  após restart do daemon.
+- Timeout de `getModels` aumentado de 10s para 30s em operações de modelo
+  (`cmdSetModel`, `handleModelCommand`) para garantir que bridge fria tenha
+  tempo de iniciar.
+- Resultado vazio do bridge não é mais cacheado — evita "modelo não encontrado"
+  falso persistente quando a bridge retorna lista vazia temporariamente.
+- Auto force-refresh: quando cache está vazio, `/model <nome>` tenta novamente
+  com força total antes de declarar "não encontrado".
+- `lista modelos` agora prioriza provedores locais (`ollama`, `ollama-tailscale`,
+  `lm-studio`) antes do limite de exibição de 25 modelos.
+- Botão refresh mostra resumo com timestamp e modelos locais, eliminando erro
+  "message is not modified" do Telegram.
+- Mensagem de permissão negada em callback de modelo restaurada para `c.Edit()`
+  (Telegram inline), corrigindo teste quebrado `TestHandleModelCallback_NonOwnerSetDeniedWithoutMutation`.
+
 ## [0.13.5] - 2026-05-22
 
 ### Fixed
