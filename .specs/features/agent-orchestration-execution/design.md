@@ -1,9 +1,9 @@
 # Agent Orchestration — Execution Mode — Design
 
 **Spec:** `.specs/features/agent-orchestration-execution/spec.md`
-**Roadmap step:** 2 — Close Orchestration Cycle
+**Roadmap step:** 3 — Close Orchestration Cycle
 **Status:** 🟡 Parcial (scaffold ~40%, ciclo não fecha)
-**Depende de:** Project Binding (✅ done), User Isolation partial (TurnContext/user_id)
+**Depende de:** Project Binding (✅ done), User Isolation runtime hardening (✅), Operational Observability
 
 ---
 

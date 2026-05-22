@@ -7,7 +7,7 @@
 
 > Directory name remains `multi-user-profiles`, but this design should be read as **User Isolation**. The whitelist remains the auth boundary; this feature isolates runtime state for already-authorized Telegram `user_id`s.
 >
-> Implementation note 2026-05-22: this document is the historical design. The current audited task/status summary lives in `tasks.md`. User×project private memory was moved to Sprint D (`.specs/features/project-memory/`), while session/runtime/Bridge hardening is closed here.
+> Implementation note 2026-05-22: this document is the historical design. The current audited task/status summary lives in `tasks.md`. User×project private memory was moved to Sprint E (`.specs/features/project-memory/`), while session/runtime/Bridge hardening is closed here.
 
 ---
 

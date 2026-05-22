@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.14.0] - 2026-05-23
+
+### Features
+
+- **observability**: new local observability layer with run_events correlation,
+  structured slog logging, phase constants, and Recorder interface.
+- **schema**: run_journal extended with user_id, entrypoint, agent_name, provider,
+  model, capability_profile, duration_ms, tokens, cost, error_class,
+  timeout_origin, used_fallback, session_file, parent_run_id.
+- **run_events table**: durable timeline per run with indexes.
+- **pipeline correlation**: RunContext created before Bridge execution; events
+  emitted for telegram_received, bridge_request_started, tool_use, tool_result,
+  bridge_result, run_completed, run_failed, run_timed_out, retry, fallback.
+- **/status upgrade**: now shows short run_id, provider/model, duration, tokens,
+  cost, and error info for failed runs.
+- **CLI debug**: `aurelia debug last|run|errors|metrics` with --json output.
+- **Telegram debug**: owner-only /debug last, /debug run, /debug errors.
+- **local metrics**: aggregate queries over time windows with breakdown by
+  provider, model, and entrypoint (p50/p95 duration, tokens, cost).
+- **docs/OBSERVABILITY.md**: operator guide covering CLI, Telegram, config.
+
 ## [0.13.9] - 2026-05-22
 
 ### Security

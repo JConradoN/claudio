@@ -314,6 +314,19 @@ func (f *fakeRunLog) Latest(ctx context.Context, chatID int64, threadID int) (*r
 	}
 	return f.latest, nil
 }
+func (f *fakeRunLog) RecordEvent(_ context.Context, _ runlog.RunEvent) error { return nil }
+func (f *fakeRunLog) ListEvents(_ context.Context, _ string) ([]runlog.RunEvent, error) {
+	return nil, nil
+}
+func (f *fakeRunLog) GetRun(_ context.Context, _ string) (*runlog.RunRecord, error) {
+	return nil, nil
+}
+func (f *fakeRunLog) ListRuns(_ context.Context, _ int64, _ int) ([]runlog.RunRecord, error) {
+	return nil, nil
+}
+func (f *fakeRunLog) Metrics(_ context.Context, _ runlog.MetricsFilter) (*runlog.MetricsResult, error) {
+	return nil, nil
+}
 func (f *fakeRunLog) Close() error { return nil }
 
 func TestBuildLastRunStateSection_ReturnsEmptyWhenNoRunLog(t *testing.T) {

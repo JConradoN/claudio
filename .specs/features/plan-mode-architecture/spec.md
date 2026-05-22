@@ -1,6 +1,6 @@
 # Plan Mode Architecture
 
-**Roadmap step:** 3  
+**Roadmap step:** 4  
 **Depende de:** `.specs/features/multi-user-profiles/` (`TurnContext`, `SessionKey`, `UserGate`, comandos por usuário)  
 **Depende de:** `.specs/features/project-binding/` (✅ done — `/cwd` persistente)  
 **Depende de:** `.specs/features/agent-orchestration-execution/` (`ExecutionContext`, handoff seguro, executor fail-closed)  

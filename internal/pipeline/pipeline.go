@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/continuity"
+	"github.com/igormaneschy/aurelia/internal/observability"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/runlog"
 	"github.com/igormaneschy/aurelia/internal/security"
@@ -615,13 +617,39 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	cancelDone := s.cancelBridgeOnContextDone(ctx, req.RequestID)
 	defer cancelDone()
 
-	// Start runlog entry
+	// Start runlog entry with extended observability context
 	cwd := s.effectiveCwd(nil, chatID, threadID)
-	runLogStarted := s.startRunLog(chatID, threadID, req.RequestID, cwd, userText)
+	agentName := ""
+	profile := ""
+	if req.Options.Security != nil {
+		agentName = req.Options.Security.AgentName
+		profile = req.Options.Security.Profile
+	}
+	runLogStarted := s.startRunLog(startRunLogParams{
+		ChatID:    chatID,
+		ThreadID:  threadID,
+		RequestID: req.RequestID,
+		CWD:       cwd,
+		Prompt:    userText,
+		UserID:    userID,
+		AgentName: agentName,
+		Provider:  req.Options.Provider,
+		Model:     req.Options.Model,
+		Profile:   profile,
+	})
+
+	// Record bridge_request_started event if the runlog started successfully.
+	if runLogStarted {
+		s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+			observability.PhaseBridgeRequestStarted,
+			fmt.Sprintf("request_id=%s provider=%s model=%s", req.RequestID, req.Options.Provider, req.Options.Model)))
+	}
 
 	var ch <-chan bridge.Event
 	var err error
 
+	// usedFallback tracks whether the resilient bridge fell back to a secondary provider.
+	var usedFallback bool
 	if s.resilient != nil {
 		res := s.resilient.Execute(ctx, req, func(msg string) {
 			_, _ = s.output.SendText(chatID, threadID, msg)
@@ -630,6 +658,13 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 			err = res.Err
 		} else {
 			ch = res.Events
+			usedFallback = res.UsedFallback
+		}
+		// Record fallback event if the resilient bridge used a fallback provider.
+		if usedFallback && runLogStarted {
+			s.recordPipelineEvent(chatID, threadID, observability.NewWarnEvent("",
+				observability.PhaseFallbackResult,
+				fmt.Sprintf("provider=%s model=%s", req.Options.Provider, req.Options.Model)))
 		}
 	} else {
 		ch, err = s.bridge.Execute(ctx, req)
@@ -644,7 +679,11 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	var outcome Outcome
 	if err != nil {
 		if errors.Is(err, errProcessDeath) {
-			// Let the existing process-death recovery below handle this.
+			// Record process death event; recovery below will handle it.
+			if runLogStarted {
+				s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+					observability.PhaseBridgeProcessDeath, "bridge process exited during Execute"))
+			}
 			outcome = OutcomeProcessDeath
 		} else if errors.Is(err, context.Canceled) {
 			if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID, userID, timeoutTracker); handled {
@@ -661,6 +700,8 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 			log.Printf("Bridge execute error: %s", redactSecrets(err.Error()))
 			if runLogStarted {
 				redacted := redactSecrets(err.Error())
+				s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+					observability.PhaseBridgeExecuteError, redacted))
 				s.patchContinuityFailure(chatID, threadID, "failed", redacted, userID)
 				s.completeRunLog(chatID, threadID, runlog.RunFailed, "", redacted)
 			}
@@ -699,6 +740,8 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	if runLogStarted {
 		s.patchContinuityFailure(chatID, threadID, "failed", "process death, retrying", userID)
 		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "process death, retrying")
+		s.recordPipelineEvent(chatID, threadID, observability.NewWarnEvent("",
+			observability.PhaseRetryStarted, "process death recovery, retrying"))
 	}
 
 	if s.bridgeFailures.inCooldown() {
@@ -724,6 +767,10 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 	if err != nil {
 		log.Printf("bridge: retry failed for chat=%d: %s", chatID, redactSecrets(err.Error()))
 		s.patchContinuitySessionCold(chatID, threadID, "bridge retry failed: "+redactSecrets(err.Error()))
+		if runLogStarted {
+			s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+				observability.PhaseRetryFailed, "retry failed: process death persisted"))
+		}
 		_ = s.output.SendError(chatID, threadID, bridgeRetryFailedMessage)
 		s.output.ConfirmMessage(chatID, messageID)
 		return
@@ -771,6 +818,8 @@ func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Co
 		log.Printf("pipeline: run canceled chat=%d thread=%d user=%d", chatID, threadID, userID)
 		s.patchContinuityFailure(chatID, threadID, "canceled", "cancelado pelo usuário", userID)
 		s.completeRunLog(chatID, threadID, runlog.RunCanceled, "", "cancelado pelo usuário")
+		s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+			observability.PhaseRunCanceled, "cancelado pelo usuário"))
 		return true
 	}
 	if ctx.Err() != nil {
@@ -778,6 +827,9 @@ func (s *Service) handleContextOutcome(parentCtx context.Context, ctx context.Co
 		log.Printf("pipeline: run timeout origin=%s elapsed=%s chat=%d thread=%d user=%d", origin, elapsed.Round(time.Second), chatID, threadID, userID)
 		s.patchContinuityFailure(chatID, threadID, "timed_out", origin, userID)
 		s.completeRunLog(chatID, threadID, runlog.RunTimedOut, "", origin)
+		s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+			observability.PhaseRunTimedOut,
+			fmt.Sprintf("origin=%s elapsed=%s", origin, elapsed.Round(time.Second))))
 		if s.sessions != nil {
 			s.sessions.DeactivateSession(chatID, threadID, userID)
 		}
@@ -873,6 +925,17 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			if ev.SessionID != "" {
 				s.updateRunLogSession(chatID, threadID, ev.SessionID)
 			}
+			// Record bridge_system event with model info and available tool names.
+			if s.runLog != nil {
+				modelInfo := ev.Model
+				sessionFile := ev.SessionFile
+				msg := fmt.Sprintf("model=%s session=%s", modelInfo, filepath.Base(sessionFile))
+				if len(ev.Tools) > 0 {
+					msg += fmt.Sprintf(" tools=[%s]", strings.Join(ev.Tools, ", "))
+				}
+				s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+					observability.PhaseBridgeSystem, msg))
+			}
 		case "tool_use":
 			toolName := ev.Name
 			if toolName == "" {
@@ -887,6 +950,10 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 			}
 			lastStreamFlush = time.Now()
 			s.recordToolUse(chatID, threadID, toolName)
+			// Record bridge_tool_use event.
+			s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+				observability.PhaseBridgeToolUse,
+				fmt.Sprintf("tool=%s", toolName)))
 			if toolUseSignal != nil {
 				select {
 				case toolUseSignal <- struct{}{}:
@@ -906,6 +973,9 @@ func (s *Service) ProcessBridgeEvents(chatID int64, threadID int, messageID int,
 					progress.ReportToolResult(summary)
 				}
 			}
+			// Record bridge_tool_result event.
+			s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+				observability.PhaseBridgeToolResult, summary))
 		case "assistant":
 			delta := eventContent(ev)
 			assistantText.WriteString(delta)
@@ -973,6 +1043,13 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	}
 
 	s.recordUsage(chatID, threadID, ev, userID)
+
+	// Record bridge_result event with usage data.
+	s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+		observability.PhaseBridgeResult,
+		fmt.Sprintf("tokens_in=%d tokens_out=%d cost=$%.4f turns=%d",
+			ev.InputTokens, ev.OutputTokens, ev.CostUSD, ev.NumTurns)))
+
 	finalText := strings.TrimSpace(assistantText.String())
 
 	if finalText == "" {
@@ -985,6 +1062,9 @@ func (s *Service) handleResultEvent(chatID int64, threadID int, messageID int, e
 	// Capture runID before completeRunLog cleans up runLogStates.
 	successRunID := s.getRunID(chatID, threadID)
 	s.completeRunLog(chatID, threadID, runlog.RunCompleted, safeFinalText, "")
+	// Record run_completed event.
+	s.recordPipelineEvent(chatID, threadID, observability.NewEvent("",
+		observability.PhaseRunCompleted, "status=completed"))
 
 	if ok, outcome := s.handlePlanExecution(chatID, threadID, messageID, finalText, safeFinalText, successRunID, userText, userID); ok {
 		return outcome
@@ -1007,6 +1087,8 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 
 		s.patchContinuityFailure(chatID, threadID, "failed", "empty result after work", userID)
 		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result after work")
+		s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+			observability.PhaseRunFailed, "empty result after work"))
 
 		recoveryMsg := buildEmptyResultRecoveryMessage(toolSummary)
 		if err := s.output.SendError(chatID, threadID, recoveryMsg); err != nil {
@@ -1017,6 +1099,8 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 			chatID, threadID, ev.RequestID)
 		s.patchContinuityFailure(chatID, threadID, "failed", "empty result", userID)
 		s.completeRunLog(chatID, threadID, runlog.RunFailed, "", "empty result")
+		s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+			observability.PhaseRunFailed, "empty result"))
 		if err := s.output.SendError(chatID, threadID, bridgeEmptyResultMessage); err != nil {
 			log.Printf("Failed to send empty-result error to chat %d: %v", chatID, err)
 		}
@@ -1490,6 +1574,8 @@ func (s *Service) handleErrorEvent(chatID int64, threadID int, messageID int, ev
 	status, runStatus, reason := classifyBridgeErrorOutcome(redacted)
 	s.patchContinuityFailure(chatID, threadID, status, reason, sessionUserID(userID...))
 	s.completeRunLog(chatID, threadID, runStatus, "", reason)
+	s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
+		observability.PhaseRunFailed, reason))
 	if err := s.output.SendError(chatID, threadID, redacted); err != nil {
 		log.Printf("Failed to send error to chat %d: %v", chatID, err)
 	}
@@ -1503,14 +1589,29 @@ func runLogKey(chatID int64, threadID int) string {
 	return fmt.Sprintf("%d:%d", chatID, threadID)
 }
 
+// startRunLogParams carries the extended context needed to populate a
+// run_journal start row. All fields are populated before Bridge execution.
+type startRunLogParams struct {
+	ChatID    int64
+	ThreadID  int
+	RequestID string
+	CWD       string
+	Prompt    string
+	UserID    int64
+	AgentName string
+	Provider  string
+	Model     string
+	Profile   string
+}
+
 // startRunLog creates a new runlog entry and stores the per-run state.
 // RunID is set to a uuid for durable unique identification across restarts.
 // Returns true if the runlog was started.
-func (s *Service) startRunLog(chatID int64, threadID int, requestID string, cwd string, prompt string) bool {
-	if s.runLog == nil || requestID == "" {
+func (s *Service) startRunLog(p startRunLogParams) bool {
+	if s.runLog == nil || p.RequestID == "" {
 		return false
 	}
-	key := runLogKey(chatID, threadID)
+	key := runLogKey(p.ChatID, p.ThreadID)
 
 	s.runLogMu.Lock()
 	defer s.runLogMu.Unlock()
@@ -1520,20 +1621,52 @@ func (s *Service) startRunLog(chatID int64, threadID int, requestID string, cwd 
 	runLogCtx, runLogCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer runLogCancel()
 	err := s.runLog.Start(runLogCtx, runlog.RunRecord{
-		RunID:     runID,
-		ChatID:    chatID,
-		ThreadID:  threadID,
-		RequestID: requestID,
-		CWD:       cwd,
-		Prompt:    truncatePrompt(redactSecrets(prompt)),
-		StartedAt: now,
+		RunID:             runID,
+		ChatID:            p.ChatID,
+		ThreadID:          p.ThreadID,
+		RequestID:         p.RequestID,
+		CWD:               p.CWD,
+		Prompt:            truncatePrompt(redactSecrets(p.Prompt)),
+		StartedAt:         now,
+		UserID:            p.UserID,
+		EntryPoint:        observability.EntryPointTelegram,
+		AgentName:         p.AgentName,
+		Provider:          p.Provider,
+		Model:             p.Model,
+		CapabilityProfile: p.Profile,
 	})
 	if err != nil {
-		log.Printf("runlog: failed to start %s: %v", requestID, err)
+		log.Printf("runlog: failed to start %s: %v", p.RequestID, err)
 		return false
 	}
 	s.runLogStates[key] = &runLogState{runID: runID}
 	return true
+}
+
+// recordPipelineEvent records a single observable event for the active run
+// on a chat/thread. Best-effort: errors are logged, never block the caller.
+// Uses a 500ms context timeout to avoid blocking the pipeline.
+func (s *Service) recordPipelineEvent(chatID int64, threadID int, ev observability.RunEvent) {
+	if s.runLog == nil {
+		return
+	}
+	runID := s.getRunID(chatID, threadID)
+	if runID == "" {
+		return
+	}
+	ev.RunID = runID
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := s.runLog.RecordEvent(ctx, runlog.RunEvent{
+		RunID:     ev.RunID,
+		Timestamp: ev.Timestamp.Unix(),
+		Phase:     ev.Phase,
+		Level:     ev.Level,
+		Message:   ev.Message,
+		MetadataJSON: ev.MetadataJSON,
+	}); err != nil {
+		slog.Warn("observability: event dropped", "run_id", runID, "phase", ev.Phase, "error", err)
+	}
 }
 
 // updateRunLogSession updates the session ID for an active runlog entry.

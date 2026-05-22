@@ -29,15 +29,85 @@ type RunRecord struct {
 	StartedAt  time.Time
 	UpdatedAt  time.Time
 	CompletedAt time.Time
+
+	// Extended observability fields (backfilled; zero/empty for old rows).
+	UserID           int64
+	EntryPoint       string // telegram | cron | orchestration | nudge | cli
+	AgentName        string
+	Provider         string
+	Model            string
+	CapabilityProfile string
+	DurationMs       int64
+	InputTokens      int64
+	OutputTokens     int64
+	CostUSD          float64
+	ToolCount        int
+	ErrorClass       string
+	TimeoutOrigin    string
+	UsedFallback     bool
+	SessionFile      string
+	ParentRunID      string
+}
+
+// RunRecordRx is the full read schema for scanning rows from run_journal.
+// It includes the extended fields with nullable types for backward
+// compatibility with rows that predate the migration.
+type RunRecordRx struct {
+	RunRecord
+	// DurationMsNullable, etc. can be added here if scan-time defaulting
+	// is needed. For now zero values from missing columns are acceptable.
 }
 
 // RunUpdate carries optional fields to update on an existing run.
 type RunUpdate struct {
-	RunID      string
-	SessionID  *string
-	Status     *RunStatus
-	Checkpoint *string
+	RunID       string
+	SessionID   *string
+	Status      *RunStatus
+	Checkpoint  *string
 	ToolSummary *string
-	Error      *string
+	Error       *string
 	CompletedAt *time.Time
+
+	// Extended observability fields (optional pointer semantics).
+	UserID           *int64
+	EntryPoint       *string
+	AgentName        *string
+	Provider         *string
+	Model            *string
+	CapabilityProfile *string
+	DurationMs       *int64
+	InputTokens      *int64
+	OutputTokens     *int64
+	CostUSD          *float64
+	ToolCount        *int
+	ErrorClass       *string
+	TimeoutOrigin    *string
+	UsedFallback     *bool
+	SessionFile      *string
+	ParentRunID      *string
+}
+
+// RunEvent represents a single point-in-time timeline event.
+type RunEvent struct {
+	ID           int64  // auto-increment primary key
+	RunID        string // correlation id
+	Timestamp    int64  // unix timestamp (seconds)
+	Phase        string // e.g. "telegram_received", "bridge_request_started"
+	Level        string // "info", "warn", "error"
+	Message      string
+	MetadataJSON string // small redacted JSON blob
+}
+
+// RunResult carries completion fields computed from a bridge result event.
+type RunResult struct {
+	InputTokens  int64
+	OutputTokens int64
+	CostUSD      float64
+	ToolCount    int
+	DurationMs   int64
+	Status       RunStatus
+	ErrorClass   string
+	TimeoutOrigin string
+	UsedFallback  bool
+	SessionFile  string
 }

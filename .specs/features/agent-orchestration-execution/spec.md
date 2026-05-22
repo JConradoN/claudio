@@ -1,8 +1,8 @@
 # Agent Orchestration — Execution Mode
 
-**Roadmap step:** 2 — Close Orchestration Cycle  
+**Roadmap step:** 3 — Close Orchestration Cycle  
 **Companion spec:** `.specs/features/plan-mode-architecture/` (covers how the artifacts this spec consumes are produced)  
-**Depends on:** `.specs/features/project-binding/` (✅ done) + `.specs/features/multi-user-profiles/` partial (para `TurnContext`/`user_id` no handoff)  
+**Depends on:** `.specs/features/project-binding/` (✅ done) + `.specs/features/multi-user-profiles/` (✅ runtime hardening) + `.specs/features/operational-observability/`  
 **Desbloqueia:** Plan Mode handoff, Agent Comms
 
 ## Problem Statement
