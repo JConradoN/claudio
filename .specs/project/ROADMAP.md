@@ -45,13 +45,12 @@ O objetivo é evitar dois extremos: o Aurélia não deve virar apenas um wrapper
 
 A próxima onda foca em tornar o sistema seguro e estável para trabalho autônomo em projetos reais:
 
-1. concluir o hardening pós-v0.13 do limite PI↔Aurelia;
-2. fechar lacunas residuais de User Isolation no runtime;
-3. fechar o ciclo de execução orquestrada (o scaffold precisa ser conectado);
-4. transformar plan mode em modo explícito, persistente e retomável;
-5. escopar memória por usuário/projeto com semântica estável;
-6. promover a memória para uma Wiki transversal via MCP;
-7. só então ativar nudge profundo, agent comms e auto-skills.
+1. manter fechado o hardening pós-v0.13 do limite PI↔Aurelia;
+2. usar a base de User Isolation já auditada para fechar o ciclo de execução orquestrada;
+3. transformar plan mode em modo explícito, persistente e retomável;
+4. escopar memória por usuário/projeto com semântica estável;
+5. promover a memória para uma Wiki transversal via MCP;
+6. só então ativar nudge profundo, agent comms e auto-skills.
 
 **Ordem é importante:** cada spec depende da anterior, técnica e conceitualmente. O refactoring do PI SDK pode ser feito em paralelo com User Isolation, mas deve ser merged antes para reduzir a superfície de código.
 
@@ -94,33 +93,34 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ## 1. User Isolation
 
-**Spec:** `.specs/features/multi-user-profiles/`
-**Design:** `.specs/features/multi-user-profiles/design.md`
-**Tasks:** `.specs/features/multi-user-profiles/tasks.md`
-**Status:** 🟡 MVP implementado em v0.11.0; hardening pendente
-**Prioridade:** P0 foundation
+**Spec:** `.specs/features/multi-user-profiles/`  
+**Design:** `.specs/features/multi-user-profiles/design.md`  
+**Tasks:** `.specs/features/multi-user-profiles/tasks.md`  
+**Status:** ✅ MVP + runtime hardening auditados em 2026-05-22  
+**Prioridade:** P0 foundation — fechado para sessão/runtime
 
-**Problem:** A whitelist já permite múltiplos `user_id`s. O MVP agora separa grande parte do estado pessoal, mas ainda há paths de runtime que precisam ser auditados para garantir que nenhuma sessão/cancelamento/estado ativo use só `(chat_id, thread_id)` quando deveria usar `user_id`.
+**Problem fechado:** A whitelist permite múltiplos `user_id`s. O runtime agora separa sessão PI, cancelamento, status, reset, active commands do Bridge, persona/user memory base, nudge buffer e cron owner por usuário.
 
-**Já entregue em v0.11.0:**
+**Entregue:**
 
 - `TurnContext` e `SessionKey{chat_id, thread_id, user_id}`;
-- `ConversationKey{chat_id, thread_id}` para `/cwd` e topic memory;
-- `internal/users/` — Profile, Resolver, Store;
+- `ConversationKey{chat_id, thread_id}` para `/cwd` e project binding compartilhado por conversa/tópico;
+- `internal/users/` — Profile, Resolver, Store, Onboarder e SQLite onboarding state;
 - `UserGate` antes de comandos/pipeline;
 - USER/persona/memória pessoal por usuário;
-- cron owner normalizado;
-- Comando CLI `migrate-multi-user`;
-- `/users`, `/forget-me`, owner-only guards.
+- cron owner normalizado e lifecycle methods owner-scoped;
+- comando CLI `migrate-multi-user` com lock/marker, `--resume` e `--force`;
+- `/users`, `/forgetme`, owner-only guards;
+- runtime sem chamadas legacy de sessão PI (`sessions.Get/Set/ClearSession/Deactivate/GetWithState`) fora de compat/testes;
+- `Cancel`, `WorkStatus`, `CancelAllForUser`, Bridge `get-state/abort/steer/follow-up` e `chatKey` com `user_id`;
+- regressões para dois usuários no mesmo chat/thread não compartilharem `session_file`/active run/reset.
 
-**Ainda pendente para fechar o sprint:**
+**Fora deste sprint:**
 
-- Corrigir `CancelAllForUser`: hoje `activeSessions` já usa `chatID:threadID:userID`, mas o cleanup ainda envia `abort` sem escopo para o Bridge.
-- Auditar `Cancel`, `WorkStatus`, bridge `get-state/abort/steer/follow-up` e runlog para garantir escopo por usuário onde necessário.
-- Marcar tarefas reais em `tasks.md`; hoje o arquivo está stale e todo desmarcado.
-- Teste de regressão explícito: dois usuários no mesmo chat/thread não compartilham `session_file`.
+- Memória privada de projeto por `(user_id, project_slug)` continua no Sprint D (`User-Scoped Project Memory`). Hoje há memória pessoal por usuário, mas `runtime.ProjectMemoryDir/ConversationProjectMemoryDir` ainda é principalmente cwd/chat/thread-scoped.
+- O `continuity.Store` permanece `ConversationKey{chat_id, thread_id}` por semântica atual de conversa/tópico. Os patches usam o `session_file` user-scoped correto; continuidade privada por usuário fica como decisão futura antes de Nudge profundo, se necessário.
 
-**Por que continua P0:** sem `user_id` propagado integralmente, Plan Mode, Auto-Skills, memória e nudge podem vazar estado entre usuários autorizados.
+**Por que era P0:** sem `user_id` propagado integralmente, Plan Mode, Auto-Skills, memória e nudge poderiam vazar estado entre usuários autorizados. O caminho crítico de sessão/runtime está fechado.
 
 ---
 
@@ -279,10 +279,10 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 ```text
 Foundation validada (Security Guard-Rails + Project Binding + Bridge Resilience)
       │
-      ├──→ 0. Delegate to PI SDK Native core ✅ / hardening pendente
+      ├──→ 0. Delegate to PI SDK Native core ✅
       │
       ▼
-1. User Isolation MVP ✅ / hardening pendente
+1. User Isolation MVP + runtime hardening ✅
       │
       ▼
 2. Close Orchestration Cycle
@@ -319,16 +319,17 @@ Sprint 0: Delegate to PI SDK Native
   ├─ 🟡 Decision: keep internal/agents as Aurelia product feature for now; investigate PI-native discovery via agentsFilesOverride
   └─ 🟡 Validation/docs: E2E specialist + stale specs cleanup
 
-Sprint A: User Isolation MVP
+Sprint A: User Isolation MVP + runtime hardening
   ├─ ✅ TurnContext + SessionKey/ConversationKey
-  ├─ ✅ internal/users/ (Profile, Resolver, Store)
+  ├─ ✅ internal/users/ (Profile, Resolver, Store, Onboarder)
   ├─ ✅ CLI migrate-multi-user
   ├─ ✅ cron owner normalizado
   ├─ ✅ session isolation + persona per-user
   ├─ ✅ memory/dream per-user base
   ├─ ✅ pipeline integration + UserGate
   ├─ ✅ owner-only commands
-  └─ 🟡 Hardening: CancelAllForUser + active run/cancel/get-state fully user-scoped
+  ├─ ✅ CancelAllForUser + active run/cancel/status/get-state user-scoped
+  └─ ➡️ User×project private memory movida para Sprint D
 
 Sprint B: Close Orchestration Cycle (T0–T12 do tasks.md)
   ├─ ExecutionContext com cwd+threadID
@@ -377,19 +378,20 @@ Sprint H: Auto-Skills
 
 ## Nota de implementação incremental
 
-`User Isolation` é grande. Não é necessário implementar tudo antes de seguir. O primeiro slice deve entregar apenas a base que desbloqueia o resto:
+A base incremental de `User Isolation` já foi entregue e auditada:
 
 ```text
 TurnContext
 SessionKey com user_id
-ConversationKey (já existe)
-internal/users/ básico
+ConversationKey para /cwd e project binding
+internal/users/
 UserGate
 cron owner
 migração CLI
+active run / Bridge commands user-scoped
 ```
 
-Depois disso, `Orchestration Cycle` já pode usar `ExecutionContext` com `user_id` opcional (default=0 durante transição) e estabilizar a execução.
+O próximo trabalho deve assumir `user_id` real no handoff e evitar novos caminhos com `userID=0`, exceto compatibilidade/testes. `Orchestration Cycle` já pode usar `ExecutionContext` com `user_id` propagado.
 
 ## Backlog futuro
 

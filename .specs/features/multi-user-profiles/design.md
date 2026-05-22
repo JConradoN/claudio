@@ -2,10 +2,12 @@
 
 **Spec:** `.specs/features/multi-user-profiles/spec.md`
 **Roadmap step:** 1 — P0 Foundation
-**Status:** 🔴 A implementar (0%)
+**Status:** ✅ Implementado + runtime hardening auditado (2026-05-22)
 **Desbloqueia:** Tudo no roadmap (Orchestration, Plan Mode, Memory, Wiki, Nudge, Comms, Skills)
 
 > Directory name remains `multi-user-profiles`, but this design should be read as **User Isolation**. The whitelist remains the auth boundary; this feature isolates runtime state for already-authorized Telegram `user_id`s.
+>
+> Implementation note 2026-05-22: this document is the historical design. The current audited task/status summary lives in `tasks.md`. User×project private memory was moved to Sprint D (`.specs/features/project-memory/`), while session/runtime/Bridge hardening is closed here.
 
 ---
 

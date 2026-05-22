@@ -1,29 +1,37 @@
 # User Isolation Hardening — Análise e Plano de Correção
 
-Data: 2026-05-21  
+Data original: 2026-05-21  
+Atualização: 2026-05-22  
 Escopo: hardening pós-v0.13.0 para garantir isolamento de sessão PI por usuário e corrigir timeouts indevidos em sessões longas gerenciadas pelo PI.
 
-## Resumo executivo
+## Status 2026-05-22
 
-A base já possui suporte parcial a `userID` no `session.Store`:
+O hardening de sessão/runtime descrito neste documento foi aplicado e auditado.
 
-- `GetSession(chatID, threadID, userID)`
-- `GetSessionWithState(chatID, threadID, userID)`
-- `SetSession(chatID, threadID, userID, sessionFile)`
-- `ClearSessionForUser(chatID, threadID, userID)`
-- `DeactivateSession(chatID, threadID, userID)`
+Validação de documentação/código:
 
-O problema é que ainda existem chamadas runtime usando APIs legacy sem `userID`, que operam com `UserID=0`:
+```bash
+rg "sessions\.(Get|Set|ClearSession|Deactivate|GetWithState)\(" internal --glob '!**/*_test.go'
+```
 
-- `sessions.Get(...)`
-- `sessions.Set(...)`
-- `sessions.ClearSession(...)`
-- `sessions.Deactivate(...)`
-- `sessions.GetWithState(...)`
+Resultado: nenhuma chamada runtime legacy encontrada em `internal/` fora de testes.
 
-Isso pode causar divergência entre sessão real do usuário e sessão legacy, especialmente em reset, retry, timeout, empty-result e continuity.
+Estado atual:
 
-Há também um segundo problema operacional: sessões longas ainda caem por timeout após alguns minutos, apesar de o PI ser o gestor da sessão. A análise local mostra que a Aurelia já possui timeout máximo aparente de 30 minutos no Go e no bridge TypeScript, então quedas por volta de 10 minutos indicam provável limite em outra camada, timeout ocioso indevido, orchestration timeout ou cancelamento propagado incorretamente.
+- `session.Store` expõe e o runtime usa APIs com `userID`: `GetSession`, `GetSessionWithState`, `SetSession`, `ClearSessionForUser`, `DeactivateSession`.
+- `pipeline.Service.activeSessions` usa `chatID:threadID:userID`.
+- `Cancel`, `WorkStatus` e `CancelAllForUser` propagam `UserID` para o Bridge.
+- Bridge `chatKey(chatID, threadID, userID)` é usado por `query`, `steer`, `follow-up`, `abort` e `get-state`.
+- Reset, retry pós-bridge-death, timeout, empty-result e continuity session-id patch usam sessão user-scoped.
+- Timeouts agora logam origem/duração no pipeline (`max_execution_timeout`, cancelamento etc.); a investigação de sessões longas deve partir desses logs.
+
+Este arquivo fica como histórico de análise e checklist de regressão. O estado canônico de roadmap está em `.specs/project/ROADMAP.md` e `.specs/features/multi-user-profiles/tasks.md`.
+
+## Resumo executivo histórico
+
+A base possuía suporte parcial a `userID` no `session.Store`, mas ainda havia chamadas runtime usando APIs legacy sem `userID`. Isso podia causar divergência entre sessão real do usuário e sessão legacy, especialmente em reset, retry, timeout, empty-result e continuity.
+
+Também havia suspeita operacional de sessões longas caírem por timeout após alguns minutos. A análise local mostrou timeout máximo aparente de 30 minutos no Go e no Bridge TypeScript; quedas por volta de 10 minutos deveriam ser tratadas como bug de origem de timeout, não como simples ausência de constante.
 
 ## Riscos principais
 
@@ -100,7 +108,7 @@ Garantir que todos os fluxos de sessão PI usem a chave completa:
 
 CWD pode continuar conversation-scoped por enquanto se essa for a decisão arquitetural atual; esta análise foca em sessão PI.
 
-## Plano de correção recomendado
+## Plano histórico de correção aplicado
 
 ### 1. Migrar reset de sessão
 
@@ -265,7 +273,7 @@ Essas funções montam estado de continuidade/sessão ativa. Se forem usadas em 
 bc.sessions.GetSessionWithState(chatID, threadID, userID)
 ```
 
-Ação recomendada:
+Ação histórica recomendada:
 
 - identificar call chain de `buildLastRunStateSection(...)`;
 - adicionar `userID` na assinatura se fizer parte do prompt runtime;
@@ -287,7 +295,7 @@ Arquivos principais:
 - `bridge/index.ts`
 - `internal/telegram/orchestration.go`, se o problema ocorrer em execução de plano aprovado
 
-Ação recomendada:
+Ação histórica recomendada:
 
 1. **Instrumentar origem do timeout** antes de só aumentar constantes:
    - logar duração real do run no timeout;
@@ -334,7 +342,7 @@ TestStore_DeactivateSession_PreservesOtherUsers
 
 ### Telegram commands
 
-Criar testes para:
+Testes esperados:
 
 ```text
 /session reset limpa apenas a sessão do sender
@@ -345,7 +353,7 @@ cancelActiveRun recebe userID correto
 
 ### Pipeline
 
-Criar testes para:
+Testes esperados:
 
 ```text
 retry pós bridge death usa GetSession(chat, thread, user)
@@ -375,40 +383,31 @@ sessions.SetSession(chatID, threadID, userB, "sess-B")
 // userB permanece intacto
 ```
 
-## Validação recomendada
+## Validação recomendada para regressões futuras
 
-Após implementar:
+Quando alterar código de sessão/Bridge/pipeline/Telegram commands:
 
 ```bash
-go test ./...
+rg "sessions\.(Get|Set|ClearSession|Deactivate|GetWithState)\(" internal --glob '!**/*_test.go'
+go test ./internal/session/... ./internal/pipeline/... ./internal/telegram/... -short
 go build ./...
-cd bridge && npm run build
 ```
 
-Se houver alteração no bundle TypeScript:
+Se houver alteração em `bridge/index.ts`:
 
 ```bash
 cd bridge && npm run build
+cp bundle.js ../internal/bridge/bundle.js
 ```
 
-## Critério de aceite
+## Critério de aceite atual
 
-- Nenhuma chamada runtime de sessão PI usa `sessions.Get`, `sessions.Set`, `sessions.ClearSession`, `sessions.Deactivate` ou `sessions.GetWithState` sem justificar compatibilidade.
-- Reset, retry, timeout, empty-result e continuity usam `userID`.
-- Testes multi-user cobrem mesmo `chatID` + mesmo `threadID` + usuários diferentes.
-- Sessões longas gerenciadas pelo PI não caem por timeout local antes do limite esperado.
-- Todo timeout real informa origem: `idle_bridge_timeout`, `max_execution_timeout`, `bridge_query_timeout`, `orchestration_timeout` ou `provider/pi_timeout`.
-- Limites de timeout Go, bridge TypeScript e orquestração estão alinhados ou explicitamente documentados.
-- `go test ./...`, `go build ./...` e build do bridge passam.
+- ✅ Nenhuma chamada runtime de sessão PI usa `sessions.Get`, `sessions.Set`, `sessions.ClearSession`, `sessions.Deactivate` ou `sessions.GetWithState` fora de compat/testes.
+- ✅ Reset, retry, timeout, empty-result e continuity session-id patch usam `userID`.
+- ✅ Testes multi-user cobrem mesmo `chatID` + mesmo `threadID` + usuários diferentes para store, active sessions e comandos críticos.
+- ✅ Timeouts de pipeline logam origem/duração; novas investigações devem usar esses logs.
+- ➡️ Sessões longas E2E continuam sendo validação operacional/live, não documentação.
 
-## Ordem sugerida de implementação
+## Próxima implementação relacionada
 
-1. Corrigir `commands.go` reset/session/model reset.
-2. Corrigir `pipeline.go` retry, timeout e empty-result.
-3. Corrigir continuity patch com propagação de `userID`.
-4. Revisar `prompt_builder.go` e call chain runtime.
-5. Instrumentar origem dos timeouts longos.
-6. Corrigir `idleBridgeTimeout`/watchdog e alinhar timeouts Go ↔ bridge ↔ orquestração.
-7. Adicionar testes multi-user e testes de sessão longa.
-8. Rodar validação completa.
-9. Atualizar `CHANGELOG.md` com `v0.13.1 — User Isolation hardening + long session timeout fix`.
+Não reabrir este sprint para memória privada de projeto. O próximo escopo relacionado é `Sprint D — User-Scoped Project Memory`, onde paths de projeto devem virar `(user_id, project_slug)` antes de Wiki/Nudge profundo.
