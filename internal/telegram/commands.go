@@ -816,12 +816,20 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 	}
 
 	// Validate: check if the model exists in PI registry
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	available, err := bc.getModels(ctx, false)
 	if err != nil {
 		return "", fmt.Errorf("falha ao consultar modelos: %w", err)
+	}
+
+	// If cache was empty (e.g. first request after restart), force-refresh once.
+	if len(available) == 0 {
+		available, err = bc.getModels(ctx, true)
+		if err != nil {
+			return "", fmt.Errorf("falha ao consultar modelos: %w", err)
+		}
 	}
 
 	var matched *bridge.ModelInfo

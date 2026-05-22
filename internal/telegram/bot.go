@@ -191,11 +191,27 @@ func NewBotController(
 	bc.nudgeBuffer = bc.pipeline.NudgeBuffer()
 
 	bc.setupRoutes()
+
+	// Pre-warm the model cache in the background so the bridge process is
+	// ready and models are available before the user opens /model.
+	bc.prewarmModelCache()
+
 	return bc, nil
 }
 
 // SetOrchestrator injects the orchestrator after construction.
 // Called separately to avoid changing the NewBotController signature.
+func (bc *BotController) prewarmModelCache() {
+	if bc.bridge == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		_, _ = bc.getModels(ctx, true)
+	}()
+}
+
 func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {
 	bc.orchestrator = o
 	bc.ensurePipeline().SetOrchestrator(o)
@@ -279,8 +295,14 @@ func (bc *BotController) getModels(ctx context.Context, force bool) ([]bridge.Mo
 		return nil, err
 	}
 
-	bc.modelCache = models
-	bc.modelCacheExpiry = time.Now().Add(5 * time.Minute)
+	// Only cache non-empty results to prevent transient failures or empty
+	// bridge responses from blocking model menu for 5 minutes.
+	if len(models) > 0 {
+		bc.modelCache = models
+		bc.modelCacheExpiry = time.Now().Add(5 * time.Minute)
+	} else {
+		log.Printf("getModels: bridge returned empty model list, keeping existing cache")
+	}
 	return models, nil
 }
 

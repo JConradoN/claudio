@@ -333,14 +333,21 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nBridge indisponível.", threadID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	models, err := bc.getModels(ctx, false)
 	if err != nil {
 		return SendTextWithThread(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err), threadID)
 	}
 	if len(models) == 0 {
-		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nNenhum modelo disponível.", threadID)
+		// Cache was empty — force-refresh once; bridge may have been cold.
+		models, err = bc.getModels(ctx, true)
+		if err != nil {
+			return SendTextWithThread(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err), threadID)
+		}
+		if len(models) == 0 {
+			return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nNenhum modelo disponível.", threadID)
+		}
 	}
 
 	return bc.sendProviderMenu(c, false)
