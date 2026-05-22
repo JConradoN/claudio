@@ -98,6 +98,9 @@ The long-term differentiator is the **Wiki Memory Gateway**: a local-first, mark
 - **Voice transcription** — Groq STT converts voice messages to text (Whisper)
 - **Vision fallback** — configure a separate vision model for image inputs
   while keeping a faster text-only model as default
+- **Operational observability** — structured slog logging (text/JSON), durable run
+  timelines with `run_events`, extended `run_journal` (provider, model, tokens,
+  cost, errors, timeout, fallback), metrics queries, and debug commands
 
 ## Runtime Features
 
@@ -107,6 +110,10 @@ Aurelia uses a TypeScript Bridge adapting the PI SDK as its inference and execut
 - **API key auth** — provider keys are configured during onboarding and exported to the bridge runtime environment.
 - **Streaming progress** — PI tool events are mapped back into Telegram progress messages.
 - **Long-lived sessions** — Bridge requests preserve PI `session_file` paths for continuity; context pruning is handled by PI SDK compaction.
+- **Observability** — every run gets a unique `run_id` with timeline events
+  (`bridge_request_started`, `tool_use`, `run_completed`, etc.); phase events
+  are persisted in `run_events` table and queryable via CLI or Telegram debug
+  commands.
 
 ## Runtime Model
 
@@ -257,8 +264,12 @@ The model sees all memory layers in its system prompt and can read/write them du
 | `/cwd <path>` | Set working directory for this chat |
 | `/reset` | Reset session (alias for `/new`) |
 | `/usage` | Show session token usage and cost |
+| `/status` | Show daemon status, model, session, and latest run info |
 | `/cron` | Manage schedules (list, add, delete, pause, resume) |
 | `/agents` | List available agents |
+| `/debug last` | Show latest run summary (status, provider, cost, duration) — owner only |
+| `/debug run <id>` | Show full metadata and timeline for a specific run — owner only |
+| `/debug errors` | Show recent failed/timed-out runs — owner only |
 
 ## CLI
 
@@ -279,6 +290,13 @@ aurelia cron del <job-id>
 aurelia telegram react <chat-id> <message-id> <emoji>
 aurelia telegram send <chat-id> <text>
 aurelia telegram reply <chat-id> <message-id> <text>
+
+# Operational debug (view runs, errors, metrics)
+aurelia debug last                    # Latest run with timeline
+aurelia debug run <run_id>            # Full metadata + timeline
+aurelia debug errors --limit 20       # Recent failed/timed-out runs
+aurelia debug metrics --days 1        # Aggregate metrics (p50/p95, cost, breakdowns)
+aurelia debug last --json             # Machine-readable JSON output
 ```
 
 ## Setup
@@ -437,6 +455,7 @@ Aurelia supports local models via [Ollama](https://ollama.com/) or any OpenAI-co
 |----------|---------|
 | [CLAUDE.md](CLAUDE.md) | Instructions for coding agents |
 | [CHANGELOG.md](CHANGELOG.md) | Release history and changes |
+| [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Operational observability guide (debug, metrics, log config) |
 | [.specs/codebase/ARCHITECTURE.md](.specs/codebase/ARCHITECTURE.md) | System architecture and patterns |
 | [.specs/codebase/CONVENTIONS.md](.specs/codebase/CONVENTIONS.md) | Code conventions and Go patterns |
 | [.specs/codebase/STACK.md](.specs/codebase/STACK.md) | Technology stack and dependencies |
