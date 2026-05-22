@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -31,6 +32,12 @@ func startChatActionLoop(sender actionSender, recipient telebot.Recipient, actio
 	var once sync.Once
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("telegram: panic in chatActionLoop: %v", r)
+			}
+		}()
+
 		notify()
 
 		ticker := time.NewTicker(interval)

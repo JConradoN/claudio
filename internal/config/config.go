@@ -69,7 +69,7 @@ type AppConfig struct {
 
 	TelegramBotToken        string  `json:"telegram_bot_token"`
 	TelegramAllowedUserIDs  []int64 `json:"telegram_allowed_user_ids"`
-	TelegramAllowedGroupIDs []int64 `json:"telegram_allowed_group_ids,omitempty"`
+	TelegramAllowedGroupIDs []int64 `json:"telegram_allowed_group_ids"`
 
 	STTProvider string `json:"stt_provider"`
 
@@ -190,7 +190,7 @@ type fileConfig struct {
 
 	TelegramBotToken        string  `json:"telegram_bot_token"`
 	TelegramAllowedUserIDs  []int64 `json:"telegram_allowed_user_ids"`
-	TelegramAllowedGroupIDs []int64 `json:"telegram_allowed_group_ids,omitempty"`
+	TelegramAllowedGroupIDs []int64 `json:"telegram_allowed_group_ids"`
 
 	STTProvider string `json:"stt_provider"`
 
@@ -209,7 +209,7 @@ type fileConfig struct {
 	SecurityConfig  security.SecurityConfig `json:"security,omitempty"`
 	SummaryInterval int                     `json:"summary_interval,omitempty"`
 
-	DefaultOwnerUserID int64 `json:"default_owner_user_id,omitempty"`
+	DefaultOwnerUserID int64 `json:"default_owner_user_id"`
 }
 
 // Load reads the instance-local JSON config, creates it with defaults when
@@ -296,6 +296,9 @@ func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver, preserveAutoMo
 	}
 	if cfg.TelegramAllowedGroupIDs == nil {
 		cfg.TelegramAllowedGroupIDs = defaults.TelegramAllowedGroupIDs
+	}
+	if cfg.DefaultOwnerUserID == 0 && len(cfg.TelegramAllowedUserIDs) > 0 {
+		cfg.DefaultOwnerUserID = cfg.TelegramAllowedUserIDs[0]
 	}
 	if !preserveAutoModel && cfg.DefaultProvider == "" {
 		cfg.DefaultProvider = defaults.DefaultProvider
