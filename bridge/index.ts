@@ -717,6 +717,7 @@ async function handleQuery(req: Request): Promise<void> {
   let terminalEmitted = false;
   let turnCount = 0;
   let session: Awaited<ReturnType<typeof createPiSession>>["session"] | undefined;
+  let healthTimer: ReturnType<typeof setInterval> | undefined;
   const startedAt = Date.now();
 
   const emitTerminalError = (message: string): void => {
@@ -810,7 +811,7 @@ async function handleQuery(req: Request): Promise<void> {
 
     // Health check: warn if no subscription events for 30s during active query.
     // Does not affect execution — purely diagnostic.
-    const healthTimer = setInterval(() => {
+    healthTimer = setInterval(() => {
       if (terminalEmitted || canceled) {
         clearInterval(healthTimer);
         return;

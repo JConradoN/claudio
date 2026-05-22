@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.4] - 2026-05-22
+
+### Added
+- `/model refresh` command and `🔄 Atualizar modelos` button for explicit PI model catalog refresh
+- `mdl_refresh` callback handler with owner-gated force-refetch, cache update, and menu redraw
+- `TestCmdRefreshModels_BridgeUnavailable`, `TestCmdSetModel_OwnerRefreshBypassesFreshCache`,
+  `TestCmdSetModel_NonOwnerRefreshDeniedWithoutFetch`, and
+  `TestHandleModelCallback_NonOwnerRefreshDeniedWithoutFetch` for refresh security boundary and edge cases
+
+### Fixed
+- Bridge `healthTimer` is now declared outside `try` to prevent `ReferenceError` in early-exit paths
+- Removed redundant cache write in `handleModelCommand` (`getModels` already populates cache)
+- `cmdRefreshModels` now handles empty model list gracefully instead of showing `✅ 0 modelos`
+
+### Changed
+- `getModels` uses `force` parameter to bypass 5-min cache TTL on refresh
+- Model listing commands use `activeModelLister()` interface instead of direct `bc.bridge` access
+- `sendProviderMenu` includes refresh button as first row
+
 ## [0.13.3] - 2026-05-22
 
 ### Changed

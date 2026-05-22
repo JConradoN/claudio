@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,20 @@ import (
 	"github.com/igormaneschy/aurelia/internal/session"
 	"gopkg.in/telebot.v3"
 )
+
+type fakeModelLister struct {
+	calls  int
+	models [][]bridge.ModelInfo
+}
+
+func (f *fakeModelLister) ListModels(context.Context) ([]bridge.ModelInfo, error) {
+	f.calls++
+	idx := f.calls - 1
+	if idx >= len(f.models) {
+		idx = len(f.models) - 1
+	}
+	return f.models[idx], nil
+}
 
 func TestCmdSetModel_NonOwnerAutoDeniedWithoutMutation(t *testing.T) {
 	t.Parallel()
@@ -130,6 +145,141 @@ func TestSetModelFromCallback_OwnerValidModelPersistsAndResetsCurrentScope(t *te
 	}
 }
 
+func TestCmdRefreshModels_BridgeUnavailable(t *testing.T) {
+	t.Parallel()
+
+	bc := testModelController(session.NewStore())
+	// no modelLister and no bridge → activeModelLister() returns nil
+	reply, err := bc.cmdRefreshModels()
+	if err != nil {
+		t.Fatalf("cmdRefreshModels() error = %v", err)
+	}
+	if !strings.Contains(reply, "não disponível") {
+		t.Fatalf("expected bridge unavailable message, got %q", reply)
+	}
+}
+
+func TestCmdSetModel_NonOwnerRefreshDeniedWithoutFetch(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeModelLister{models: [][]bridge.ModelInfo{{{Provider: "openai", ID: "gpt-5.1"}}}}
+	bc := testModelController(session.NewStore())
+	bc.modelLister = fake
+	c := newTestTelegramContext(42, 0, 200, "")
+
+	reply, err := bc.cmdSetModel(c, "/model refresh")
+	if err != nil {
+		t.Fatalf("cmdSetModel() error = %v", err)
+	}
+	if !strings.Contains(reply, "Permissão negada") {
+		t.Fatalf("expected permission denied, got %q", reply)
+	}
+	if fake.calls != 0 {
+		t.Fatalf("non-owner refresh should not fetch models, calls=%d", fake.calls)
+	}
+}
+
+func TestCmdSetModel_OwnerRefreshBypassesFreshCache(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeModelLister{models: [][]bridge.ModelInfo{
+		{{Provider: "anthropic", ID: "claude-sonnet-4-6"}},
+		{{Provider: "newpi", ID: "new-model"}},
+	}}
+	bc := testModelController(session.NewStore())
+	bc.modelLister = fake
+	bc.bot = newOfflineTestBot(t)
+	bc.modelCache = []bridge.ModelInfo{{Provider: "old", ID: "old-model"}}
+	bc.modelCacheExpiry = time.Now().Add(time.Hour)
+	c := newTestTelegramContext(42, 0, 100, "")
+
+	reply, err := bc.cmdSetModel(c, "/model refresh")
+	if err != nil {
+		t.Fatalf("cmdSetModel() error = %v", err)
+	}
+	if !strings.Contains(reply, "Modelos atualizados") || !strings.Contains(reply, "1") {
+		t.Fatalf("expected refresh count reply, got %q", reply)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("expected one forced fetch, got %d", fake.calls)
+	}
+	if !modelExists(bc.modelCache, "anthropic", "claude-sonnet-4-6") {
+		t.Fatalf("expected cache refreshed from PI, got %#v", bc.modelCache)
+	}
+}
+
+func TestRefreshModelsFromCallback_RedrawsProvidersWithNewModel(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeModelLister{models: [][]bridge.ModelInfo{
+		{{Provider: "newpi", ID: "new-model"}},
+	}}
+	bc := testModelController(session.NewStore())
+	bc.modelLister = fake
+	bc.bot = newOfflineTestBot(t)
+	bc.modelCache = []bridge.ModelInfo{{Provider: "old", ID: "old-model"}}
+	bc.modelCacheExpiry = time.Now().Add(time.Hour)
+	c := newTestTelegramContext(42, 99, 100, "\fmdl_refresh")
+
+	if err := bc.handleModelCallback(c); err != nil {
+		t.Fatalf("handleModelCallback() error = %v", err)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("expected forced callback fetch, got %d", fake.calls)
+	}
+	if !strings.Contains(c.editedText, "Selecione o provedor") {
+		t.Fatalf("expected provider menu redraw, got %q", c.editedText)
+	}
+	if !modelExists(bc.modelCache, "newpi", "new-model") {
+		t.Fatalf("expected new PI model in cache, got %#v", bc.modelCache)
+	}
+}
+
+func TestSendProviderMenu_IncludesRefreshButton(t *testing.T) {
+	t.Parallel()
+
+	bc := testModelController(session.NewStore())
+	bc.modelCache = []bridge.ModelInfo{{Provider: "openai", ID: "gpt-5.1"}}
+	c := newTestTelegramContext(42, 99, 100, "")
+
+	if err := bc.sendProviderMenu(c, true); err != nil {
+		t.Fatalf("sendProviderMenu() error = %v", err)
+	}
+	if len(c.editedOpts) == 0 {
+		t.Fatalf("expected reply markup option")
+	}
+	markup, ok := c.editedOpts[0].(*telebot.ReplyMarkup)
+	if !ok {
+		t.Fatalf("expected *telebot.ReplyMarkup, got %T", c.editedOpts[0])
+	}
+	if len(markup.InlineKeyboard) == 0 || len(markup.InlineKeyboard[0]) == 0 {
+		t.Fatalf("expected inline keyboard rows, got %#v", markup.InlineKeyboard)
+	}
+	if got := markup.InlineKeyboard[0][0].Text; got != "🔄 Atualizar modelos" {
+		t.Fatalf("expected refresh button first, got %q", got)
+	}
+}
+
+func TestHandleModelCallback_NonOwnerRefreshDeniedWithoutFetch(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeModelLister{models: [][]bridge.ModelInfo{{{Provider: "openai", ID: "gpt-5.1"}}}}
+	bc := testModelController(session.NewStore())
+	bc.modelLister = fake
+	bc.bot = newOfflineTestBot(t)
+	c := newTestTelegramContext(42, 99, 200, "\fmdl_refresh")
+
+	if err := bc.handleModelCallback(c); err != nil {
+		t.Fatalf("handleModelCallback() error = %v", err)
+	}
+	if !strings.Contains(c.editedText, "Permissão negada") {
+		t.Fatalf("expected permission denied, got %q", c.editedText)
+	}
+	if fake.calls != 0 {
+		t.Fatalf("non-owner callback refresh should not fetch, calls=%d", fake.calls)
+	}
+}
+
 func testModelController(sessions *session.Store) *BotController {
 	return &BotController{
 		config: &config.AppConfig{
@@ -160,6 +310,15 @@ func assertModelState(t *testing.T, bc *BotController, sessions *session.Store, 
 	}
 }
 
+func newOfflineTestBot(t *testing.T) *telebot.Bot {
+	t.Helper()
+	bot, err := telebot.NewBot(telebot.Settings{Offline: true})
+	if err != nil {
+		t.Fatalf("NewBot() error = %v", err)
+	}
+	return bot
+}
+
 type testTelegramContext struct {
 	bot        *telebot.Bot
 	message    *telebot.Message
@@ -168,6 +327,7 @@ type testTelegramContext struct {
 	chat       *telebot.Chat
 	data       string
 	editedText string
+	editedOpts []interface{}
 	values     map[string]interface{}
 }
 
@@ -215,6 +375,7 @@ func (c *testTelegramContext) Forward(msg telebot.Editable, opts ...interface{})
 func (c *testTelegramContext) ForwardTo(to telebot.Recipient, opts ...interface{}) error { return nil }
 func (c *testTelegramContext) Edit(what interface{}, opts ...interface{}) error {
 	c.editedText = fmt.Sprint(what)
+	c.editedOpts = opts
 	return nil
 }
 func (c *testTelegramContext) EditCaption(caption string, opts ...interface{}) error { return nil }

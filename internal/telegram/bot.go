@@ -13,9 +13,9 @@ import (
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/cron"
 	"github.com/igormaneschy/aurelia/internal/orchestrator"
-	"github.com/igormaneschy/aurelia/internal/continuity"
 	"github.com/igormaneschy/aurelia/internal/persona"
 	pipelinepkg "github.com/igormaneschy/aurelia/internal/pipeline"
 	"github.com/igormaneschy/aurelia/internal/projectbinding"
@@ -32,6 +32,7 @@ type BotController struct {
 	bot              *telebot.Bot
 	config           *config.AppConfig
 	bridge           *bridge.Bridge
+	modelLister      modelLister
 	agents           *agents.Registry
 	persona          *persona.CanonicalIdentityService
 	stt              stt.Transcriber
@@ -69,6 +70,10 @@ type BotController struct {
 	userGate        *UserGate
 	userStore       *users.Store
 	userResolver    *users.Resolver
+}
+
+type modelLister interface {
+	ListModels(context.Context) ([]bridge.ModelInfo, error)
 }
 
 type albumBuffer struct {
@@ -141,6 +146,7 @@ func NewBotController(
 		bot:              b,
 		config:           cfg,
 		bridge:           br,
+		modelLister:      br,
 		agents:           ag,
 		persona:          p,
 		stt:              s,
@@ -256,15 +262,19 @@ func (s *botChatSender) Send(chatID int64, text string) error {
 }
 
 // getModels returns cached models or fetches from bridge with 5-minute TTL.
-func (bc *BotController) getModels(ctx context.Context) ([]bridge.ModelInfo, error) {
+func (bc *BotController) getModels(ctx context.Context, force bool) ([]bridge.ModelInfo, error) {
 	bc.modelCacheMu.Lock()
 	defer bc.modelCacheMu.Unlock()
 
-	if bc.modelCache != nil && time.Now().Before(bc.modelCacheExpiry) {
+	if !force && bc.modelCache != nil && time.Now().Before(bc.modelCacheExpiry) {
 		return bc.modelCache, nil
 	}
 
-	models, err := bc.bridge.ListModels(ctx)
+	lister := bc.activeModelLister()
+	if lister == nil {
+		return nil, fmt.Errorf("bridge unavailable")
+	}
+	models, err := lister.ListModels(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +282,19 @@ func (bc *BotController) getModels(ctx context.Context) ([]bridge.ModelInfo, err
 	bc.modelCache = models
 	bc.modelCacheExpiry = time.Now().Add(5 * time.Minute)
 	return models, nil
+}
+
+func (bc *BotController) activeModelLister() modelLister {
+	if bc == nil {
+		return nil
+	}
+	if bc.modelLister != nil {
+		return bc.modelLister
+	}
+	if bc.bridge == nil {
+		return nil
+	}
+	return bc.bridge
 }
 
 // Start begins Telegram polling.

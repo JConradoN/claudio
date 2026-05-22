@@ -40,3 +40,7 @@
 ## Change fix-security-hook-pi-sdk-api (2026-05-21)
 - [anti-pattern] pi-sdk-api-verification
 - [pattern] tool-call-hook-mechanism
+
+## Change pi-model-catalog-refresh (2026-05-22)
+- [anti-pattern] typed-nil-interface-guard
+- [pattern] telebot-callback-offline-bot

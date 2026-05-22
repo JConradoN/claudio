@@ -155,6 +155,21 @@ func TestBridgeSessionOnToolCall_absent(t *testing.T) {
 	}
 }
 
+func TestBridgeHealthTimer_visibleToFinally(t *testing.T) {
+	if !activeCodeContains("let healthTimer: ReturnType<typeof setInterval> | undefined") {
+		t.Fatal("bridge healthTimer must be declared before query setup so finally can clear it after early errors")
+	}
+	if !activeCodeContains("healthTimer = setInterval(() => {") {
+		t.Fatal("bridge healthTimer must assign the outer variable, not shadow it inside try")
+	}
+	if activeCodeContains("const healthTimer = setInterval") {
+		t.Fatal("bridge healthTimer must not be block-scoped with const; finally must be able to clear it")
+	}
+	if !activeCodeContains("if (healthTimer) clearInterval(healthTimer)") {
+		t.Fatal("bridge finally must guard and clear healthTimer")
+	}
+}
+
 // TestBridgeSessionFile_emitted ensures the bridge emits session_file in
 // both system and result events so Aurelia can track session persistence.
 // This is the key mechanism for Aurelia's session management layer.

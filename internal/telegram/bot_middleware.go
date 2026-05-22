@@ -314,6 +314,13 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 		if !bc.isOwner(c) {
 			return SendTextWithThread(bc.bot, c.Chat(), "Permissão negada.", threadID)
 		}
+		if isRefreshModelName(args) {
+			reply, err := bc.cmdRefreshModels()
+			if err != nil {
+				return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro: %v", err), threadID)
+			}
+			return SendTextWithThread(bc.bot, c.Chat(), reply, threadID)
+		}
 		reply, err := bc.cmdSetModel(c, "/model "+args)
 		if err != nil {
 			return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro: %v", err), threadID)
@@ -322,23 +329,19 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 	}
 
 	currentLine := bc.currentModelLine()
-	if bc.bridge == nil {
+	if bc.activeModelLister() == nil {
 		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nBridge indisponível.", threadID)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	models, err := bc.getModels(ctx)
+	models, err := bc.getModels(ctx, false)
 	if err != nil {
 		return SendTextWithThread(bc.bot, c.Chat(), currentLine+fmt.Sprintf("\n\nLista não disponível: %v", err), threadID)
 	}
 	if len(models) == 0 {
 		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nNenhum modelo disponível.", threadID)
 	}
-
-	bc.modelCacheMu.Lock()
-	bc.modelCache = models
-	bc.modelCacheMu.Unlock()
 
 	return bc.sendProviderMenu(c, false)
 }
@@ -360,6 +363,7 @@ func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
 
 	menu := &telebot.ReplyMarkup{}
 	var rows []telebot.Row
+	rows = append(rows, menu.Row(menu.Data("🔄 Atualizar modelos", "mdl_refresh")))
 	for _, prov := range providers {
 		rows = append(rows, menu.Row(menu.Data(prov, "mdl_prov_"+prov)))
 	}
@@ -396,6 +400,11 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 
 	// Route by the model identifier prefix
 	switch {
+	case data == "mdl_refresh":
+		if !bc.isOwner(c) {
+			return c.Edit("Permissão negada.")
+		}
+		return bc.refreshModelsFromCallback(c)
 	case strings.HasPrefix(data, "mdl_prov_"):
 		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_prov_"), 0)
 	case strings.HasPrefix(data, "mdl_set_"):
@@ -414,6 +423,22 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 	default:
 		return nil
 	}
+}
+
+func (bc *BotController) refreshModelsFromCallback(c telebot.Context) error {
+	if bc.activeModelLister() == nil {
+		return c.Edit("Bridge indisponível.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	models, err := bc.getModels(ctx, true)
+	if err != nil {
+		return c.Edit(fmt.Sprintf("Não consegui atualizar modelos: %v", err))
+	}
+	if len(models) == 0 {
+		return c.Edit("Nenhum modelo disponível após atualização.")
+	}
+	return bc.sendProviderMenu(c, true)
 }
 
 func (bc *BotController) showModelPage(c telebot.Context, data string, dir int) error {
@@ -493,7 +518,7 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	models, err := bc.getModels(ctx)
+	models, err := bc.getModels(ctx, false)
 	if err != nil {
 		return c.Edit("Não consegui validar este modelo. Tente novamente.")
 	}

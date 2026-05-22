@@ -693,14 +693,14 @@ func (bc *BotController) cmdListModels() (string, error) {
 	// Always show current model first
 	currentLine := bc.currentModelLine()
 
-	if bc.bridge == nil {
+	if bc.activeModelLister() == nil {
 		return currentLine + "\n\nProcessador não disponível para listar modelos. Use /model auto para usar o PI default.", nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	models, err := bc.getModels(ctx)
+	models, err := bc.getModels(ctx, false)
 	if err != nil {
 		return currentLine + fmt.Sprintf("\n\nLista não disponível: %v", err), nil
 	}
@@ -747,6 +747,24 @@ func (bc *BotController) cmdListModels() (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+func (bc *BotController) cmdRefreshModels() (string, error) {
+	if bc.activeModelLister() == nil {
+		return "Processador não disponível para atualizar modelos.", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	models, err := bc.getModels(ctx, true)
+	if err != nil {
+		return "", fmt.Errorf("falha ao atualizar modelos: %w", err)
+	}
+	if len(models) == 0 {
+		return "Nenhum modelo disponível após atualização.", nil
+	}
+	return fmt.Sprintf("✅ Modelos atualizados: **%d** disponíveis. Use /model para abrir o menu.", len(models)), nil
+}
+
 func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, error) {
 	if !bc.isOwner(c) {
 		return "Permissão negada. Apenas o owner pode trocar o modelo.", nil
@@ -758,10 +776,13 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 		return "Use /model <nome>, /model auto ou 'muda modelo para <nome>' para trocar.\n\n" +
 			"Digite 'lista modelos' para ver as opções disponíveis.", nil
 	}
+	if isRefreshModelName(modelName) {
+		return bc.cmdRefreshModels()
+	}
 	if isAutoModelName(modelName) {
 		return bc.setModelAuto(c)
 	}
-	if bc.bridge == nil {
+	if bc.activeModelLister() == nil {
 		return "Processador não disponível.", nil
 	}
 
@@ -769,7 +790,7 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	available, err := bc.getModels(ctx)
+	available, err := bc.getModels(ctx, false)
 	if err != nil {
 		return "", fmt.Errorf("falha ao consultar modelos: %w", err)
 	}
@@ -874,6 +895,10 @@ func extractModelName(text string) string {
 
 func isAutoModelName(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), "auto")
+}
+
+func isRefreshModelName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "refresh")
 }
 
 func (bc *BotController) applyConfiguredModelOptions(options *bridge.RequestOptions) {
