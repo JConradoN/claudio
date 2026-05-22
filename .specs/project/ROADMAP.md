@@ -59,30 +59,34 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 ---
 
-## 0. Delegate to PI SDK Native
+## 0. Delegate to PI SDK Native ✅
 
 **Spec:** `.specs/features/delegate-to-pi-sdk/`  
-**Design:** `.specs/features/delegate-to-pi-sdk/design.md`  
 **Tasks:** `.specs/features/delegate-to-pi-sdk/tasks.md`  
-**Status:** 🟡 Core implementado em v0.13.0; fechamento pendente
-**Prioridade:** P0 hardening
-**Depends on:** `security-guard-rails` (✅ v0.8.0)  
+**Status:** ✅ Concluído em v0.13.7 (2026-05-22)
+**Prioridade:** P0 — Fechado
 
-**Problem:** O Aurélia vinha reimplementando funcionalidades que o PI SDK já oferece nativamente: model registry resolution, session management, context pruning, context-file loading e partes da policy/tool boundary. v0.13 removeu a maior duplicação, mas ainda há limites a fechar.
-
-**Já entregue em v0.13.0:**
+**O que foi entregue:**
 - Bridge: `ModelRegistry.find()` + fallback por ID exato.
 - Bridge: `SettingsManager.compaction.enabled=true`.
-- Bridge: `DefaultResourceLoader(noContextFiles=false)` para `CLAUDE.md`/`AGENTS.md`.
-- Go: session store passou a trabalhar com `session_file`.
-- Go: auto-reset por token threshold removido; PI compaction é a fonte de verdade.
-- Go: evaluator de policy removido; Bridge é a fonte de verdade para enforcement.
+- Bridge: `DefaultResourceLoader(noContextFiles=false)` — PI SDK carrega `CLAUDE.md`/`AGENTS.md`.
+- Bridge: Security hooks via `session.agent.beforeToolCall`.
+- Go: session store simplificada (session_file em vez de sessionID).
+- Go: auto-reset por token threshold removido; PI compaction é fonte de verdade.
+- Go: evaluator de policy removido; Bridge é fonte de verdade para enforcement.
+- Go: prompt builder delegou loading de context files ao PI SDK.
 
-**Ainda pendente para fechar o sprint:**
-- Decidir e documentar o limite do `internal/agents/`: recomendação atual é manter especialistas Aurelia como feature de produto no curto prazo; investigar delegar parsing/discovery ao PI via `agentsFilesOverride` sem mover arquivos de usuário.
-- Atualizar specs/tasks antigas que ainda dizem “a implementar”.
-- Validar E2E real de contexto PI (`CLAUDE.md`/`AGENTS.md`) e agente especialista.
-- Opcional P2: mover policy Bridge para PI extension se a API permitir.
+**Decisões:**
+- `internal/agents/` mantido como produto Aurelia. Sem migração para PI SDK.
+- `internal/persona/`, `internal/dream/`, `internal/cron/`, `internal/orchestrator/` mantidos.
+
+**Fixes adicionais no fechamento (v0.13.7):**
+- Modelo não encontrado → erro claro (não mais log silencioso)
+- Auth symlink (credenciais sempre em sync)
+- `/stop` com userID
+- Config: `omitempty` não perde mais campos sensíveis
+- Goroutine `chatActionLoop` com `defer recover()`
+- Branch policy: feature/stable/main workflow
 
 **Princípio:** preservar persona, memory, cron, Telegram UX, project binding e orchestrator no Aurelia; delegar engine/session/context/tools ao PI.
 
