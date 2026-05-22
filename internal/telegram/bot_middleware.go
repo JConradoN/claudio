@@ -409,7 +409,7 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_prov_"), 0)
 	case strings.HasPrefix(data, "mdl_set_"):
 		if !bc.isOwner(c) {
-			return c.Edit("Permissão negada.")
+			return SendTextWithThread(bc.bot, c.Chat(), "Permissão negada.", c.Message().ThreadID)
 		}
 		return bc.setModelFromCallback(c, strings.TrimPrefix(data, "mdl_set_"))
 	case strings.HasPrefix(data, "mdl_next_"):
@@ -426,18 +426,25 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 }
 
 func (bc *BotController) refreshModelsFromCallback(c telebot.Context) error {
-	if bc.activeModelLister() == nil {
-		return c.Edit("Bridge indisponível.")
-	}
+	// Always send a new message instead of editing — ensures visibility of
+	// errors and allows users to see what models were refreshed. Editing can
+	// fail silently if the message was deleted or timing issues occur.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
+	if bc.activeModelLister() == nil {
+		return SendTextWithThread(bc.bot, c.Chat(), "Bridge indisponível. Tente novamente em alguns minutos.", c.Message().ThreadID)
+	}
+
 	models, err := bc.getModels(ctx, true)
 	if err != nil {
-		return c.Edit(fmt.Sprintf("Não consegui atualizar modelos: %v", err))
+		return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro ao atualizar modelos: %v", err), c.Message().ThreadID)
 	}
 	if len(models) == 0 {
-		return c.Edit("Nenhum modelo disponível após atualização.")
+		return SendTextWithThread(bc.bot, c.Chat(), "Nenhum modelo disponível após atualização.", c.Message().ThreadID)
 	}
+
+	// sendProviderMenu updates the message with the provider list, which uses bc.modelCache
 	return bc.sendProviderMenu(c, true)
 }
 
