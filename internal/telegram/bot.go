@@ -192,24 +192,7 @@ func NewBotController(
 
 	bc.setupRoutes()
 
-	// Pre-warm the model cache in the background so the bridge process is
-	// ready and models are available before the user opens /model.
-	bc.prewarmModelCache()
-
 	return bc, nil
-}
-
-// SetOrchestrator injects the orchestrator after construction.
-// Called separately to avoid changing the NewBotController signature.
-func (bc *BotController) prewarmModelCache() {
-	if bc.bridge == nil {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		_, _ = bc.getModels(ctx, true)
-	}()
 }
 
 func (bc *BotController) SetOrchestrator(o *orchestrator.Orchestrator) {

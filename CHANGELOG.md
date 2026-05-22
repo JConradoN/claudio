@@ -24,6 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Mensagem de permissão negada em callback de modelo restaurada para `c.Edit()`
   (Telegram inline), corrigindo teste quebrado `TestHandleModelCallback_NonOwnerSetDeniedWithoutMutation`.
 
+### Dívida Técnica
+- Model menu não mostra provedores locais (ollama-tailscale, lm-studio) em alguns
+  cenários pós-restart. Suspeita: cache de modelos não é populado corretamente
+  quando bridge inicia pela primeira vez (race condition entre prewarm e primeiro
+  uso do `/model`). Solução permanente: migrar list-models para endpoint Go direto
+  com PI SDK ou implementar descoberta Ollama nativa em Go.
+
 ## [0.13.5] - 2026-05-22
 
 ### Fixed
