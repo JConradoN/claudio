@@ -663,6 +663,32 @@ func TestCmdListModels_ShowsPIDefaultAndAutoHint(t *testing.T) {
 	}
 }
 
+func TestCmdListModels_PrioritizesLocalModelsBeforeDisplayLimit(t *testing.T) {
+	t.Parallel()
+
+	models := make([]bridge.ModelInfo, 0, 32)
+	for i := 0; i < 30; i++ {
+		models = append(models, bridge.ModelInfo{Provider: fmt.Sprintf("remote-%02d", i), ID: fmt.Sprintf("model-%02d", i)})
+	}
+	models = append(models,
+		bridge.ModelInfo{Provider: "ollama-tailscale", ID: "qwen3.5:9b-48k"},
+		bridge.ModelInfo{Provider: "ollama-tailscale", ID: "gemma4:e4b-it-q4_K_M"},
+	)
+
+	bc := &BotController{
+		config:      &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
+		modelLister: &fakeModelLister{models: [][]bridge.ModelInfo{models}},
+	}
+
+	reply, err := bc.cmdListModels()
+	if err != nil {
+		t.Fatalf("cmdListModels() error = %v", err)
+	}
+	if !strings.Contains(reply, "ollama-tailscale") || !strings.Contains(reply, "qwen3.5:9b-48k") {
+		t.Fatalf("expected local Ollama models before display limit, got %q", reply)
+	}
+}
+
 func TestExtractModelName(t *testing.T) {
 	tests := []struct {
 		name string

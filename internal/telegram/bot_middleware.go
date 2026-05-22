@@ -347,6 +347,10 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 }
 
 func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
+	return bc.sendProviderMenuMessage(c, edit, "")
+}
+
+func (bc *BotController) sendProviderMenuMessage(c telebot.Context, edit bool, prefix string) error {
 	bc.modelCacheMu.Lock()
 	models := bc.modelCache
 	bc.modelCacheMu.Unlock()
@@ -372,6 +376,9 @@ func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
 
 	currentLine := bc.currentModelLine()
 	msg := currentLine + "\n\n**Selecione o provedor:**"
+	if prefix != "" {
+		msg = prefix + "\n\n" + msg
+	}
 	if edit {
 		return c.Edit(msg, menu)
 	}
@@ -409,7 +416,7 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_prov_"), 0)
 	case strings.HasPrefix(data, "mdl_set_"):
 		if !bc.isOwner(c) {
-			return SendTextWithThread(bc.bot, c.Chat(), "Permissão negada.", c.Message().ThreadID)
+			return c.Edit("Permissão negada.")
 		}
 		return bc.setModelFromCallback(c, strings.TrimPrefix(data, "mdl_set_"))
 	case strings.HasPrefix(data, "mdl_next_"):
@@ -444,8 +451,42 @@ func (bc *BotController) refreshModelsFromCallback(c telebot.Context) error {
 		return SendTextWithThread(bc.bot, c.Chat(), "Nenhum modelo disponível após atualização.", c.Message().ThreadID)
 	}
 
-	// sendProviderMenu updates the message with the provider list, which uses bc.modelCache
-	return bc.sendProviderMenu(c, true)
+	// The timestamp makes repeated refreshes visibly change in Telegram instead
+	// of failing with "message is not modified" when the provider list is equal.
+	prefix := formatModelRefreshSummary(models, time.Now())
+	return bc.sendProviderMenuMessage(c, true, prefix)
+}
+
+func formatModelRefreshSummary(models []bridge.ModelInfo, now time.Time) string {
+	summary := fmt.Sprintf("✅ Modelos atualizados: **%d** disponíveis (%s).", len(models), now.Format("15:04:05"))
+	locals := formatLocalModelSummary(models)
+	if locals == "" {
+		return summary
+	}
+	return summary + "\n" + locals
+}
+
+func formatLocalModelSummary(models []bridge.ModelInfo) string {
+	grouped := make(map[string][]string)
+	var providers []string
+	for _, m := range models {
+		if !isLocalModelProvider(m.Provider) {
+			continue
+		}
+		if _, ok := grouped[m.Provider]; !ok {
+			providers = append(providers, m.Provider)
+		}
+		grouped[m.Provider] = append(grouped[m.Provider], m.ID)
+	}
+	if len(providers) == 0 {
+		return ""
+	}
+	sort.Strings(providers)
+	parts := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		parts = append(parts, fmt.Sprintf("**%s**: %s", provider, strings.Join(grouped[provider], ", ")))
+	}
+	return "Locais: " + strings.Join(parts, "; ")
 }
 
 func (bc *BotController) showModelPage(c telebot.Context, data string, dir int) error {

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -725,6 +726,8 @@ func (bc *BotController) cmdListModels() (string, error) {
 		grouped[m.Provider].models = append(grouped[m.Provider].models, display)
 	}
 
+	sortModelProviderOrder(providerOrder, bc.config.DefaultProvider)
+
 	displayed := 0
 	const maxDisplay = 25
 	for _, prov := range providerOrder {
@@ -745,6 +748,32 @@ func (bc *BotController) cmdListModels() (string, error) {
 
 	lines = append(lines, "\n\nUse /model <nome> para trocar ou /model auto para usar o PI default.")
 	return strings.Join(lines, "\n"), nil
+}
+
+func sortModelProviderOrder(providers []string, currentProvider string) {
+	sort.SliceStable(providers, func(i, j int) bool {
+		leftRank := modelProviderDisplayRank(providers[i], currentProvider)
+		rightRank := modelProviderDisplayRank(providers[j], currentProvider)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return strings.ToLower(providers[i]) < strings.ToLower(providers[j])
+	})
+}
+
+func modelProviderDisplayRank(provider, currentProvider string) int {
+	if currentProvider != "" && provider == currentProvider {
+		return 0
+	}
+	if isLocalModelProvider(provider) {
+		return 1
+	}
+	return 2
+}
+
+func isLocalModelProvider(provider string) bool {
+	normalized := strings.ToLower(provider)
+	return strings.Contains(normalized, "ollama") || strings.Contains(normalized, "lm-studio")
 }
 
 func (bc *BotController) cmdRefreshModels() (string, error) {
