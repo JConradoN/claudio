@@ -20,7 +20,7 @@
 │   └── telegram_cli.go        # Telegram message CLI
 │
 ├── bridge/                    # TypeScript bridge source
-│   ├── index.ts               # PI SDK wrapper (~400 LOC)
+│   ├── index.ts               # PI SDK adapter (NDJSON runtime)
 │   ├── bundle.js              # Compiled JS (embedded in Go binary)
 │   ├── package.json           # SDK dependency
 │   └── tsconfig.json
@@ -35,9 +35,9 @@
 │   ├── onboarding/            # Interactive setup wizard
 │   ├── orchestrator/          # Agent orchestration (plan/workers/validate/git)
 │   ├── persona/               # Identity & prompt assembly
-│   ├── pipeline/              # Turn processing service (resilience + supervisor)
+│   ├── pipeline/              # Turn processing service (resilience + active-run tracking)
 │   ├── runtime/               # Path resolution
-│   ├── session/               # Session & token tracking
+│   ├── session/               # PI session_file resume, cwd state, nudge buffers
 │   ├── telegram/              # Telegram bot I/O
 │   └── version/               # Build version constant
 │
@@ -58,14 +58,14 @@
 
 ### internal/pipeline — Turn Processing Service
 **Purpose:** Encapsulates a single conversational turn — prompt assembly, bridge call, event handling, recovery, plan detection. Extracted from the Telegram controller so the same logic powers cron jobs and other entrypoints.
-**Key files:** `service.go` (entrypoint), `pipeline.go` (event loop + plan dispatch), `prompt_builder.go`, `resilient_bridge.go` (retry + circuit breaker), `run_supervisor.go` (concurrent run dedup), `planning_intent.go` (heuristic plan-mode detection)
+**Key files:** `service.go` (entrypoint + active-run tracking), `pipeline.go` (event loop + plan dispatch), `prompt_builder.go`, `resilient_bridge.go` (retry + circuit breaker), `planning_intent.go` (heuristic plan-mode detection)
 
 ### internal/orchestrator — Agent Orchestration
-**Purpose:** Plan→workers→validate cycle. Detects `aurelia-plan` blocks in bridge responses, spawns workers per wave in isolated git worktrees, validates results via a quality gate, generates `CLAUDE.md`/`AGENTS.md`, updates `tasks.md`, and handles commit/PR.
+**Purpose:** Plan→workers→validate cycle. Detects `aurelia-plan` blocks in bridge responses, spawns workers per wave in isolated git worktrees, validates results via a quality gate, and contains scaffold for docs/tasks/git delivery. The full closed cycle is still roadmap work.
 **Key files:** `orchestrator.go` (struct + BridgeExecutor interface), `plan.go` (Plan/Task model + topological ExecutionOrder), `extract.go` (parse `aurelia-plan` blocks), `execute.go` (wave execution + ExecuteTask), `validate.go` (quality gate), `worktree.go` (git worktree CRUD), `defaults.go` (worker fallback + ResolveAgentConfig), `prompt.go` (TLC + worker + validation prompt builders), `agents_md.go` (`AGENTS.md`/`CLAUDE.md` generators), `tasks_status.go` (update `.specs/.../tasks.md` checkboxes), `git.go` (commit + `gh pr create`)
 
 ### internal/bridge — LLM Bridge Client
-**Purpose:** Manages TypeScript process, NDJSON protocol, request multiplexing. The bridge wraps the PI SDK (`@earendil-works/pi-coding-agent`) — Aurelia treats PI as its core inference engine.
+**Purpose:** Manages TypeScript process, NDJSON protocol, request multiplexing. The bridge adapts the PI SDK (`@earendil-works/pi-coding-agent`) — Aurelia treats PI as its core inference/execution engine.
 **Key files:** `bridge.go` (process + IPC), `protocol.go` (types), `events.go` (event model), `embed.go` (bundle embedding)
 
 ### internal/cron — Job Scheduler
@@ -120,12 +120,12 @@
 
 **Persistence:**
 - Database: `internal/cron/store*.go` (SQLite)
-- Sessions: `internal/session/store.go` (in-memory)
+- Sessions: `internal/session/store.go` (in-memory mapping to PI `session_file` for resume)
 - Config: `internal/config/config.go` (JSON file)
 - Personas: `internal/persona/loader*.go` (markdown files)
 
 **Runtime configuration:**
 - App config: `~/.aurelia/config/app.json`
 - Agent defs: `~/.aurelia/agents/*.md`
-- Personas: `~/.aurelia/memory/personas/`
+- Personas: `~/.aurelia/memory/personas/` plus per-user `~/.aurelia/users/<id>/personas/USER.md`
 - Database: `~/.aurelia/data/cron.db`

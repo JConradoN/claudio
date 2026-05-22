@@ -502,6 +502,35 @@ func TestAgent_IsReadOnly(t *testing.T) {
 	}
 }
 
+func TestRegistry_LoadAgentWithCwd(t *testing.T) {
+	dir := t.TempDir()
+
+	content := `---
+name: workshopper
+description: Workshop agent
+cwd: /work/projects
+---
+
+You help with project tasks.
+`
+	if err := os.WriteFile(filepath.Join(dir, "workshopper.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	a := reg.Get("workshopper")
+	if a == nil {
+		t.Fatal("Get('workshopper') returned nil")
+	}
+	if a.Cwd != "/work/projects" {
+		t.Errorf("expected cwd '/work/projects', got %q", a.Cwd)
+	}
+}
+
 func TestRegistry_UnknownToolNames(t *testing.T) {
 	dir := t.TempDir()
 

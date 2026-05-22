@@ -27,6 +27,22 @@ O conceito central está fechado assim:
 - **Aurelia owns**: experiência Telegram, identidade, memória persistente, cron, multi-projeto, user/project scoping, auditoria, roadmap e workflows.
 - **Regra de arquitetura**: quando algo já existe no PI, Aurelia só adapta/orquestra; não reimplementa.
 
+Formulação-alvo:
+
+```text
+Telegram / CLI / Cron / Interfaces
+        ↓
+Aurelia Product Layer
+identidade · persona · UX · workflows · memória · Wiki · políticas · continuidade
+        ↓
+PI SDK
+reasoning · tools · sessions · agent runtime · providers/models
+        ↓
+Ferramentas / FS / Web / APIs / Projetos
+```
+
+O objetivo é evitar dois extremos: o Aurélia não deve virar apenas um wrapper fino do PI, nem deve reconstruir o runtime agentic que o PI já entrega. A Wiki é parte central dessa estratégia: ela transforma memória em conhecimento operacional transversal, local-first e auditável.
+
 A próxima onda foca em tornar o sistema seguro e estável para trabalho autônomo em projetos reais:
 
 1. concluir o hardening pós-v0.13 do limite PI↔Aurelia;
@@ -63,7 +79,7 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 - Go: evaluator de policy removido; Bridge é a fonte de verdade para enforcement.
 
 **Ainda pendente para fechar o sprint:**
-- Decidir o limite do `internal/agents/`: manter como feature de produto Aurelia ou migrar parsing/execução para PI-native agents.
+- Decidir e documentar o limite do `internal/agents/`: recomendação atual é manter especialistas Aurelia como feature de produto no curto prazo; investigar delegar parsing/discovery ao PI via `agentsFilesOverride` sem mover arquivos de usuário.
 - Atualizar specs/tasks antigas que ainda dizem “a implementar”.
 - Validar E2E real de contexto PI (`CLAUDE.md`/`AGENTS.md`) e agente especialista.
 - Opcional P2: mover policy Bridge para PI extension se a API permitir.
@@ -95,7 +111,8 @@ A próxima onda foca em tornar o sistema seguro e estável para trabalho autôno
 
 **Ainda pendente para fechar o sprint:**
 
-- Auditar `activeSessions`, `Cancel`, `WorkStatus`, bridge `get-state/abort` e runlog para garantir escopo por usuário onde necessário.
+- Corrigir `CancelAllForUser`: hoje `activeSessions` já usa `chatID:threadID:userID`, mas o cleanup ainda envia `abort` sem escopo para o Bridge.
+- Auditar `Cancel`, `WorkStatus`, bridge `get-state/abort/steer/follow-up` e runlog para garantir escopo por usuário onde necessário.
 - Marcar tarefas reais em `tasks.md`; hoje o arquivo está stale e todo desmarcado.
 - Teste de regressão explícito: dois usuários no mesmo chat/thread não compartilham `session_file`.
 
@@ -295,7 +312,7 @@ Sprint 0: Delegate to PI SDK Native
   ├─ ✅ Go: simplify session store around PI session_file
   ├─ ✅ Go: remove auto-reset/token-threshold lifecycle
   ├─ 🟡 Go: prompt builder reduced, but still owns Aurelia persona/memory/Telegram sections
-  ├─ 🟡 Decision: internal/agents as Aurelia product feature vs PI-native migration
+  ├─ 🟡 Decision: keep internal/agents as Aurelia product feature for now; investigate PI-native discovery via agentsFilesOverride
   └─ 🟡 Validation/docs: E2E specialist + stale specs cleanup
 
 Sprint A: User Isolation MVP
@@ -307,7 +324,7 @@ Sprint A: User Isolation MVP
   ├─ ✅ memory/dream per-user base
   ├─ ✅ pipeline integration + UserGate
   ├─ ✅ owner-only commands
-  └─ 🟡 Hardening: active run/cancel/get-state fully user-scoped
+  └─ 🟡 Hardening: CancelAllForUser + active run/cancel/get-state fully user-scoped
 
 Sprint B: Close Orchestration Cycle (T0–T12 do tasks.md)
   ├─ ExecutionContext com cwd+threadID

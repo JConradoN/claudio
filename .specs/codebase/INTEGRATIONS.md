@@ -23,14 +23,14 @@
 
 **Service:** PI coding agent (`@earendil-works/pi-coding-agent`)
 **Purpose:** LLM inference, tool use, agentic loops
-**Implementation:** `internal/bridge/` (Go client) + `bridge/index.ts` (TS wrapper)
+**Implementation:** `internal/bridge/` (Go client) + `bridge/index.ts` (TS adapter)
 **Configuration:** PI auth/models/settings in `~/.pi/agent`, with selected credentials exported from Aurelia config as env vars
 **Authentication:** PI auth store (`auth.json`), provider env vars, or custom `models.json`
 
 **Protocol:** NDJSON over stdin/stdout
 - Request: `{command, prompt, request_id, options}`
 - Events: `system` → `assistant`/`tool_use` → `result`/`error`
-- Timeout: 10 minutes per query
+- Timeout: 30 minutes per query, with Go-side idle/watchdog handling for long active runs
 - Multiplexed: Multiple concurrent requests via request_id
 
 **Supported Providers:**
@@ -54,6 +54,7 @@
 1. Claude-specific Cloud MCP discovery was removed from the bridge during PI migration.
 2. Agent-defined `mcp_servers` remain in the config schema but need a PI extension/adapter for parity.
 3. PI built-in tools are mapped from Claude-style tool names (`Read` → `read`, `Glob` → `find`, etc.).
+4. PI owns model resolution, sessions, compaction, context-file loading, skills/extensions and tool execution. Aurelia owns Telegram UX, identity/persona, scoped memory, scheduling, audit/policy context and workflows.
 
 ## Speech-to-Text (Groq)
 
@@ -91,7 +92,10 @@
 ├── config/app.json              # Main configuration
 ├── config/mcp_servers.json      # MCP server definitions
 ├── data/cron.db                 # SQLite database
-├── memory/personas/             # IDENTITY.md, SOUL.md, USER.md
+├── memory/personas/             # Global IDENTITY.md, SOUL.md
+├── users/<id>/personas/USER.md  # Per-user persona
+├── users/<id>/memory/           # Per-user memory
+├── projects/<slug>/memory/      # Current project memory layout; roadmap moves private project memory under users/<id>/projects/<slug>/memory
 ├── memory/OWNER_PLAYBOOK.md     # Optional owner instructions
 ├── agents/*.md                  # Agent definitions (YAML frontmatter)
 └── bridge/                      # TypeScript runtime files

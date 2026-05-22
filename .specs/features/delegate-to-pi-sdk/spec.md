@@ -131,20 +131,18 @@ session.on("tool_call", async (event) => {
 });
 ```
 
-**Depois (se `beforeToolCall` exposto em `createAgentSession`):**
+**Depois (implementado via `session.agent.beforeToolCall`):**
 ```typescript
-const { session } = await createAgentSession({
-  // ...
-  beforeToolCall: async ({ toolCall, args }) => {
-    // Policy evaluation here — nativo do PI
-    if (toolCall.name === "bash" && isDestructive(args.command)) {
-      return { block: true, reason: "destructive command" };
-    }
-  },
-});
+const { session } = await createAgentSession({ /* ... */ });
+const originalBeforeToolCall = session.agent.beforeToolCall;
+session.agent.beforeToolCall = async (ctx, signal) => {
+  const decision = evaluateToolPolicy(ctx.toolCall.name, ctx.args, securityContext);
+  if (decision.decision === "block") return { block: true, reason: decision.reason };
+  return originalBeforeToolCall?.(ctx, signal);
+};
 ```
 
-**Fallback (se `beforeToolCall` NÃO exposto):** Manter `session.on("tool_call")` por enquanto.
+**Nota:** `beforeToolCall` não é opção de `createAgentSession`; ele é propriedade do `session.agent`. O fallback antigo `session.on("tool_call")` foi removido porque essa API não existe na versão atual do PI SDK.
 
 ### Go — Simplified Session Store
 

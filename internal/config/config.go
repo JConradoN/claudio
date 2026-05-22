@@ -43,7 +43,7 @@ func defaultModelForProvider(provider string) string {
 }
 
 const (
-	defaultMaxIterations    = 500
+	defaultMaxIterations = 500
 	// PI SDK auto-compacts sessions near model context limits (~180K for 200K
 	// window models); this threshold is a safety net only, not primary management.
 	defaultMaxSessionTokens = 180000
@@ -123,6 +123,22 @@ func (c *AppConfig) DefaultOwnerUserIDOrFallback() int64 {
 	return 0
 }
 
+// IsModelAuto returns true when Aurelia should let PI choose the default model.
+func (c *AppConfig) IsModelAuto() bool {
+	if c == nil {
+		return true
+	}
+	return strings.TrimSpace(c.DefaultProvider) == "" && strings.TrimSpace(c.DefaultModel) == ""
+}
+
+// ModelDisplayName returns the user-facing model label.
+func (c *AppConfig) ModelDisplayName() string {
+	if c.IsModelAuto() {
+		return "PI default"
+	}
+	return c.DefaultModel
+}
+
 // VisionFallback returns the configured vision model and provider for image inputs.
 // Returns empty strings when no vision fallback is configured.
 func (c *AppConfig) VisionFallback() (model, provider string) {
@@ -131,7 +147,7 @@ func (c *AppConfig) VisionFallback() (model, provider string) {
 
 // Onboarded returns true if the config has the minimum required fields to run.
 func (c *AppConfig) Onboarded() bool {
-	return c.TelegramBotToken != "" && len(c.TelegramAllowedUserIDs) > 0 && c.DefaultProvider != ""
+	return c.TelegramBotToken != "" && len(c.TelegramAllowedUserIDs) > 0 && (c.DefaultProvider != "" || c.IsModelAuto())
 }
 
 // Editable returns a mutable copy of the user-editable configuration subset.
@@ -185,13 +201,13 @@ type fileConfig struct {
 	DBPath           string `json:"db_path"`
 	MCPConfigPath    string `json:"mcp_servers_config_path"`
 
-	VisionModel     string `json:"vision_model,omitempty"`
-	VisionProvider  string `json:"vision_provider,omitempty"`
-	LogLevel        string `json:"log_level,omitempty"`
-	LogFormat       string `json:"log_format,omitempty"`
-	DiskScanEnabled bool                     `json:"disk_scan_enabled,omitempty"`
+	VisionModel     string                  `json:"vision_model,omitempty"`
+	VisionProvider  string                  `json:"vision_provider,omitempty"`
+	LogLevel        string                  `json:"log_level,omitempty"`
+	LogFormat       string                  `json:"log_format,omitempty"`
+	DiskScanEnabled bool                    `json:"disk_scan_enabled,omitempty"`
 	SecurityConfig  security.SecurityConfig `json:"security,omitempty"`
-	SummaryInterval int                      `json:"summary_interval,omitempty"`
+	SummaryInterval int                     `json:"summary_interval,omitempty"`
 
 	DefaultOwnerUserID int64 `json:"default_owner_user_id,omitempty"`
 }
@@ -237,7 +253,7 @@ func Load(r *runtime.PathResolver) (*AppConfig, error) {
 		}
 	}
 
-	normalized := normalizeFileConfig(cfg, r)
+	normalized := normalizeFileConfig(cfg, r, hasExplicitAutoModel(data))
 	if !sameFileConfig(normalized, cfg) {
 		if err := writeConfigFile(path, normalized); err != nil {
 			return nil, err
@@ -265,8 +281,12 @@ func defaultFileConfig(r *runtime.PathResolver) fileConfig {
 	}
 }
 
-func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver) fileConfig {
+func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver, preserveAutoModel bool) fileConfig {
 	defaults := defaultFileConfig(r)
+	if preserveAutoModel {
+		cfg.DefaultProvider = ""
+		cfg.DefaultModel = ""
+	}
 	// Copy security config defaults if not set
 	if cfg.SecurityConfig.Mode == "" {
 		cfg.SecurityConfig = defaults.SecurityConfig
@@ -277,10 +297,10 @@ func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver) fileConfig {
 	if cfg.TelegramAllowedGroupIDs == nil {
 		cfg.TelegramAllowedGroupIDs = defaults.TelegramAllowedGroupIDs
 	}
-	if cfg.DefaultProvider == "" {
+	if !preserveAutoModel && cfg.DefaultProvider == "" {
 		cfg.DefaultProvider = defaults.DefaultProvider
 	}
-	if cfg.DefaultModel == "" {
+	if !preserveAutoModel && cfg.DefaultModel == "" {
 		cfg.DefaultModel = defaultModelForProvider(cfg.DefaultProvider)
 	}
 	if cfg.STTProvider == "" {
@@ -308,6 +328,29 @@ func normalizeFileConfig(cfg fileConfig, r *runtime.PathResolver) fileConfig {
 		cfg.Providers = map[string]ProviderConfig{}
 	}
 	return cfg
+}
+
+func hasExplicitAutoModel(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	var raw map[string]*json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	providerRaw, hasProvider := raw["default_provider"]
+	modelRaw, hasModel := raw["default_model"]
+	if !hasProvider || !hasModel || providerRaw == nil || modelRaw == nil {
+		return false
+	}
+	var provider, model string
+	if err := json.Unmarshal(*providerRaw, &provider); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(*modelRaw, &model); err != nil {
+		return false
+	}
+	return provider == "" && model == ""
 }
 
 func writeConfigFile(path string, cfg fileConfig) error {

@@ -35,8 +35,12 @@ func (bc *Service) buildSystemPrompt(userText string, agent *agents.Agent, chatI
 	var sections []string
 
 	// Runtime identity — tells the model what provider and model it is running on
-	provider := bc.config.DefaultProvider
-	model := bc.config.DefaultModel
+	provider := "PI default"
+	model := "PI default"
+	if bc.config != nil && !bc.config.IsModelAuto() {
+		provider = bc.config.DefaultProvider
+		model = bc.config.DefaultModel
+	}
 	if agent != nil && agent.Model != "" {
 		model = agent.Model
 	}

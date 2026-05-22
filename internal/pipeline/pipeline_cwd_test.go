@@ -3,8 +3,11 @@ package pipeline
 import (
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/config"
+	"github.com/igormaneschy/aurelia/internal/orchestrator"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
 
@@ -23,6 +26,49 @@ func TestBuildBridgeRequest_DisablesFileToolsInChatMode(t *testing.T) {
 	}
 }
 
+func TestBuildBridgeRequest_OmitsModelOptionsInAutoMode(t *testing.T) {
+	svc := &Service{
+		config:   &config.AppConfig{},
+		sessions: session.NewStore(),
+		botCwd:   "/tmp/aurelia-daemon",
+	}
+
+	req := svc.buildBridgeRequest("oi", "system", nil, 42, 0, 100)
+	if req.Options.Provider != "" || req.Options.Model != "" {
+		t.Fatalf("expected auto mode to omit provider/model, got provider=%q model=%q", req.Options.Provider, req.Options.Model)
+	}
+}
+
+func TestBuildBridgeRequest_SendsExplicitModelOptions(t *testing.T) {
+	svc := &Service{
+		config: &config.AppConfig{
+			DefaultProvider: "anthropic",
+			DefaultModel:    "claude-sonnet-4-6",
+		},
+		sessions: session.NewStore(),
+		botCwd:   "/tmp/aurelia-daemon",
+	}
+
+	req := svc.buildBridgeRequest("oi", "system", nil, 42, 0, 100)
+	if req.Options.Provider != "anthropic" || req.Options.Model != "claude-sonnet-4-6" {
+		t.Fatalf("expected explicit provider/model, got provider=%q model=%q", req.Options.Provider, req.Options.Model)
+	}
+}
+
+func TestBuildBridgeRequest_AgentModelOverrideWorksWithAutoMode(t *testing.T) {
+	svc := &Service{
+		config:   &config.AppConfig{},
+		sessions: session.NewStore(),
+		botCwd:   "/tmp/aurelia-daemon",
+	}
+	agent := &agents.Agent{Model: "openai/gpt-5.4"}
+
+	req := svc.buildBridgeRequest("oi", "system", agent, 42, 0, 100)
+	if req.Options.Provider != "" || req.Options.Model != "openai/gpt-5.4" {
+		t.Fatalf("expected only agent model override, got provider=%q model=%q", req.Options.Provider, req.Options.Model)
+	}
+}
+
 func TestBuildBridgeRequest_AllowsFileToolsWhenCwdBound(t *testing.T) {
 	sessions := session.NewStore()
 	sessions.SetCwd(42, 0, "/repo/aurelia")
@@ -38,5 +84,62 @@ func TestBuildBridgeRequest_AllowsFileToolsWhenCwdBound(t *testing.T) {
 	}
 	if req.Options.Cwd != "/repo/aurelia" {
 		t.Fatalf("Cwd = %q, want bound cwd", req.Options.Cwd)
+	}
+}
+
+func TestTryExecutePlan_RequiresCWD(t *testing.T) {
+	// When a plan is detected but no cwd is bound, tryExecutePlan must refuse
+	// execution and send an error without calling ExecuteApprovedPlan.
+	fo := &fakeOutput{}
+	s := &Service{
+		output:       fo,
+		orchestrator: orchestrator.NewOrchestrator(nil, orchestrator.OrchestratorConfig{}),
+		sessions:     session.NewStore(),
+	}
+
+	planText := "Here is the plan:\n```aurelia-plan\n{\"tasks\":[{\"id\":\"1\",\"description\":\"task 1\",\"prompt\":\"do it\",\"needs_worktree\":false}]}\n```\n"
+	handled := s.tryExecutePlan(1, 0, 100, planText, 42)
+	if !handled {
+		t.Fatal("expected true (plan found, execution refused)")
+	}
+	if fo.planExecuted {
+		t.Fatal("ExecuteApprovedPlan should NOT be called when cwd is missing")
+	}
+	if fo.lastError == "" {
+		t.Fatal("expected an error message about missing cwd")
+	}
+}
+
+func TestTryExecutePlan_PassesThreadAndCWD(t *testing.T) {
+	// When a plan is detected and cwd is set, tryExecutePlan must pass
+	// threadID, cwd, and userID through to ExecuteApprovedPlan.
+	sessions := session.NewStore()
+	sessions.SetCwd(1, 5, "/repo/project")
+
+	fo := &fakeOutput{}
+	s := &Service{
+		output:       fo,
+		orchestrator: orchestrator.NewOrchestrator(nil, orchestrator.OrchestratorConfig{}),
+		sessions:     sessions,
+	}
+
+	planText := "Here is the plan:\n```aurelia-plan\n{\"tasks\":[{\"id\":\"1\",\"description\":\"task 1\",\"prompt\":\"do it\",\"needs_worktree\":false}]}\n```\n"
+	_ = s.tryExecutePlan(1, 5, 100, planText, 42)
+
+	// Wait for async goroutine to set planExecuted
+	for i := 0; i < 100 && !fo.planExecuted; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	if !fo.planExecuted {
+		t.Fatal("ExecuteApprovedPlan should be called when cwd is set")
+	}
+	if fo.planThreadID != 5 {
+		t.Errorf("planThreadID = %d, want %d", fo.planThreadID, 5)
+	}
+	if fo.planCwd != "/repo/project" {
+		t.Errorf("planCwd = %q, want %q", fo.planCwd, "/repo/project")
+	}
+	if fo.planUserID != 42 {
+		t.Errorf("planUserID = %d, want %d", fo.planUserID, 42)
 	}
 }

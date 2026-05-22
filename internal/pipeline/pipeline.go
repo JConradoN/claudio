@@ -407,14 +407,12 @@ func (s *Service) routeAgent(text string) *agents.Agent {
 
 func (s *Service) classifyFunc() agents.ClassifyFunc {
 	return func(ctx context.Context, system, prompt string) (string, error) {
+		options := bridge.RequestOptions{SystemPrompt: system}
+		s.applyConfiguredModelOptions(&options)
 		result, err := s.bridge.ExecuteSync(ctx, bridge.Request{
 			Command: "query",
 			Prompt:  prompt,
-			Options: bridge.RequestOptions{
-				Provider:     s.config.DefaultProvider,
-				Model:        s.config.DefaultModel,
-				SystemPrompt: system,
-			},
+			Options: options,
 		})
 		if err != nil {
 			return "", err
@@ -430,14 +428,13 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 		Command: "query",
 		Prompt:  userText,
 		Options: bridge.RequestOptions{
-			Provider:     s.config.DefaultProvider,
-			Model:        s.config.DefaultModel,
 			SystemPrompt: systemPrompt,
 			ChatID:       chatID,
 			ThreadID:     threadID,
 			UserID:       userID,
 		},
 	}
+	s.applyConfiguredModelOptions(&req.Options)
 
 	if agent != nil {
 		if agent.Model != "" {
@@ -531,6 +528,18 @@ func (s *Service) buildBridgeRequest(userText, systemPrompt string, agent *agent
 	}
 
 	return req
+}
+
+func (s *Service) applyConfiguredModelOptions(options *bridge.RequestOptions) {
+	if s == nil || s.config == nil || s.config.IsModelAuto() || options == nil {
+		return
+	}
+	if s.config.DefaultProvider != "" {
+		options.Provider = s.config.DefaultProvider
+	}
+	if s.config.DefaultModel != "" {
+		options.Model = s.config.DefaultModel
+	}
 }
 
 // needsWriteTools returns true if the agent requires write-capable tools.
@@ -1021,7 +1030,7 @@ func (s *Service) handleEmptyResult(chatID int64, threadID int, messageID int, e
 // plan and, if so, starts the orchestrator. Returns (true, outcome) when a plan
 // was executed, or (false, OutcomeSuccess) to continue with normal reply.
 func (s *Service) handlePlanExecution(chatID int64, threadID int, messageID int, finalText string, safeFinalText string, successRunID string, userText string, userID int64) (bool, Outcome) {
-	if !s.tryExecutePlan(chatID, threadID, messageID, finalText) {
+	if !s.tryExecutePlan(chatID, threadID, messageID, finalText, userID) {
 		return false, OutcomeSuccess
 	}
 
@@ -1060,7 +1069,7 @@ func (s *Service) flushDreamer(chatID int64, threadID int, userID int64) {
 	s.InvalidateMemoryDirs(chatID, threadID, userID, cwd)
 }
 
-func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, finalText string) bool {
+func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, finalText string, userID int64) bool {
 	if s.orchestrator == nil {
 		return false
 	}
@@ -1085,13 +1094,22 @@ func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, fina
 	if displayText := orchestrator.StripPlanBlock(finalText); displayText != "" {
 		_ = s.output.SendReply(chatID, threadID, displayText)
 	}
+
+	// Resolve effective working directory — refuse execution without one
+	cwd := s.effectiveCwd(nil, chatID, threadID)
+	if cwd == "" {
+		log.Printf("orchestration: refusing plan execution for chat=%d thread=%d: no cwd bound", chatID, threadID)
+		_ = s.output.SendError(chatID, threadID, "Não encontrei um diretório de trabalho (cwd) para executar o plano. Use /cwd para fixar um projeto e tente novamente.")
+		return true
+	}
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("pipeline: panic in ExecuteApprovedPlan: %v", r)
 			}
 		}()
-		s.output.ExecuteApprovedPlan(chatID, messageID, plan)
+		s.output.ExecuteApprovedPlan(chatID, threadID, messageID, cwd, userID, plan)
 	}()
 	return true
 }
@@ -1173,14 +1191,15 @@ Updated summary (max 900 chars, no preamble):`,
 	sumCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	options := bridge.RequestOptions{
+		SystemPrompt: "You are a conversation summarizer. Output ONLY the requested summary, no preamble, no explanation. Maximum 900 characters, in the same language as the conversation (Portuguese).",
+	}
+	s.applyConfiguredModelOptions(&options)
+
 	result, err := s.bridge.ExecuteSync(sumCtx, bridge.Request{
 		Command: "query",
 		Prompt:  prompt,
-		Options: bridge.RequestOptions{
-			SystemPrompt: "You are a conversation summarizer. Output ONLY the requested summary, no preamble, no explanation. Maximum 900 characters, in the same language as the conversation (Portuguese).",
-			Provider:     s.config.DefaultProvider,
-			Model:        s.config.DefaultModel,
-		},
+		Options: options,
 	})
 
 	if err != nil {

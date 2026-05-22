@@ -445,15 +445,13 @@ func parseCronCreateResponse(raw string) (*cronCreateParsed, error) {
 func (bc *BotController) parseCronWithLLM(text string) (*cronCreateParsed, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cronParseTimeout)
 	defer cancel()
+	options := bridge.RequestOptions{SystemPrompt: cronParseSystemPrompt}
+	bc.applyConfiguredModelOptions(&options)
 
 	result, err := bc.bridge.ExecuteSync(ctx, bridge.Request{
 		Command: "query",
 		Prompt:  text,
-		Options: bridge.RequestOptions{
-			Provider:     bc.config.DefaultProvider,
-			Model:        bc.config.DefaultModel,
-			SystemPrompt: cronParseSystemPrompt,
-		},
+		Options: options,
 	})
 	if err != nil {
 		return nil, err
@@ -562,8 +560,8 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int, userID int64) (st
 	}
 
 	// Model
-	if bc.config != nil && bc.config.DefaultModel != "" {
-		lines = append(lines, fmt.Sprintf("⚙️ Modelo: **%s**", bc.config.DefaultModel))
+	if bc.config != nil {
+		lines = append(lines, fmt.Sprintf("⚙️ Modelo: **%s**", bc.config.ModelDisplayName()))
 	}
 
 	if bc.sessions != nil {
@@ -693,10 +691,10 @@ func (bc *BotController) cmdListAgents() (string, error) {
 
 func (bc *BotController) cmdListModels() (string, error) {
 	// Always show current model first
-	currentLine := fmt.Sprintf("Modelo atual: **%s** (provedor: **%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+	currentLine := bc.currentModelLine()
 
 	if bc.bridge == nil {
-		return currentLine + "\n\nProcessador não disponível para listar modelos.", nil
+		return currentLine + "\n\nProcessador não disponível para listar modelos. Use /model auto para usar o PI default.", nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -745,20 +743,26 @@ func (bc *BotController) cmdListModels() (string, error) {
 		}
 	}
 
-	lines = append(lines, "\n\nUse /model <nome> para trocar.")
+	lines = append(lines, "\n\nUse /model <nome> para trocar ou /model auto para usar o PI default.")
 	return strings.Join(lines, "\n"), nil
 }
 
 func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, error) {
-	if bc.bridge == nil {
-		return "Processador não disponível.", nil
+	if !bc.isOwner(c) {
+		return "Permissão negada. Apenas o owner pode trocar o modelo.", nil
 	}
 
 	// Extract the model name from the text
 	modelName := extractModelName(text)
 	if modelName == "" {
-		return "Use /model <nome> ou 'muda modelo para <nome>' para trocar.\n\n" +
+		return "Use /model <nome>, /model auto ou 'muda modelo para <nome>' para trocar.\n\n" +
 			"Digite 'lista modelos' para ver as opções disponíveis.", nil
+	}
+	if isAutoModelName(modelName) {
+		return bc.setModelAuto(c)
+	}
+	if bc.bridge == nil {
+		return "Processador não disponível.", nil
 	}
 
 	// Validate: check if the model exists in PI registry
@@ -802,6 +806,22 @@ func (bc *BotController) cmdSetModel(c telebot.Context, text string) (string, er
 	resetMsg := bc.resetCurrentModelSession(c.Chat().ID, c.Message().ThreadID, userID)
 
 	return fmt.Sprintf("✅ Modelo alterado para **%s** (provedor: **%s**)\n%s\nPróxima mensagem usará o novo modelo.", matched.ID, matched.Provider, resetMsg), nil
+}
+
+func (bc *BotController) setModelAuto(c telebot.Context) (string, error) {
+	return bc.setModelAutoForScope(c.Chat().ID, c.Message().ThreadID, safeSenderID(c.Sender()))
+}
+
+func (bc *BotController) setModelAutoForScope(chatID int64, threadID int, userID int64) (string, error) {
+	if err := bc.saveDefaultModel("", ""); err != nil {
+		return "", fmt.Errorf("falha ao salvar configuração: %w", err)
+	}
+	bc.invalidateModelCache()
+	if bc.refreshProviderEnv != nil {
+		bc.refreshProviderEnv()
+	}
+	resetMsg := bc.resetCurrentModelSession(chatID, threadID, userID)
+	return "✅ Modelo alterado para **PI default**\n" + resetMsg + "\nPróxima mensagem usará a seleção automática do PI.", nil
 }
 
 func (bc *BotController) resetCurrentModelSession(chatID int64, threadID int, userID ...int64) string {
@@ -850,6 +870,39 @@ func extractModelName(text string) string {
 	}
 
 	return ""
+}
+
+func isAutoModelName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "auto")
+}
+
+func (bc *BotController) applyConfiguredModelOptions(options *bridge.RequestOptions) {
+	if bc == nil || bc.config == nil || bc.config.IsModelAuto() || options == nil {
+		return
+	}
+	if bc.config.DefaultProvider != "" {
+		options.Provider = bc.config.DefaultProvider
+	}
+	if bc.config.DefaultModel != "" {
+		options.Model = bc.config.DefaultModel
+	}
+}
+
+func (bc *BotController) currentModelLine() string {
+	if bc == nil || bc.config == nil || bc.config.IsModelAuto() {
+		return "Modelo atual: **PI default** (seleção automática do PI)"
+	}
+	return fmt.Sprintf("Modelo atual: **%s** (provedor: **%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+}
+
+func (bc *BotController) invalidateModelCache() {
+	if bc == nil {
+		return
+	}
+	bc.modelCacheMu.Lock()
+	defer bc.modelCacheMu.Unlock()
+	bc.modelCache = nil
+	bc.modelCacheExpiry = time.Time{}
 }
 
 func (bc *BotController) cmdMemoryStatus(chatID int64, threadID int) (string, error) {

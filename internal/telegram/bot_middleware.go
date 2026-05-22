@@ -311,6 +311,9 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 	args := strings.TrimSpace(c.Message().Payload)
 	threadID := c.Message().ThreadID
 	if args != "" {
+		if !bc.isOwner(c) {
+			return SendTextWithThread(bc.bot, c.Chat(), "Permissão negada.", threadID)
+		}
 		reply, err := bc.cmdSetModel(c, "/model "+args)
 		if err != nil {
 			return SendErrorWithThread(bc.bot, c.Chat(), fmt.Sprintf("Erro: %v", err), threadID)
@@ -318,7 +321,7 @@ func (bc *BotController) handleModelCommand(c telebot.Context) error {
 		return SendTextWithThread(bc.bot, c.Chat(), reply, threadID)
 	}
 
-	currentLine := fmt.Sprintf("Modelo atual: **%s** (provedor: **%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+	currentLine := bc.currentModelLine()
 	if bc.bridge == nil {
 		return SendTextWithThread(bc.bot, c.Chat(), currentLine+"\n\nBridge indisponível.", threadID)
 	}
@@ -363,7 +366,7 @@ func (bc *BotController) sendProviderMenu(c telebot.Context, edit bool) error {
 	rows = append(rows, menu.Row(menu.Data("❌ Cancelar", "mdl_cancel")))
 	menu.Inline(rows...)
 
-	currentLine := fmt.Sprintf("Modelo atual: **%s** (**%s**)", bc.config.DefaultModel, bc.config.DefaultProvider)
+	currentLine := bc.currentModelLine()
 	msg := currentLine + "\n\n**Selecione o provedor:**"
 	if edit {
 		return c.Edit(msg, menu)
@@ -396,6 +399,9 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 	case strings.HasPrefix(data, "mdl_prov_"):
 		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_prov_"), 0)
 	case strings.HasPrefix(data, "mdl_set_"):
+		if !bc.isOwner(c) {
+			return c.Edit("Permissão negada.")
+		}
 		return bc.setModelFromCallback(c, strings.TrimPrefix(data, "mdl_set_"))
 	case strings.HasPrefix(data, "mdl_next_"):
 		return bc.showModelPage(c, strings.TrimPrefix(data, "mdl_next_"), 1)
@@ -404,7 +410,7 @@ func (bc *BotController) handleModelCallback(c telebot.Context) error {
 	case data == "mdl_back":
 		return bc.sendProviderMenu(c, true)
 	case data == "mdl_cancel":
-		return c.Edit("✅ Operação cancelada. O modelo continua: **" + bc.config.DefaultModel + "**.")
+		return c.Edit("✅ Operação cancelada. O modelo continua: **" + bc.config.ModelDisplayName() + "**.")
 	default:
 		return nil
 	}
@@ -479,11 +485,21 @@ func (bc *BotController) showModelPage(c telebot.Context, data string, dir int) 
 
 func (bc *BotController) setModelFromCallback(c telebot.Context, data string) error {
 	firstUnderscore := strings.Index(data, "_")
-	if firstUnderscore < 0 {
-		return nil
+	if firstUnderscore <= 0 || firstUnderscore == len(data)-1 {
+		return c.Edit("Modelo inválido.")
 	}
 	provider := data[:firstUnderscore]
 	modelID := data[firstUnderscore+1:]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	models, err := bc.getModels(ctx)
+	if err != nil {
+		return c.Edit("Não consegui validar este modelo. Tente novamente.")
+	}
+	if !modelExists(models, provider, modelID) {
+		return c.Edit("Modelo indisponível. Abra /model e tente novamente.")
+	}
 
 	bc.config.DefaultModel = modelID
 	bc.config.DefaultProvider = provider
@@ -496,12 +512,22 @@ func (bc *BotController) setModelFromCallback(c telebot.Context, data string) er
 	if err := bc.saveDefaultModel(provider, modelID); err != nil {
 		log.Printf("model callback persist: %v", err)
 	}
+	bc.invalidateModelCache()
 
 	if bc.refreshProviderEnv != nil {
 		bc.refreshProviderEnv()
 	}
 
 	return c.Edit(fmt.Sprintf("✅ Modelo alterado para **%s**\nProvedor: **%s**\n\n%s", modelID, provider, resetMsg))
+}
+
+func modelExists(models []bridge.ModelInfo, provider, modelID string) bool {
+	for _, m := range models {
+		if m.Provider == provider && m.ID == modelID {
+			return true
+		}
+	}
+	return false
 }
 
 func (bc *BotController) handleMemoryCommand(c telebot.Context) error {

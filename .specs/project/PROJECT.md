@@ -6,6 +6,34 @@ Aurelia OS is an autonomous agent operating system accessible via Telegram. The 
 
 One persistent Go daemon, many projects, many agents.
 
+## Architectural Thesis
+
+Aurelia is a product/operating layer over the PI SDK engine:
+
+```text
+Telegram / CLI / Cron / future interfaces
+        ↓
+Aurelia Product Layer
+- identity and persona
+- Telegram-native UX
+- workflows and planning state
+- persistent memory and future Wiki
+- user/project/topic scoping
+- policy, audit, continuity and scheduling
+        ↓
+PI SDK
+- reasoning and tool execution
+- sessions and compaction
+- model/provider abstraction
+- agent runtime, skills and extensions
+        ↓
+Tools / filesystem / web / APIs / projects
+```
+
+The architectural rule is: **delegate engine capabilities to PI; keep product continuity in Aurelia**. Aurelia must not become a thin PI wrapper, but it also must not rebuild model routing, session compaction, context loading or tool execution when PI already provides them.
+
+The strategic differentiator is the future **Wiki Memory Gateway**: local-first, markdown-auditable, scoped memory that can be queried and updated by Aurelia, PI direct, PI Code/opencode and future MCP-compatible clients.
+
 ## Goals
 
 - **Natural interface** — Talk to an AI assistant via Telegram with text, photos, voice, documents. No CLI required for daily use.
@@ -45,18 +73,19 @@ One persistent Go daemon, many projects, many agents.
 - **Orchestrator scaffold** (~40%): Worktree management, wave execution, validate prompts, git helpers, tasks status — but the cycle doesn't close.
 
 ### In progress
-- Closing the conceptual boundary: PI owns model/session/context/tool execution; Aurelia owns Telegram UX, identity/persona, persistence, scheduling, memory, project binding and orchestration.
-- User Isolation hardening: bridge active session commands are now user-scoped; remaining audit is `CancelAllForUser` broadcast semantics and stale spec checkboxes.
-- Agent registry migration decision: keep Aurelia specialists as product-layer feature or migrate parsing/execution to PI-native agents.
+- Closing the conceptual boundary: PI owns model/session/context/tool execution; Aurelia owns Telegram UX, identity/persona, persistence, scheduling, memory, project binding, policy/audit and orchestration.
+- User Isolation hardening: most runtime session APIs are user-scoped; remaining code-level gap is `CancelAllForUser` still issuing an unscoped bridge abort and stale spec checkboxes.
+- Agent registry boundary decision: keep Aurelia specialists as a product-layer feature for now; investigate PI-native parsing/discovery later via `agentsFilesOverride` rather than forcing a user-facing migration.
 - Orchestration Cycle: existing scaffold must be connected to validation, commit/PR, task-status updates and artifact manifests.
+- Memory/Wiki preparation: project memory scopes must become user×project private plus project-team shared before exposing Wiki MCP.
 
 ## Roadmap
 
 Ver `.specs/project/ROADMAP.md` para o sequenciamento completo. Resumo:
 
 ```
-Sprint 0 → Delegate to PI SDK Native core ✅; remaining: agent registry boundary + docs/spec cleanup
-Sprint A → User Isolation MVP ✅; active session scoping fixed; remaining: cleanup/audit
+Sprint 0 → Delegate to PI SDK Native core ✅; remaining: docs/spec cleanup + agent registry boundary decision
+Sprint A → User Isolation MVP ✅; active session scoping mostly fixed; remaining: CancelAllForUser + cleanup/audit
 Sprint B → Close Orchestration Cycle (conectar scaffold existente)
 Sprint C → Plan Mode Architecture explícito
 Sprint D → User-Scoped Project Memory

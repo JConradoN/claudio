@@ -62,7 +62,7 @@ For trivial tasks, implement directly and validate.
 | `internal/pipeline/` | Reusable turn driver: prompt + bridge + plan dispatch + resilience + run supervisor |
 | `internal/orchestrator/` | Plan→workers→validate cycle, worktrees, quality gate, git/PR |
 | `internal/agents/` | Agent registry (load markdown definitions) |
-| `internal/session/` | Session store and token tracking |
+| `internal/session/` | PI session_file resume, cwd state, nudge buffers |
 | `internal/persona/` | Identity files, prompt assembly |
 | `internal/cron/` | Schedule store, scheduler, bridge-backed runtime |
 | `internal/dream/` | Background memory consolidation and nudges |
@@ -72,7 +72,7 @@ For trivial tasks, implement directly and validate.
 | `internal/onboarding/` | Interactive setup wizard |
 | `internal/deps/` | Runtime dependency checks (Node, npm, git, gh) |
 | `internal/version/` | Build version constant |
-| `bridge/` | TypeScript Bridge (PI SDK wrapper) |
+| `bridge/` | TypeScript Bridge (PI SDK adapter) |
 | `pkg/stt/` | Speech-to-text |
 
 ## Versioning & Changelog

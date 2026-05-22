@@ -2,6 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -12,6 +17,7 @@ import (
 type fakeBridge struct {
 	results    map[string]*bridge.Event // requestPrompt → terminal event
 	defaultEv  *bridge.Event            // fallback for unmatched prompts
+	lastReq    bridge.Request           // captured from most recent Execute/ExecuteSync
 	mu         sync.Mutex
 }
 
@@ -35,6 +41,7 @@ func (f *fakeBridge) Execute(ctx context.Context, req bridge.Request) (<-chan br
 	ch := make(chan bridge.Event, 4)
 
 	f.mu.Lock()
+	f.lastReq = req
 	ev, ok := f.results[req.Prompt]
 	fallback := f.defaultEv
 	f.mu.Unlock()
@@ -55,6 +62,10 @@ func (f *fakeBridge) Execute(ctx context.Context, req bridge.Request) (<-chan br
 }
 
 func (f *fakeBridge) ExecuteSync(ctx context.Context, req bridge.Request) (*bridge.Event, error) {
+	f.mu.Lock()
+	f.lastReq = req
+	f.mu.Unlock()
+
 	ch, err := f.Execute(ctx, req)
 	if err != nil {
 		return nil, err
@@ -65,6 +76,83 @@ func (f *fakeBridge) ExecuteSync(ctx context.Context, req bridge.Request) (*brid
 		last = &ev
 	}
 	return last, nil
+}
+
+// LastRequest returns the most recent bridge request captured.
+func (f *fakeBridge) LastRequest() bridge.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReq
+}
+
+func TestNewRunID_NoHyphensOrSlashes(t *testing.T) {
+	ids := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		id := newRunID()
+		// Must not contain hyphens or slashes (constraint for CleanupAll path→branch conversion)
+		if strings.ContainsAny(id, "-/") {
+			t.Errorf("newRunID() = %q, contains hyphen or slash", id)
+		}
+		// Must match the canonical format enforced by WorktreeManager.Create
+		if !runIDRe.MatchString(id) {
+			t.Errorf("newRunID() = %q, does not match expected format %s", id, runIDRe.String())
+		}
+		// Must be unique
+		if ids[id] {
+			t.Errorf("newRunID() = %q, duplicate", id)
+		}
+		ids[id] = true
+	}
+}
+
+func TestExecuteTask_SessionScopedOptions(t *testing.T) {
+	fb := newFakeBridge()
+	fb.SetResult("test task", &bridge.Event{Type: "result", Content: "ok"})
+
+	o := NewOrchestrator(fb, OrchestratorConfig{RepoRoot: t.TempDir()})
+
+	// First worker
+	r1 := o.ExecuteTask(context.Background(), Task{ID: "1", Prompt: "test task"}, DefaultWorkerConfig, "/tmp", "prompt", func(WorkerEvent) {})
+	if !r1.Success {
+		t.Fatalf("worker 1 failed: %s", r1.Error)
+	}
+	req1 := fb.LastRequest()
+
+	// All three fields must be negative (reserved synthetic tuple)
+	if req1.Options.ChatID >= 0 {
+		t.Errorf("worker ChatID = %d, want negative (synthetic)", req1.Options.ChatID)
+	}
+	if req1.Options.ThreadID >= 0 {
+		t.Errorf("worker ThreadID = %d, want negative (synthetic)", req1.Options.ThreadID)
+	}
+	if req1.Options.UserID >= 0 {
+		t.Errorf("worker UserID = %d, want negative (synthetic)", req1.Options.UserID)
+	}
+	if req1.Options.PersistSession == nil {
+		t.Fatal("PersistSession is nil, want false")
+	}
+	if *req1.Options.PersistSession {
+		t.Error("PersistSession = true, want false")
+	}
+
+	// Second worker must have a unique tuple
+	r2 := o.ExecuteTask(context.Background(), Task{ID: "2", Prompt: "test task"}, DefaultWorkerConfig, "/tmp", "prompt", func(WorkerEvent) {})
+	if !r2.Success {
+		t.Fatalf("worker 2 failed: %s", r2.Error)
+	}
+	req2 := fb.LastRequest()
+	if req1.Options.ChatID == req2.Options.ChatID {
+		t.Error("two workers received the same synthetic ChatID, want unique")
+	}
+	if req2.Options.ChatID >= 0 {
+		t.Errorf("worker 2 ChatID = %d, want negative", req2.Options.ChatID)
+	}
+	if req2.Options.ThreadID >= 0 {
+		t.Errorf("worker 2 ThreadID = %d, want negative", req2.Options.ThreadID)
+	}
+	if req2.Options.UserID >= 0 {
+		t.Errorf("worker 2 UserID = %d, want negative", req2.Options.UserID)
+	}
 }
 
 func TestExecuteTask_Success(t *testing.T) {
@@ -160,6 +248,34 @@ func TestExecuteTask_BridgeClosedWithoutResult_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestExecutePlan_WorktreeFailure_FailsClosed(t *testing.T) {
+	// When NeedsWorktree=true and no repo root is configured (worktree manager
+	// is nil), ExecutePlan must fail fast at the plan level.
+	fb := newFakeBridge()
+	fb.SetDefault(&bridge.Event{Type: "result", Content: "should not execute"})
+
+	// No RepoRoot → no worktree manager
+	o := NewOrchestrator(fb, OrchestratorConfig{})
+
+	plan := &Plan{Tasks: []Task{
+		{ID: "1", Description: "needs worktree", Prompt: "should not execute", NeedsWorktree: true},
+	}}
+
+	_, err := o.ExecutePlan(
+		context.Background(),
+		plan,
+		nil,
+		func(task Task, cfg WorkerConfig) string { return "prompt" },
+		func(ev WorkerEvent) {},
+	)
+	if err == nil {
+		t.Fatal("expected error when worktree needed but no repo root")
+	}
+	if !strings.Contains(err.Error(), "worktree not available") {
+		t.Errorf("error = %q, want mention of 'worktree not available'", err.Error())
+	}
+}
+
 func TestExecutePlan_TwoWaves(t *testing.T) {
 	fb := newFakeBridge()
 	fb.SetResult("task 1 prompt", &bridge.Event{Type: "result", Content: "done 1"})
@@ -203,5 +319,149 @@ func TestExecutePlan_TwoWaves(t *testing.T) {
 		if !r.Success {
 			t.Errorf("task %s failed: %s", r.TaskID, r.Error)
 		}
+	}
+}
+
+func TestExecutePlan_MergeFailure_PreservesWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repoDir := t.TempDir()
+	initRepo(t, repoDir)
+
+	// Create a base file that will be divergently modified on both sides
+	if err := os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("initial\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-m", "add conflict.txt to base")
+
+	fb := newFakeBridge()
+	fb.SetDefault(&bridge.Event{Type: "result", Content: "done"})
+	o := NewOrchestrator(fb, OrchestratorConfig{RepoRoot: repoDir})
+
+	plan := &Plan{Tasks: []Task{
+		{ID: "t1", Description: "task", Prompt: "do work", NeedsWorktree: true},
+	}}
+
+	var (
+		wtMu    sync.Mutex
+		wtFound bool
+		wtPath  string
+	)
+
+	// Shared git env for subprocesses spawned inside the callback goroutine.
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@test.com",
+	)
+
+	gitExec := func(dir string, args ...string) error {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = gitEnv
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %v in %s: %w\n%s", args, dir, err, out)
+		}
+		return nil
+	}
+
+	results, err := o.ExecutePlan(context.Background(), plan, nil,
+		func(task Task, cfg WorkerConfig) string { return "prompt" },
+		func(ev WorkerEvent) {
+			wtMu.Lock()
+			defer wtMu.Unlock()
+			if ev.Type == "start" && !wtFound {
+				matches, gErr := filepath.Glob(filepath.Join(repoDir, ".worktrees", "worker-*"))
+				if gErr == nil && len(matches) > 0 {
+					wtPath = matches[0]
+					wtFound = true
+
+					t.Logf("injecting conflicts: worktree=%s", wtPath)
+
+					// Step 1: modify conflict.txt on main and commit.
+					// This creates divergence: main now has "main edit".
+					if err := os.WriteFile(filepath.Join(repoDir, "conflict.txt"), []byte("main edit\n"), 0644); err != nil {
+						t.Logf("write main conflict.txt: %v", err)
+						return
+					}
+					if err := gitExec(repoDir, "add", "."); err != nil {
+						t.Logf("main git add: %v", err)
+						return
+					}
+					if err := gitExec(repoDir, "commit", "-m", "main edit"); err != nil {
+						t.Logf("main git commit: %v", err)
+						return
+					}
+					t.Logf("main branch advanced with conflicting change")
+
+					// Step 2: modify conflict.txt in worktree and commit.
+					// Both sides have now changed the same file differently → conflict.
+					if err := os.WriteFile(filepath.Join(wtPath, "conflict.txt"), []byte("worktree edit\n"), 0644); err != nil {
+						t.Logf("write worktree conflict.txt: %v", err)
+						return
+					}
+					if err := gitExec(wtPath, "add", "."); err != nil {
+						t.Logf("worktree git add: %v", err)
+						return
+					}
+					if err := gitExec(wtPath, "commit", "-m", "worktree edit"); err != nil {
+						t.Logf("worktree git commit: %v", err)
+						return
+					}
+					t.Logf("worktree branch advanced with conflicting change")
+				}
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("ExecutePlan: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+
+	if !wtFound {
+		t.Fatal("worktree was not detected during execution, cannot verify merge failure path")
+	}
+
+	t.Logf("result.Success=%v, result.Error=%q", r.Success, r.Error)
+	mainLog := runGitOutput(t, repoDir, "log", "--oneline", "-3", "main")
+	t.Logf("main branch (last 3 commits):\n%s", mainLog)
+
+	// The merge should have failed because both sides changed conflict.txt.
+	if r.Success {
+		t.Fatal("expected task to fail after merge failure, but Success=true")
+	}
+	if !strings.Contains(r.Error, "worktree preserved for recovery") {
+		t.Errorf("result.Error = %q, want substring %q", r.Error, "worktree preserved for recovery")
+	}
+
+	// Worktree must still exist (not cleaned up — preserved for recovery)
+	matches, _ := filepath.Glob(filepath.Join(repoDir, ".worktrees", "worker-*"))
+	if len(matches) == 0 {
+		t.Error("worktree was cleaned up after merge failure, want preserved for recovery")
+	} else {
+		// Reconstruct expected branch name from worktree path
+		base := filepath.Base(matches[0])
+		rest := strings.TrimPrefix(base, "worker-")
+		branch := "worker/" + strings.Replace(rest, "-", "/", 1)
+		branches := runGitOutput(t, repoDir, "branch", "--list", branch)
+		if branches == "" {
+			t.Errorf("branch %q was deleted after merge failure, want preserved for recovery", branch)
+		}
+
+		// Cleanup for test isolation
+		cleanupCmd := exec.Command("git", "worktree", "remove", "--force", matches[0])
+		cleanupCmd.Dir = repoDir
+		_ = cleanupCmd.Run()
+		delCmd := exec.Command("git", "branch", "-D", branch)
+		delCmd.Dir = repoDir
+		_ = delCmd.Run()
 	}
 }

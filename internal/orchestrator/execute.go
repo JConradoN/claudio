@@ -4,13 +4,33 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
 	"github.com/igormaneschy/aurelia/internal/bridge"
 )
+
+// runIDCounter produces unique run identifiers for ExecutePlan worktree namespaces.
+var runIDCounter int64
+
+// newRunID generates a short filesystem-safe run identifier with no hyphens
+// or slashes. This is a constraint: CleanupAll's path-to-branch conversion
+// depends on the absence of hyphens in the runID to correctly reconstruct
+// branch names from worktree paths.
+func newRunID() string {
+	c := atomic.AddInt64(&runIDCounter, 1)
+	return fmt.Sprintf("run%d", c)
+}
+
+// workerSessionCounter produces unique, all-negative synthetic session tuples
+// for worker bridge requests. Real app session keys may have a positive or
+// negative ChatID (group chats are negative), but ThreadID is always ≥0 and
+// UserID is positive or zero (transitional paths). An all-negative
+// (ChatID, ThreadID, UserID) tuple is therefore reserved for internal worker
+// sessions and cannot collide with real session keys.
+var workerSessionCounter int64
 
 // ExecuteTask runs a single task as a worker via the bridge.
 // It streams events and calls onEvent for visual feedback.
@@ -26,6 +46,14 @@ func (o *Orchestrator) ExecuteTask(
 
 	onEvent(WorkerEvent{TaskID: task.ID, Type: "start", Message: task.Description})
 
+	// Each worker gets a synthetic session scope where ChatID, ThreadID, and
+	// UserID are all negative. Real ChatID can be positive or negative (group
+	// chats), but ThreadID is always ≥0 and UserID is positive/zero in this
+	// app. An all-negative tuple is therefore reserved for internal workers and
+	// cannot collide with real session keys. Session persistence is disabled
+	// so parallel workers never share or overwrite each other's state.
+	workerID := atomic.AddInt64(&workerSessionCounter, 1)
+	nID := -workerID
 	req := bridge.Request{
 		Command: "query",
 		Prompt:  task.Prompt,
@@ -36,6 +64,10 @@ func (o *Orchestrator) ExecuteTask(
 			AllowedTools:    cfg.Tools,
 			DisallowedTools: cfg.DisallowedTools,
 			NoUserSettings:  true,
+			ChatID:          nID,
+			ThreadID:        int(nID),
+			UserID:          nID,
+			PersistSession:  boolPtr(false),
 		},
 	}
 
@@ -116,6 +148,8 @@ func (o *Orchestrator) ExecuteTask(
 
 // ExecutePlan executes all tasks in the plan, respecting dependencies (wave-based).
 // It resolves agent config per task and manages worktrees.
+// If any task requires a worktree, the base branch is resolved once and a single
+// runID is generated for namespace isolation across all worktrees in this plan.
 func (o *Orchestrator) ExecutePlan(
 	ctx context.Context,
 	plan *Plan,
@@ -126,6 +160,24 @@ func (o *Orchestrator) ExecutePlan(
 	waves, err := plan.ExecutionOrder()
 	if err != nil {
 		return nil, fmt.Errorf("resolving execution order: %w", err)
+	}
+
+	// Determine if any task requires a worktree
+	needsWorktree := planHasWorktree(waves)
+	if needsWorktree && o.worktree == nil {
+		return nil, fmt.Errorf("worktree not available: no repo root configured")
+	}
+
+	// Resolve base branch once if worktrees are needed
+	var baseBranch string
+	var runID string
+	if needsWorktree {
+		var bbErr error
+		baseBranch, bbErr = resolveBaseBranch(ctx, o.config.RepoRoot)
+		if bbErr != nil {
+			return nil, fmt.Errorf("resolving base branch for worktree tasks: %w", bbErr)
+		}
+		runID = newRunID()
 	}
 
 	var allResults []TaskResult
@@ -153,32 +205,63 @@ func (o *Orchestrator) ExecutePlan(
 
 				cfg := ResolveAgentConfig(registry, t.Agent)
 
-				// Determine cwd (worktree or repo root)
+				// If the task requires a worktree, create one. Failure to create
+				// is fatal — we do NOT fall back to the repo root (fail-closed).
+				// baseBranch and runID are pre-resolved; they are non-empty when
+				// needsWorktree is true.
 				cwd := o.config.RepoRoot
 				var wt *Worktree
-				if t.NeedsWorktree && o.worktree != nil {
+				if t.NeedsWorktree {
 					var wtErr error
-					wt, wtErr = o.worktree.Create(t.ID, currentBranch(o.config.RepoRoot))
-					if wtErr == nil {
-						cwd = wt.Path
-					} else {
-						slog.Warn("orchestrator: worktree creation failed, falling back to repo root", "task", t.ID, "error", wtErr)
-						onEvent(WorkerEvent{TaskID: t.ID, Type: "warning", Message: "worktree unavailable, running in repo root"})
+					wt, wtErr = o.worktree.Create(runID, t.ID, baseBranch)
+					if wtErr != nil {
+						result := TaskResult{
+							TaskID:  t.ID,
+							Success: false,
+							Error:   fmt.Sprintf("worktree creation failed: %v", wtErr),
+						}
+						onEvent(WorkerEvent{TaskID: t.ID, Type: "error", Message: result.Error})
+						mu.Lock()
+						allResults = append(allResults, result)
+						mu.Unlock()
+						return
 					}
+					cwd = wt.Path
 				}
 
 				prompt := systemPromptBuilder(t, cfg)
 				result := o.ExecuteTask(ctx, t, cfg, cwd, prompt, onEvent)
 
-				// Cleanup worktree
+				// Worktree lifecycle: merge successful work, then cleanup.
+				// On merge failure the worktree/branch are preserved for manual
+				// recovery — do NOT force-delete unmerged changes.
 				if wt != nil {
 					if result.Success {
-						if err := o.worktree.Merge(wt, currentBranch(o.config.RepoRoot)); err != nil {
-							log.Printf("orchestrator: worktree merge failed for task %s: %v", t.ID, err)
+						if err := o.worktree.Merge(wt, baseBranch); err != nil {
+							// Merge failed: preserve worktree for recovery, mark task
+							// as failed with a sanitized user-facing message. The full
+							// git error (including paths) stays in the server log.
+							log.Printf("orchestrator: worktree merge failed for task %s, worktree preserved at %s: %v", t.ID, wt.Path, err)
+							result.Success = false
+							result.Error = "merge failed; worktree preserved for recovery"
+							// Use a distinct event type ("merge_failed") rather than
+							// "error" because ExecuteTask already emitted a "done"
+							// event. Re-using "error" would invert the event stream
+							// (done → error) and confuse UI consumers.
+							onEvent(WorkerEvent{TaskID: t.ID, Type: "merge_failed", Message: result.Error})
+							// Do NOT cleanup — worktree/branch left for manual recovery
+						} else {
+							// Merge succeeded — safe to remove worktree and branch
+							if err := o.worktree.Cleanup(wt); err != nil {
+								log.Printf("orchestrator: worktree cleanup failed for task %s: %v", t.ID, err)
+							}
 						}
-					}
-					if err := o.worktree.Cleanup(wt); err != nil {
-						log.Printf("orchestrator: worktree cleanup failed for task %s: %v", t.ID, err)
+					} else {
+						// Task execution failed — no successful changes to merge.
+						// Cleanup is safe because nothing was merged.
+						if err := o.worktree.Cleanup(wt); err != nil {
+							log.Printf("orchestrator: worktree cleanup failed for task %s: %v", t.ID, err)
+						}
 					}
 				}
 
@@ -194,9 +277,19 @@ func (o *Orchestrator) ExecutePlan(
 	return allResults, nil
 }
 
-// currentBranch returns the current git branch name.
-func currentBranch(repoRoot string) string {
-	// Simple implementation — read HEAD
-	// In production this would use git rev-parse --abbrev-ref HEAD
-	return "HEAD"
+// planHasWorktree returns true if any task in any wave has NeedsWorktree set.
+func planHasWorktree(waves [][]Task) bool {
+	for _, wave := range waves {
+		for _, t := range wave {
+			if t.NeedsWorktree {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// boolPtr returns a pointer to v for use in optional bool request fields.
+func boolPtr(v bool) *bool {
+	return &v
 }

@@ -38,6 +38,7 @@ func (o *Orchestrator) Validate(
 		Options: bridge.RequestOptions{
 			SystemPrompt:   validationPrompt,
 			NoUserSettings: true,
+			Cwd:            o.config.RepoRoot,
 		},
 	}
 

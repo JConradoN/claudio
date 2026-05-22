@@ -106,20 +106,20 @@ T16 → T17 → T18 → T18b → T19 → T20
 
 ---
 
-### T0c: Refactor dream/cron/tracker/run signatures para scoped keys
+### T0c: Refactor dream/cron/session/active-run signatures para scoped keys
 
-**What:** Mesma mudança em `internal/dream/`, `internal/cron/runtime.go`, `internal/session/tracker.go` e `internal/pipeline/run_supervisor.go`.
-**Where:** `internal/dream/dream.go`, `nudge.go`, `internal/cron/runtime.go`, `internal/session/tracker.go`, `internal/pipeline/run_supervisor.go`
+**What:** Mesma mudança em `internal/dream/`, `internal/cron/runtime.go`, `internal/session/store.go` e `internal/pipeline/service.go`.
+**Where:** `internal/dream/dream.go`, `nudge.go`, `internal/cron/runtime.go`, `internal/session/store.go`, `internal/pipeline/service.go`
 **Depends on:** T0a, T0b
 **Reuses:** TurnContext, SessionKey, ConversationKey
 
 **Done when:**
 - [ ] `Dreamer.AfterTurnNudge`, `FlushNudge` aceitam `*TurnContext`
 - [ ] Cron runtime expõe assinatura/inputs owner-aware; wiring real com `DefaultOwnerUserID` acontece em T9
-- [ ] `session.Tracker` usa `SessionKey`, não `chatID`
-- [ ] `runSupervisor` usa `SessionKey`, não `(chatID, threadID)`
-- [ ] `runSupervisor.cancelByUser(userID)` disponível para `/forget-me`
-- [ ] Tests: `TestTracker_PerUserUsage`, `TestRunSupervisor_PerUserIsolation`
+- [x] Manual token tracker removido; PI SDK compaction é fonte de verdade
+- [x] `Service.activeSessions` usa `chatID:threadID:userID`, não apenas `(chatID, threadID)`
+- [ ] `CancelAllForUser(userID)` cancela apenas sessões do usuário e envia abort scoped ao Bridge, sem broadcast global
+- [ ] Tests: `TestActiveSessions_PerUserIsolation`, `TestCancelAllForUser_ScopedAbort`
 - [ ] Tests existentes ainda passam
 
 **Verify:** `go test ./internal/dream/... ./internal/cron/... ./internal/session/... ./internal/pipeline/... -v`
@@ -490,7 +490,7 @@ T16 → T17 → T18 → T18b → T19 → T20
 
 **Done when:**
 - [ ] Manda mensagem com botões "Confirmar / Cancelar"
-- [ ] Confirmar → marca user como deleting, `runSupervisor.cancelByUser(userID)`, aguarda drain até 30s, cancela cron do user e só então `users.Store.Delete(userID)`
+- [ ] Confirmar → marca user como deleting, `pipeline.Service.CancelAllForUser(userID)` cancela apenas sessões do usuário, aguarda drain até 30s, cancela cron do user e só então `users.Store.Delete(userID)`
 - [ ] User é o único na whitelist → recusa com mensagem
 - [ ] Próxima mensagem do user (já sem profile) → dispara onboarding (re-uso da T16)
 - [ ] Test: `TestForgetMeCommand_FullFlow`

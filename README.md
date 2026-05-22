@@ -54,12 +54,37 @@ It is built around a practical execution model:
 The goal is not to reimplement what PI already does.
 The goal is to orchestrate it — adding persistence, memory, scheduling, multi-project support, and a natural Telegram interface on top.
 
+### Architectural Thesis
+
+Aurelia is the **product layer** on top of the PI SDK engine:
+
+```text
+Telegram / CLI / Cron / future interfaces
+        ↓
+Aurelia Product Layer
+identity · persona · Telegram UX · workflows · memory · Wiki · policies · continuity
+        ↓
+PI SDK
+reasoning · tool execution · sessions · agent runtime · model/provider abstraction
+        ↓
+Tools / filesystem / web / APIs / projects
+```
+
+The boundary is intentional:
+
+- **PI SDK owns** model/provider resolution, tool execution, session runtime, compaction, context-file loading, skills/extensions, and agentic execution primitives.
+- **Aurelia owns** identity, personality, Telegram-native UX, user/project scoping, persistent memory, cron, workflows, audit, orchestration, and the future Wiki layer.
+- When the PI SDK already owns a capability, Aurelia adapts or orchestrates it rather than reimplementing it.
+- When the capability is product-specific continuity, memory, policy, UX, or workflow state, Aurelia remains the source of truth.
+
+The long-term differentiator is the **Wiki Memory Gateway**: a local-first, markdown-auditable, scoped memory layer usable by Aurelia, PI direct, PI Code/opencode, and future MCP clients without mixing users or projects.
+
 ## Core Capabilities
 
 - **Natural conversation** via Telegram with text, photos, voice, and documents
 - **Autonomous coding** — reads, writes, edits files, runs commands, searches code
 - **Multi-project** — work on different projects simultaneously with isolated contexts
-- **Persistent memory** — 3-layer memory system (global, project-private, project-team) that survives across sessions
+- **Persistent memory** — scoped memory system (user, project/private, project-team, topic) that survives across sessions
 - **Learning nudge** — automatic memory extraction from conversations on session reset
 - **Dream consolidation** — periodic background review that organizes and deduplicates memories
 - **Multi-provider** — OpenRouter (recommended), opencode-go, Anthropic, Kimi, Z.ai, Alibaba
@@ -76,7 +101,7 @@ The goal is to orchestrate it — adding persistence, memory, scheduling, multi-
 
 ## Runtime Features
 
-Aurelia uses a TypeScript Bridge wrapping the PI SDK as its inference engine:
+Aurelia uses a TypeScript Bridge adapting the PI SDK as its inference and execution engine:
 
 - **Bridge** — `bridge/index.ts` wraps `@earendil-works/pi-coding-agent` and is embedded into the Go binary.
 - **API key auth** — provider keys are configured during onboarding and exported to the bridge runtime environment.
@@ -465,10 +490,10 @@ Full guide: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Current State
 
-- **v0.4.1 base + PI SDK migration branch** — see [CHANGELOG.md](CHANGELOG.md)
+- **v0.13.x active development** — see [CHANGELOG.md](CHANGELOG.md)
 - Canonical repository: `https://github.com/igormaneschy/aurelia`
 - Go module: `github.com/igormaneschy/aurelia`
 - Go test suite is green
 - TypeScript Bridge compiles clean
 - Cross-platform: macOS, Windows, and Linux
-- Active development on `migrate-pi-brain` before merge to `main`
+- Current architectural track: close the PI SDK boundary hardening, finish user isolation, then build orchestration, plan mode, user-scoped project memory, and Wiki MCP in that order

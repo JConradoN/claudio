@@ -16,11 +16,33 @@ const orchestrationTimeout = 30 * time.Minute
 
 // executeApprovedPlan runs the full TLC Implement+Validate cycle:
 // ensure docs → spawn workers per wave → validate → merge → consolidate.
-func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, plan *orchestrator.Plan) {
+// repoRoot is the chat's effective working directory (from handoff cwd).
+// All user-facing errors are sent to the original thread.
+func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, threadID int, messageID int, repoRoot string, userID int64, plan *orchestrator.Plan) {
 	ctx, cancel := context.WithTimeout(context.Background(), orchestrationTimeout)
 	defer cancel()
 
-	repoRoot := bc.getRepoRoot()
+	// Safety gate: run preflight before any docs or worker operations.
+	// Preflight checks the handoff repoRoot, not the daemon-configured RepoRoot.
+	var runOrch *orchestrator.Orchestrator
+	if bc.orchestrator != nil {
+		result, err := bc.orchestrator.PreflightExecution(ctx, repoRoot, false)
+		if err != nil {
+			log.Printf("PreflightExecution for chat=%d thread=%d: %v", chat.ID, threadID, err)
+			_ = SendErrorWithThread(bc.bot, chat, orchestrator.PreflightUserMessage(err), threadID)
+			return
+		}
+		_ = result // BaseBranch etc. used in later slices
+
+		// Build a run-scoped orchestrator that uses the handoff cwd for all
+		// subsequent operations (worktrees, task cwds, merge). This is a
+		// shallow copy that shares the bridge; the original is not mutated.
+		runOrch = bc.orchestrator.WithRepoRoot(repoRoot)
+	} else {
+		// Fallback: use the handoff cwd directly when no orchestrator is
+		// configured (unlikely, as tryExecutePlan guards this).
+		runOrch = bc.orchestrator
+	}
 
 	// 0. Ensure CLAUDE.md and AGENTS.md exist
 	agentSummaries := bc.buildAgentSummaries()
@@ -41,8 +63,8 @@ func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, 
 	specContent := bc.findFeatureDoc(repoRoot, "spec.md")
 	designContent := bc.findFeatureDoc(repoRoot, "design.md")
 
-	// 3. Execute workers
-	results, err := bc.orchestrator.ExecutePlan(
+	// 3. Execute workers via run-scoped orchestrator (uses handoff cwd)
+	results, err := runOrch.ExecutePlan(
 		ctx,
 		plan,
 		bc.agents,
@@ -74,7 +96,7 @@ func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, 
 
 	if err != nil {
 		log.Printf("ExecutePlan error: %v", err)
-		_ = SendError(bc.bot, chat, "Erro na execução do plano: "+err.Error())
+		_ = SendErrorWithThread(bc.bot, chat, "Erro na execução do plano: "+err.Error(), threadID)
 		return
 	}
 
@@ -82,7 +104,7 @@ func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, 
 	validationPrompt := orchestrator.BuildValidationPrompt(specContent, designContent)
 	for i, r := range results {
 		task := findTaskInPlan(plan, r.TaskID)
-		vr, err := bc.orchestrator.Validate(ctx, task, r, validationPrompt)
+		vr, err := runOrch.Validate(ctx, task, r, validationPrompt)
 		if err != nil {
 			log.Printf("Validate error for %s: %v", r.TaskID, err)
 			continue
@@ -103,7 +125,7 @@ func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, 
 		persona, _ = bc.persona.BuildPrompt()
 	}
 	consolidationPrompt := orchestrator.BuildConsolidationPrompt(persona, plan, results)
-	finalText, err := bc.orchestrator.Consolidate(ctx, plan, results, consolidationPrompt)
+	finalText, err := runOrch.Consolidate(ctx, plan, results, consolidationPrompt)
 	if err != nil {
 		log.Printf("Consolidate error: %v", err)
 	}
@@ -111,7 +133,7 @@ func (bc *BotController) executeApprovedPlan(chat *telebot.Chat, messageID int, 
 		finalText = buildFallbackConsolidation(results)
 	}
 
-	if err := SendTextReply(bc.bot, chat, finalText); err != nil {
+	if err := SendTextReplyWithThread(bc.bot, chat, finalText, threadID); err != nil {
 		log.Printf("Failed to send consolidation: %v", err)
 	}
 }

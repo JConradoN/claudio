@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"log"
+	"time"
 
 	"github.com/igormaneschy/aurelia/internal/bridge"
 )
@@ -10,6 +12,20 @@ import (
 type BridgeExecutor interface {
 	Execute(ctx context.Context, req bridge.Request) (<-chan bridge.Event, error)
 	ExecuteSync(ctx context.Context, req bridge.Request) (*bridge.Event, error)
+}
+
+// ExecutionContext carries run metadata through the execution lifecycle.
+type ExecutionContext struct {
+	RunID      string
+	RepoRoot   string
+	BaseBranch string
+	ChatID     int64
+	ThreadID   int
+	MessageID  int
+	UserID     int64
+	Feature    string
+	CreatePR   bool
+	StartedAt  time.Time
 }
 
 // OrchestratorConfig holds configuration for the orchestrator.
@@ -38,6 +54,15 @@ func NewOrchestrator(bridge BridgeExecutor, config OrchestratorConfig) *Orchestr
 	var wm *WorktreeManager
 	if config.RepoRoot != "" {
 		wm = NewWorktreeManager(config.RepoRoot)
+		// Clean up stale worktrees from previous runs on startup.
+		// This is best-effort and does not prevent startup.
+		count, cleanupErr := wm.CleanupAll()
+		if count > 0 {
+			log.Printf("orchestrator: cleaned up %d stale worktree(s) on startup", count)
+		}
+		if cleanupErr != nil {
+			log.Printf("orchestrator: worktree cleanup on startup: %v", cleanupErr)
+		}
 	}
 
 	return &Orchestrator{
@@ -52,6 +77,27 @@ func (o *Orchestrator) Config() OrchestratorConfig {
 	return o.config
 }
 
+// WithRepoRoot returns a shallow copy of the Orchestrator with the given
+// repoRoot, sharing the same bridge but using a new WorktreeManager that
+// operates on repoRoot. The original orchestrator is not mutated.
+//
+// If repoRoot is empty or matches the current config, the same instance
+// is returned (no-op).
+func (o *Orchestrator) WithRepoRoot(repoRoot string) *Orchestrator {
+	if repoRoot == "" || repoRoot == o.config.RepoRoot {
+		return o
+	}
+
+	cfg := o.config
+	cfg.RepoRoot = repoRoot
+
+	return &Orchestrator{
+		bridge:   o.bridge,
+		worktree: NewWorktreeManager(repoRoot),
+		config:   cfg,
+	}
+}
+
 // Consolidate calls Aurelia to synthesize the final results from all workers.
 func (o *Orchestrator) Consolidate(ctx context.Context, plan *Plan, results []TaskResult, systemPrompt string) (string, error) {
 	req := bridge.Request{
@@ -59,6 +105,7 @@ func (o *Orchestrator) Consolidate(ctx context.Context, plan *Plan, results []Ta
 		Prompt:  systemPrompt,
 		Options: bridge.RequestOptions{
 			NoUserSettings: true,
+			Cwd:            o.config.RepoRoot,
 		},
 	}
 

@@ -4,12 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.13.3] - 2026-05-22
+
+### Changed
+- Documentation and roadmap now describe the current architecture thesis: PI SDK owns the cognitive/execution engine, while Aurelia owns product identity, Telegram UX, scoped memory, Wiki direction, workflows, policy/audit and continuity.
+- Updated stale specs to reflect v0.13.x state: PI compaction/context loading are active, security wraps `session.agent.beforeToolCall`, `internal/agents` remains an Aurelia product-layer boundary for now, and User Isolation hardening is focused on scoped `CancelAllForUser`.
+- Added deterministic PI-boundary validation tests for Bridge compaction, context-file loading, `session_file` emission, security hook API usage, and Aurelia-owned specialist agent metadata.
+- Orchestration handoff now preserves thread/cwd/user context, refuses plan execution without a bound cwd, runs git preflight before worker/doc operations, and uses run-scoped orchestrators for the handoff repository.
+- Orchestration worktrees now use run-scoped branch/path namespaces, captured-base-branch merge, startup orphan cleanup counts, and per-repository serialization for base checkout mutations.
+- Model selection now supports `PI default` mode via `/model auto`, allowing the PI SDK to choose the default model when no explicit Aurelia override is configured.
 
 ### Fixed
 - Security guard-rails no longer throw "PI SDK version too old" — the bridge was using
   `session.on("tool_call")` which doesn't exist in the PI SDK. Replaced with wrapping
   `session.agent.beforeToolCall`, the correct hook for intercepting and blocking tool calls.
+- `CancelAllForUser` now cancels only sessions owned by the target Telegram user and sends scoped bridge `abort` commands with `chat_id`, `thread_id`, and `user_id`, avoiding cross-user cancellation in shared chats/topics.
+- Orchestration workers now use isolated non-persistent Bridge session scopes, worktree-required tasks fail closed if worktree creation fails, validation/consolidation run in the handoff cwd, and Telegram preflight errors no longer include dirty file paths or raw git output.
+- Worktree merge failures now fail the task, emit a sanitized `merge_failed` event, preserve the worker branch/worktree for recovery, validate run IDs before git commands, and abort conflicted merges cleanly.
+- Model switching is consistently owner-gated across slash commands, natural-language commands, and inline callbacks; callback selections are revalidated against the PI model list before persistence.
 
 ## [0.13.2] - 2026-05-21
 

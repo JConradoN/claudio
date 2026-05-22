@@ -13,6 +13,9 @@ type fakeOutput struct {
 	lastError     string
 	lastReply     string
 	planExecuted  bool
+	planThreadID  int
+	planCwd       string
+	planUserID    int64
 	confirmCalled bool
 }
 
@@ -44,8 +47,11 @@ func (f *fakeOutput) ConfirmMessage(_ int64, _ int) {
 	f.confirmCalled = true
 }
 
-func (f *fakeOutput) ExecuteApprovedPlan(_ int64, _ int, _ *orchestrator.Plan) {
+func (f *fakeOutput) ExecuteApprovedPlan(_ int64, threadID int, _ int, cwd string, userID int64, _ *orchestrator.Plan) {
 	f.planExecuted = true
+	f.planThreadID = threadID
+	f.planCwd = cwd
+	f.planUserID = userID
 }
 
 type fakeProgress struct{}

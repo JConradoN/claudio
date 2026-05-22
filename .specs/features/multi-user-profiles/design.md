@@ -158,27 +158,25 @@ type SessionKey struct {
 
 ### 1b. Usage tracker and run supervisor use `SessionKey`
 
-**Location:** `internal/session/tracker.go`, `internal/pipeline/run_supervisor.go`
+**Location:** `internal/session/store.go`, `internal/pipeline/service.go`
 
-Current code keys token usage by `chatID` and active runs by `(chatID, threadID)`. After User Isolation:
+Manual token tracking has been removed in favor of PI SDK compaction. Runtime session resume and active runs still need user-scoped keys:
 
 ```go
-type UsageTracker interface {
-    RecordUsage(key session.SessionKey, ...)
-    Get(key session.SessionKey) Usage
-    Clear(key session.SessionKey)
+type SessionKey struct {
+    ChatID   int64
+    ThreadID int
+    UserID   int64
 }
-
-type runKey = session.SessionKey
 ```
 
-`runSupervisor` also needs:
+`Service.activeSessions` already uses a string form of `SessionKey`. The remaining hardening is cancellation by user:
 
 ```go
-func (rs *runSupervisor) cancelByUser(userID int64) int
+func (s *Service) CancelAllForUser(userID int64) bool
 ```
 
-This supports `/forget-me`: mark the profile as deleting, cancel all runs owned by that user, drain up to 30s, then delete user files.
+This supports `/forget-me`: mark the profile as deleting, cancel all runs owned by that user, drain up to 30s, then delete user files. It must not broadcast an unscoped Bridge abort.
 
 `/usage`, `/new`, status queries, natural cancel messages, and queue replacement all use `TurnContext.SessionKey()`. A user in a group cannot observe or cancel another user's active run.
 

@@ -184,11 +184,11 @@ func (o telegramPipelineOutput) ConfirmMessage(chatID int64, messageID int) {
 	ReactToMessage(o.bc.bot, &telebot.Chat{ID: chatID}, messageID, "🎉")
 }
 
-func (o telegramPipelineOutput) ExecuteApprovedPlan(chatID int64, messageID int, plan *orchestrator.Plan) {
+func (o telegramPipelineOutput) ExecuteApprovedPlan(chatID int64, threadID int, messageID int, cwd string, userID int64, plan *orchestrator.Plan) {
 	if o.bc == nil {
 		return
 	}
-	o.bc.executeApprovedPlan(&telebot.Chat{ID: chatID}, messageID, plan)
+	o.bc.executeApprovedPlan(&telebot.Chat{ID: chatID}, threadID, messageID, cwd, userID, plan)
 }
 
 type noopPipelineProgress struct{}

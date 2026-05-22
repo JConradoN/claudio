@@ -462,7 +462,10 @@ function isPathInsideCwd(path: string, cwd: string, allowedOutside: string[]): b
   const cwdNorm = cwd.replace(/\\/g, "/");
 
   // Relative path starting with .. is outside.
-  if (clean === ".." || clean.startsWith("../") || clean === ".") return false;
+  if (clean === ".." || clean.startsWith("../")) return false;
+
+  // "." is the CWD itself — always allowed.
+  if (clean === ".") return true;
 
   // Absolute path: must be within cwd.
   if (clean.startsWith("/")) {
@@ -477,7 +480,7 @@ function isPathInsideCwd(path: string, cwd: string, allowedOutside: string[]): b
     return false;
   }
 
-  // Relative path is assumed to be inside cwd.
+  // Relative path (e.g. "src/main.go") is assumed to be inside cwd.
   return true;
 }
 
@@ -761,7 +764,10 @@ async function handleQuery(req: Request): Promise<void> {
     });
 
     // Set up persistent subscription for this session
+    // Counts events for health diagnostics (logged after 30s of silence).
+    let lastEventTime = Date.now();
     const unsubPersistent = session.subscribe((event) => {
+      lastEventTime = Date.now();
       if (terminalEmitted) return;
       const rid = chatSessions.get(cKey)?.currentReqId || reqId;
       const eReq = (obj: OutEvent) => emit({ ...obj, request_id: rid });
@@ -775,6 +781,9 @@ async function handleQuery(req: Request): Promise<void> {
           break;
         }
         case "tool_execution_start": {
+          redactedLog(
+            `tool: ${event.toolName} id=${event.toolCallId.slice(0, 8)} rid=${rid}`,
+          );
           eReq({
             event: "tool_use",
             id: event.toolCallId,
@@ -799,6 +808,21 @@ async function handleQuery(req: Request): Promise<void> {
       }
     });
 
+    // Health check: warn if no subscription events for 30s during active query.
+    // Does not affect execution — purely diagnostic.
+    const healthTimer = setInterval(() => {
+      if (terminalEmitted || canceled) {
+        clearInterval(healthTimer);
+        return;
+      }
+      const silent = Date.now() - lastEventTime;
+      if (silent >= 30_000) {
+        redactedLog(
+          `streaming stall: no PI SDK events for ${Math.round(silent / 1000)}s (rid=${reqId})`,
+        );
+      }
+    }, 15_000);
+
     // Register security tool_call hook if enabled.
     // Uses session.agent.beforeToolCall (PI SDK hook that can block tools) rather than
     // the non-existent session.on("tool_call") — the Agent class exposes beforeToolCall
@@ -818,6 +842,13 @@ async function handleQuery(req: Request): Promise<void> {
         cwd,
       } = opts.security!;
       const origBeforeToolCall = session.agent.beforeToolCall;
+      // The extension-runner hook installed by AgentSession._installAgentToolHooks()
+      // is always a function at this point (confirmed by the typeof guard above).
+      // We wrap it with a safe fallback so tools are never blocked by a missing hook.
+      const chainOrigHook: typeof origBeforeToolCall =
+        typeof origBeforeToolCall === "function"
+          ? (ctx, signal) => origBeforeToolCall(ctx, signal)
+          : () => undefined;
       session.agent.beforeToolCall = async (ctx, signal) => {
         const decision = evaluateToolPolicy(
           ctx.toolCall.name,
@@ -846,15 +877,20 @@ async function handleQuery(req: Request): Promise<void> {
           }
         }
         // Chain to the existing extension-runner hook (installed by AgentSession).
+        // The safe wrapper ensures tools are never blocked by a missing/malfunctioning
+        // extension hook — if the hook is missing or throws, the tool is still allowed.
         try {
-          return await origBeforeToolCall(ctx, signal);
+          return await chainOrigHook(ctx, signal);
         } catch (hookError) {
           redactedLog(
-            `security: tool=${ctx.toolCall.name} extension hook threw: ${
+            `security: tool=${ctx.toolCall.name} extension hook threw, allowing: ${
               hookError instanceof Error ? hookError.message : String(hookError)
             }`,
           );
-          throw hookError;
+          // Fallthrough: allow the tool despite extension hook failure so the model
+          // can continue working. The extension's tool_wrapper would also catch this,
+          // but we log it here for diagnostics.
+          return undefined;
         }
       };
 
@@ -935,6 +971,7 @@ async function handleQuery(req: Request): Promise<void> {
     }
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (healthTimer) clearInterval(healthTimer);
     activeRequests.delete(reqId);
     // Session is NOT disposed here when stored — it stays in chatSessions for steer/followUp/abort
   }

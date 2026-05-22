@@ -105,6 +105,64 @@ func TestLoadConfig_NewSchema(t *testing.T) {
 	}
 }
 
+func TestLoad_PreservesExplicitAutoModel(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("AURELIA_HOME", tmpDir)
+
+	r, err := runtime.New()
+	if err != nil {
+		t.Fatalf("runtime.New() unexpected error: %v", err)
+	}
+
+	cfgJSON := `{
+		"default_provider": "",
+		"default_model": "",
+		"telegram_bot_token": "test-token",
+		"telegram_allowed_user_ids": [123456]
+	}`
+	if err := os.MkdirAll(filepath.Dir(r.AppConfig()), 0o700); err != nil {
+		t.Fatalf("MkdirAll() unexpected error: %v", err)
+	}
+	if err := os.WriteFile(r.AppConfig(), []byte(cfgJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	cfg, err := Load(r)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if !cfg.IsModelAuto() {
+		t.Fatalf("expected auto model mode, got provider=%q model=%q", cfg.DefaultProvider, cfg.DefaultModel)
+	}
+	if cfg.ModelDisplayName() != "PI default" {
+		t.Fatalf("ModelDisplayName() = %q, want PI default", cfg.ModelDisplayName())
+	}
+}
+
+func TestLoad_DefaultsModelWhenMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("AURELIA_HOME", tmpDir)
+
+	r, err := runtime.New()
+	if err != nil {
+		t.Fatalf("runtime.New() unexpected error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(r.AppConfig()), 0o700); err != nil {
+		t.Fatalf("MkdirAll() unexpected error: %v", err)
+	}
+	if err := os.WriteFile(r.AppConfig(), []byte(`{"telegram_bot_token":"abc"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	cfg, err := Load(r)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.IsModelAuto() {
+		t.Fatalf("missing model fields should keep compatibility defaults")
+	}
+}
+
 func TestSaveAndReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("AURELIA_HOME", tmpDir)

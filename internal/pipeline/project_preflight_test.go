@@ -32,7 +32,7 @@ func (r *testOutputRecorder) SendText(_ int64, _ int, text string) (any, error) 
 
 func (r *testOutputRecorder) DeleteMessage(any)                                        {}
 func (r *testOutputRecorder) ConfirmMessage(int64, int)                               { r.confirmCalled = true }
-func (r *testOutputRecorder) ExecuteApprovedPlan(int64, int, *orchestrator.Plan) {}
+func (r *testOutputRecorder) ExecuteApprovedPlan(int64, int, int, string, int64, *orchestrator.Plan) {}
 
 func TestCheckProjectPreflight_NoCwdWithKnownProjects(t *testing.T) {
 	// Setup known projects for user 42

@@ -2,16 +2,20 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/igormaneschy/aurelia/internal/agents"
+	"github.com/igormaneschy/aurelia/internal/bridge"
 	"github.com/igormaneschy/aurelia/internal/config"
 	"github.com/igormaneschy/aurelia/internal/cron"
 	"github.com/igormaneschy/aurelia/internal/runlog"
+	"github.com/igormaneschy/aurelia/internal/runtime"
 	"github.com/igormaneschy/aurelia/internal/session"
 )
 
@@ -390,6 +394,23 @@ func TestCmdStatus_NoActiveSession(t *testing.T) {
 	}
 }
 
+func TestCmdStatus_ShowsPIDefaultInAutoMode(t *testing.T) {
+	t.Parallel()
+
+	bc := &BotController{
+		config:   &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
+		sessions: session.NewStore(),
+	}
+
+	reply, err := bc.cmdStatus(42, 0, 123)
+	if err != nil {
+		t.Fatalf("cmdStatus() error = %v", err)
+	}
+	if !strings.Contains(reply, "PI default") {
+		t.Fatalf("expected PI default in status, got %q", reply)
+	}
+}
+
 func TestCmdStatus_UsesTopicCwd(t *testing.T) {
 	t.Parallel()
 
@@ -626,6 +647,22 @@ func TestCmdListModels_RequiresBridge(t *testing.T) {
 	}
 }
 
+func TestCmdListModels_ShowsPIDefaultAndAutoHint(t *testing.T) {
+	t.Parallel()
+
+	bc := &BotController{
+		config: &config.AppConfig{Providers: map[string]config.ProviderConfig{}},
+	}
+
+	reply, err := bc.cmdListModels()
+	if err != nil {
+		t.Fatalf("cmdListModels() error = %v", err)
+	}
+	if !strings.Contains(reply, "PI default") || !strings.Contains(reply, "/model auto") {
+		t.Fatalf("expected PI default and /model auto hint, got %q", reply)
+	}
+}
+
 func TestExtractModelName(t *testing.T) {
 	tests := []struct {
 		name string
@@ -633,6 +670,7 @@ func TestExtractModelName(t *testing.T) {
 		want string
 	}{
 		{"slash model", "/model claude-opus-4-6", "claude-opus-4-6"},
+		{"slash auto", "/model auto", "auto"},
 		{"slash model with extra spaces", "  /model  kimi-k2.5  ", "kimi-k2.5"},
 		{"muda modelo para", "muda modelo para claude-sonnet", "claude-sonnet"},
 		{"trocar modelo para", "trocar modelo para gpt-4", "gpt-4"},
@@ -647,6 +685,65 @@ func TestExtractModelName(t *testing.T) {
 				t.Errorf("extractModelName(%q) = %q, want %q", tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSetModelAutoForScope_ClearsConfigPersistsAndResetsSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("AURELIA_HOME", tmpDir)
+
+	r, err := runtime.New()
+	if err != nil {
+		t.Fatalf("runtime.New() unexpected error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(r.AppConfig()), 0o700); err != nil {
+		t.Fatalf("MkdirAll() unexpected error: %v", err)
+	}
+	initial := `{"default_provider":"anthropic","default_model":"claude-sonnet-4-6","providers":{}}`
+	if err := os.WriteFile(r.AppConfig(), []byte(initial), 0o600); err != nil {
+		t.Fatalf("WriteFile() unexpected error: %v", err)
+	}
+
+	sessions := session.NewStore()
+	sessions.SetSession(42, 99, 100, "/tmp/topic-session.jsonl")
+	bc := &BotController{
+		config: &config.AppConfig{
+			DefaultProvider: "anthropic",
+			DefaultModel:    "claude-sonnet-4-6",
+			Providers:       map[string]config.ProviderConfig{},
+		},
+		sessions:         sessions,
+		modelCache:       []bridge.ModelInfo{{Provider: "anthropic", ID: "claude-sonnet-4-6"}},
+		modelCacheExpiry: time.Now().Add(time.Hour),
+	}
+
+	reply, err := bc.setModelAutoForScope(42, 99, 100)
+	if err != nil {
+		t.Fatalf("setModelAutoForScope() error = %v", err)
+	}
+	if !strings.Contains(reply, "PI default") {
+		t.Fatalf("expected PI default confirmation, got %q", reply)
+	}
+	if !bc.config.IsModelAuto() {
+		t.Fatalf("expected in-memory config auto, got provider=%q model=%q", bc.config.DefaultProvider, bc.config.DefaultModel)
+	}
+	if sid := sessions.GetSession(42, 99, 100); sid != "" {
+		t.Fatalf("current session should be reset, got %q", sid)
+	}
+	if len(bc.modelCache) != 0 || !bc.modelCacheExpiry.IsZero() {
+		t.Fatalf("expected model cache invalidated")
+	}
+
+	data, err := os.ReadFile(r.AppConfig())
+	if err != nil {
+		t.Fatalf("ReadFile() unexpected error: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() unexpected error: %v", err)
+	}
+	if raw["default_provider"] != "" || raw["default_model"] != "" {
+		t.Fatalf("expected persisted auto config, got %q", string(data))
 	}
 }
 

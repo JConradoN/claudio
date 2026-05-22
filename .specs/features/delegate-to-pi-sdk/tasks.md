@@ -3,6 +3,8 @@
 Baseado no design: `.specs/features/delegate-to-pi-sdk/design.md`  
 Dependency graph: 0→1→2→3→4→5→6→7  
 
+**Current status (2026-05-21):** Tasks 0–5 and bridge security hook correction are effectively complete in v0.13.x. Task 6 is no longer the recommended next step as written; keep `internal/agents` as an Aurelia product-layer registry for now and investigate PI-native parsing/discovery via `agentsFilesOverride` later. The remaining near-term work is docs/spec cleanup plus E2E validation.
+
 ---
 
 ## Task 0: PI SDK API Validation
@@ -15,8 +17,8 @@ Dependency graph: 0→1→2→3→4→5→6→7
 - [ ] `SessionManager.open(path)` reabre sessão existente
 - [ ] `SettingsManager.inMemory({ compaction: { enabled: true } })` funciona
 - [ ] `DefaultResourceLoader` com `noContextFiles: false` carrega `CLAUDE.md`/`AGENTS.md`
-- [ ] `createAgentSession` expõe `beforeToolCall` — ou documenta que não expõe (fallback)
-- [ ] Agent markdown discovery funciona em `~/.pi/agent/agents/`
+- [x] `createAgentSession` não expõe `beforeToolCall` como opção; Bridge usa `session.agent.beforeToolCall`
+- [ ] Investigar agent markdown discovery/parsing via PI `agentsFilesOverride` sem migrar arquivos do Aurélia
 - [ ] Documentação salva em `docs/pi-sdk-api-validation.md`
 
 **Comandos:**
@@ -124,18 +126,17 @@ grep -r "tracker\." --include="*.go" . | grep -v "_test.go"
 
 ---
 
-## Task 6: Go — Remove Agent Registry
+## Task 6: Agent Registry Boundary Decision — Keep Product Layer, Investigate PI Discovery
 
-**Arquivos:** `internal/agents/registry.go`, `internal/agents/types.go`, `internal/agents/registry_test.go`  
+**Arquivos:** `internal/agents/registry.go`, `internal/agents/types.go`, `bridge/index.ts`  
 **Depends on:** Task 5
 
 **Done When:**
-- [ ] `internal/agents/registry.go` removido
-- [ ] `internal/agents/types.go` removido
-- [ ] `internal/agents/registry_test.go` removido
-- [ ] Call sites em pipeline atualizados para delegar ao Bridge
-- [ ] Script `scripts/migrate-agents.sh` criado e testado
-- [ ] Agentes migrados de `~/.aurelia/agents/` para `~/.pi/agent/agents/`
+- [ ] Decisão documentada: especialistas Aurelia permanecem em `~/.aurelia/agents/` no curto prazo
+- [ ] Nenhuma migração obrigatória para `~/.pi/agent/agents/` no MVP
+- [ ] Investigar se `DefaultResourceLoader.agentsFilesOverride` permite PI-native parsing sem mover arquivos
+- [ ] Se viável, criar design separado para delegar parsing/discovery ao PI mantendo storage Aurelia
+- [ ] `internal/agents` continua responsável por routing/classification/metadata de produto até existir alternativa validada
 - [ ] `go build ./...` passa
 - [ ] `go vet ./...` passa
 - [ ] `go test ./... -short` passa
@@ -213,7 +214,7 @@ Task 4: Token Tracker Remove
 Task 5: Prompt Builder Refactor
     │
     ▼
-Task 6: Agent Registry Remove
+Task 6: Agent Registry Boundary Decision
     │
     ▼
 Task 7: Integration Validation
@@ -230,6 +231,7 @@ Task 8: Documentation
 ## Notes
 
 - **Não alterar:** `internal/persona/`, `internal/dream/`, `internal/cron/`, `internal/telegram/`, `internal/orchestrator/`, `internal/continuity/`, `internal/runlog/`
+- **Não remover agora:** `internal/agents/`; ele ainda é produto Aurélia até validação específica de PI-native discovery/parsing
 - **Manter:** `internal/bridge/bridge.go` (protocolo NDJSON), `internal/bridge/protocol.go`
 - **Verificar antes de cada task:** `grep` por call sites do código a ser removido
 - **Se blocker encontrado:** documentar em `docs/pi-sdk-api-validation.md` e pular task

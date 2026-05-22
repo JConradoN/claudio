@@ -1,6 +1,6 @@
 # PI SDK API Validation
 
-**Date:** 2026-05-20
+**Date:** 2026-05-20; updated 2026-05-21
 **PI SDK Version:** `@earendil-works/pi-coding-agent` v0.74.0
 **Validated by:** Static analysis of installed types + runtime usage in `bridge/index.ts`
 
@@ -8,7 +8,7 @@
 
 ## Summary
 
-All APIs required by the `delegate-to-pi-sdk` spec are available and match expectations. One API (`beforeToolCall` as a `createAgentSession` option) is **not exposed**, but the fallback strategy (keep `session.on("tool_call")` in the Bridge) is already planned and viable.
+All APIs required by the `delegate-to-pi-sdk` spec are available and match expectations. One API (`beforeToolCall` as a `createAgentSession` option) is **not exposed**. The correct integration is to create the session first, then wrap `session.agent.beforeToolCall`. The older fallback idea (`session.on("tool_call")`) is invalid for the current PI SDK and was removed from the live Bridge.
 
 ---
 
@@ -130,9 +130,9 @@ interface Settings {
 }
 ```
 
-**Evidence:** Currently used with `compaction: { enabled: false }` in `bridge/index.ts:681`.
+**Evidence:** Currently used with `compaction: { enabled: true }` in `bridge/index.ts`.
 
-**Conclusion:** Changing `enabled: false` → `enabled: true` is a single-line change. No API risk.
+**Conclusion:** Compaction is enabled and PI SDK is the source of truth for context pruning.
 
 ---
 
@@ -151,15 +151,15 @@ interface DefaultResourceLoaderOptions {
 }
 ```
 
-**Evidence:** Currently used with `noContextFiles: true` in `bridge/index.ts:697`.
+**Evidence:** Currently used with `noContextFiles: false` in `bridge/index.ts`.
 
-**Conclusion:** Setting `noContextFiles: false` will auto-discover `CLAUDE.md` and `AGENTS.md` in the project directory. This is the key change for Task 5 (Prompt Builder Refactor). The `agentsFilesOverride` option is also confirmed, enabling the "Option B" strategy for agent registry migration (keep agents in `~/.aurelia/agents/` but let PI parse them).
+**Conclusion:** PI now auto-discovers `CLAUDE.md` and `AGENTS.md` in the project directory. The `agentsFilesOverride` option remains a future path for delegating specialist-agent parsing/discovery while keeping files under `~/.aurelia/agents/`.
 
 ---
 
-### 9. `beforeToolCall` in `createAgentSession` options
+### 9. `beforeToolCall` hook
 
-**Status:** ❌ NOT EXPOSED
+**Status:** ✅ AVAILABLE ON `session.agent`; ❌ NOT EXPOSED AS `createAgentSession` OPTION
 
 ```typescript
 // dist/core/sdk.d.ts — CreateAgentSessionOptions
@@ -171,9 +171,9 @@ interface DefaultResourceLoaderOptions {
 
 **Evidence:** `CreateAgentSessionOptions` (sdk.d.ts lines 11-55) does not contain `beforeToolCall`.
 
-**Conclusion:** The `beforeToolCall` hook is available on the `Agent` class (from `@earendil-works/pi-agent-core`), but `createAgentSession` (from `@earendil-works/pi-coding-agent`) does not expose it. The Bridge must continue using `session.on("tool_call", ...)` for security policy evaluation. This matches the fallback described in the spec.
+**Conclusion:** The `beforeToolCall` hook is available on the `Agent` instance behind `session.agent`, but `createAgentSession` does not expose it as a construction option. The Bridge wraps `session.agent.beforeToolCall` after session creation and chains to the original hook so PI extensions still run.
 
-**Impact:** Security hooks stay in the Bridge. The Go `internal/security/policy.go` can still be removed because the Bridge is the single source of truth for policy evaluation.
+**Impact:** Security hooks stay in the Bridge for now. The Go `internal/security/policy.go` can still be removed because the Bridge is the single source of truth for policy evaluation. Do not use `session.on("tool_call")`; that API does not exist in the current SDK.
 
 ---
 
@@ -203,7 +203,7 @@ export declare function loadProjectContextFiles(options: {
 | `SessionManager.open()` | Stable, unchanged signature | Low |
 | `SettingsManager.inMemory()` | Stable, `compaction` field present | Low |
 | `DefaultResourceLoader` | Stable, `noContextFiles` present | Low |
-| `createAgentSession` options | No `beforeToolCall` — expected | None (fallback planned) |
+| `createAgentSession` options | No `beforeToolCall` — expected | None (wrap `session.agent.beforeToolCall`) |
 
 **Overall risk:** Low. All APIs are stable and already in use by the Bridge.
 
@@ -211,7 +211,7 @@ export declare function loadProjectContextFiles(options: {
 
 ## Blockers for Delegate-to-PI-SDK
 
-**None.** All required APIs are confirmed. The only "gap" (`beforeToolCall` in `createAgentSession`) has a planned fallback that does not block any task.
+**None.** All required APIs are confirmed. The only "gap" (`beforeToolCall` in `createAgentSession`) is handled by wrapping `session.agent.beforeToolCall` after creation.
 
 ---
 

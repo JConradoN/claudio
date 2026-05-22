@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +41,7 @@ type Output interface {
 	SendText(chatID int64, threadID int, text string) (any, error)
 	DeleteMessage(message any)
 	ConfirmMessage(chatID int64, messageID int)
-	ExecuteApprovedPlan(chatID int64, messageID int, plan *orchestrator.Plan)
+	ExecuteApprovedPlan(chatID int64, threadID int, messageID int, cwd string, userID int64, plan *orchestrator.Plan)
 }
 
 // Dreamer receives turn lifecycle notifications for memory/nudge updates.
@@ -174,29 +177,67 @@ func (s *Service) Cancel(chatID int64, threadID int, userID ...int64) bool {
 }
 
 // CancelAllForUser cancels all active sessions for a given user.
-// Iterates the local activeSessions map and sends abort for each matching session.
+// Iterates the local activeSessions map and cancels each matching session.
+// For each session found, it cancels the local goroutine context, removes
+// the entry from activeSessions, and sends a scoped bridge abort with
+// chatID, threadID, and userID.
+//
+// Returns true if at least one local active session was cancelled.
+// Returns false if no active sessions matched or if s is nil.
 func (s *Service) CancelAllForUser(userID int64) bool {
 	if s == nil {
 		return false
 	}
 	cancelled := false
 	s.activeSessions.Range(func(key, value interface{}) bool {
-		// key is "chatID:threadID" — we can't extract userID from it
-		// For now, send abort-all command to bridge with userID
-		// The bridge will track userID per session in a future iteration
-		// For MVP, we cancel all sessions on the bridge side
+		keyStr, ok := key.(string)
+		if !ok {
+			return true // skip non-string keys
+		}
+		chatID, threadID, uid, ok := parseSessionKey(keyStr)
+		if !ok {
+			log.Printf("pipeline: CancelAllForUser: skipping malformed key %q", keyStr)
+			return true
+		}
+		if uid != userID {
+			return true // belongs to a different user, leave it
+		}
+
+		// Cancel the local goroutine context and remove from active sessions.
+		if cancelVal, loaded := s.activeSessions.LoadAndDelete(key); loaded {
+			if cancel, ok := cancelVal.(context.CancelFunc); ok {
+				cancel()
+				cancelled = true
+			}
+		}
+
+		// Send a scoped bridge abort so the bridge also cleans up this session.
+		s.sendScopedAbort(chatID, threadID, uid)
+
 		return true
 	})
-	// Broadcast abort to bridge — it will cancel all sessions
+	return cancelled
+}
+
+// scopedAbortRequest builds a bridge abort request scoped to a specific
+// chat/thread/user session. This is a separate function so it can be
+// unit-tested for scope correctness without a bridge process.
+func scopedAbortRequest(chatID int64, threadID int, userID int64) bridge.Request {
+	return bridge.Request{
+		Command: "abort",
+		Options: bridge.RequestOptions{ChatID: chatID, ThreadID: threadID, UserID: userID},
+	}
+}
+
+// sendScopedAbort sends an abort command scoped to a specific chat/thread/user.
+// Does nothing if s.bridge is nil.
+func (s *Service) sendScopedAbort(chatID int64, threadID int, userID int64) {
+	if s.bridge == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), bridgeCommandTimeout)
 	defer cancel()
-	_, err := s.bridge.ExecuteSync(ctx, bridge.Request{
-		Command: "abort",
-	})
-	if err == nil {
-		cancelled = true
-	}
-	return cancelled
+	_, _ = s.bridge.ExecuteSync(ctx, scopedAbortRequest(chatID, threadID, userID))
 }
 
 // WorkStatus returns the active session status from the bridge.
@@ -278,6 +319,29 @@ func (s *Service) getSecurityConfig() security.SecurityConfig {
 // sessionKey builds a user-scoped key for the activeSessions map.
 func sessionKey(chatID int64, threadID int, userID int64) string {
 	return fmt.Sprintf("%d:%d:%d", chatID, threadID, userID)
+}
+
+// parseSessionKey parses a "chatID:threadID:userID" key into its components.
+// Returns false if the key is malformed, has extra trailing content,
+// or contains non-numeric fields.
+func parseSessionKey(key string) (chatID int64, threadID int, userID int64, ok bool) {
+	parts := strings.Split(key, ":")
+	if len(parts) != 3 {
+		return 0, 0, 0, false
+	}
+	cid, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	tid, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	uid, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return cid, tid, uid, true
 }
 
 func firstUserID(userID []int64) int64 {

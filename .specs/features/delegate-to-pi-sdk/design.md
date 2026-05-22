@@ -2,7 +2,7 @@
 
 **Baseado na spec:** `.specs/features/delegate-to-pi-sdk/spec.md`  
 **Roadmap step:** Sprint entre Foundation (done) e Sprint A (User Isolation)  
-**Status:** 🔴 Design completo, aguardando implementação  
+**Status:** 🟡 Core implementado em v0.13.0; docs/E2E/agent-registry boundary pendentes  
 **Depends on:** `security-guard-rails` (v0.8.0) estar estável  
 
 ---
@@ -116,18 +116,16 @@ function resolveModel(
 
 **Análise da API PI SDK:**
 
-O PI SDK expõe `beforeToolCall` no construtor `Agent` (pacote `@earendil-works/pi-agent`), mas NÃO no `createAgentSession` (pacote `@earendil-works/pi-coding-agent`).
-
-O Aurélia usa `createAgentSession`. Portanto, **o hook `session.on("tool_call")` deve ser mantido por enquanto**.
+O PI SDK expõe `beforeToolCall` no `Agent` usado pela sessão. O `createAgentSession` não recebe `beforeToolCall` como opção de criação, então o Aurélia instala a policy depois da criação da sessão, envolvendo `session.agent.beforeToolCall` e preservando o hook original instalado pelo runner de extensions.
 
 **Otimização possível:**
 - Mover `evaluateToolPolicy()` para uma PI **extension** separada (ex: `~/.pi/agent/extensions/aurelia-security.ts`)
 - Isso deixa o Bridge limpo e permite reutilização em outros projetos
 
-**Mudança mínima para esta spec:**
-- Manter `session.on("tool_call")` no Bridge
-- Mas eliminar a duplicação em Go (`internal/security/policy.go`) — a fonte da verdade fica apenas no Bridge
-- Isso já reduz ~514 linhas em Go
+**Mudança mínima entregue em v0.13.x:**
+- Usar `session.agent.beforeToolCall` no Bridge; `session.on("tool_call")` não existe na API atual.
+- Eliminar a duplicação em Go (`internal/security/policy.go`) — a fonte da verdade fica no Bridge.
+- Manter `CapabilityProfile`/config em Go apenas como contrato enviado ao Bridge.
 
 ### 1.3 — Bundle Impact
 

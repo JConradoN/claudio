@@ -2,7 +2,7 @@
 
 **Design:** `.specs/features/agent-orchestration-execution/design.md`
 **Roadmap step:** 2 — Close Orchestration Cycle
-**Status:** 🟡 Tasks marcadas para Sprint B
+**Status:** 🟡 Sprint B em andamento — T0/T1/T2 concluídas
 **Depende de:** User Isolation MVP (TurnContext/user_id) + Project Binding (✅ done)
 
 > Foundational components from the prior iteration are already implemented: plan parsing, wave ordering, basic worktrees, worker execution, validator, prompt builders, status reporter, `UpdateTasksStatus`, and git/PR helpers. This task list closes correctness and safety gaps before autonomous execution can commit.
@@ -63,12 +63,12 @@ T10 → T11 → T12
 **Reuses:** `Service.effectiveCwd`, existing `Output.ExecuteApprovedPlan`
 
 **Done when:**
-- [ ] `pipeline.Output.ExecuteApprovedPlan` signature includes `threadID` and `cwd`
-- [ ] `tryExecutePlan` resolves effective cwd and refuses empty cwd before handoff
-- [ ] Telegram output passes the original thread id through to `executeApprovedPlan`
-- [ ] `ExecutionContext` includes `RunID`, `RepoRoot`, `BaseBranch`, `ChatID`, `ThreadID`, `MessageID`, `Feature`, `CreatePR`, `StartedAt`
-- [ ] All orchestration sends use `ThreadID`
-- [ ] Tests: `TestTryExecutePlan_PassesThreadAndCWD`, `TestTryExecutePlan_RequiresCWD`
+- [x] `pipeline.Output.ExecuteApprovedPlan` signature includes `threadID` and `cwd`
+- [x] `tryExecutePlan` resolves effective cwd and refuses empty cwd before handoff
+- [x] Telegram output passes the original thread id through to `executeApprovedPlan`
+- [x] `ExecutionContext` includes `RunID`, `RepoRoot`, `BaseBranch`, `ChatID`, `ThreadID`, `MessageID`, `Feature`, `CreatePR`, `StartedAt`
+- [x] All orchestration sends touched in this slice use `ThreadID`
+- [x] Tests: `TestTryExecutePlan_PassesThreadAndCWD`, `TestTryExecutePlan_RequiresCWD`
 
 **Verify:**
 ```bash
@@ -85,12 +85,18 @@ go test ./internal/pipeline/... ./internal/telegram/... -run "TestTryExecutePlan
 **Reuses:** `git rev-parse`, `IsGHAvailable`
 
 **Done when:**
-- [ ] `WorktreeManager.ResolveBaseBranch() (string, error)` implemented with typed `ErrDetachedHEAD`
-- [ ] `PreflightExecution(ctx, repoRoot, createPR)` rejects non-git, detached HEAD, and dirty base tree
-- [ ] Dirty preflight error includes first few dirty paths
-- [ ] `executeApprovedPlan` calls preflight before `EnsureClaudeMd`, `EnsureAgentsMd`, or any worktree create
-- [ ] `create_pr=true` records `GHAvailable`, but missing `gh` does not block the run
-- [ ] Tests: `TestPreflightExecution_RejectsDirtyBase`, `TestPreflightExecution_RejectsDetachedHEAD`, `TestPreflightExecution_GHMissingNonFatal`
+- [x] `WorktreeManager.ResolveBaseBranch() (string, error)` implemented with typed `ErrDetachedHEAD`
+- [x] `PreflightExecution(ctx, repoRoot, createPR)` rejects non-git, detached HEAD, and dirty base tree
+- [x] Dirty preflight error includes first few dirty paths in logs/internal errors; Telegram receives sanitized user-safe text
+- [x] `executeApprovedPlan` calls preflight before `EnsureClaudeMd`, `EnsureAgentsMd`, or any worktree create
+- [x] `create_pr=true` records `GHAvailable`, but missing `gh` does not block the run
+- [x] Tests: `TestPreflightExecution_RejectsDirtyBase`, `TestPreflightExecution_RejectsDetachedHEAD`, `TestPreflightExecution_GHMissingNonFatal`
+
+**Additional slice-1 hardening delivered:**
+- [x] Run-scoped orchestrator uses the handoff cwd without mutating the shared orchestrator
+- [x] Worker bridge requests use isolated non-persistent synthetic session scopes
+- [x] `Validate` and `Consolidate` pass the run repo cwd to the Bridge
+- [x] `NeedsWorktree` tasks fail closed if worktree creation is unavailable or fails
 
 **Verify:**
 ```bash
@@ -107,12 +113,15 @@ go test ./internal/orchestrator/... -run "TestPreflight|TestResolveBaseBranch" -
 **Reuses:** Existing worktree helpers
 
 **Done when:**
-- [ ] `Create(runID, taskID, baseBranch)` creates branch `worker/<runID>/<taskSlug>`
-- [ ] Worktree path is `.worktrees/worker-<runID>-<taskSlug>`
-- [ ] `Merge` checks out `baseBranch` and refuses dirty base tree
-- [ ] `CleanupAll() (int, error)` removes `.worktrees/worker-*` and associated `worker/*` branches best-effort
-- [ ] `NewOrchestrator` calls cleanup once and logs count when > 0
-- [ ] Tests: `TestWorktreeCreate_UsesRunNamespace`, `TestMerge_ChecksOutBaseBranch`, `TestMerge_RefusesOnDirtyTree`, `TestNewOrchestrator_CleansOrphanWorktrees`
+- [x] `Create(runID, taskID, baseBranch)` creates branch `worker/<runID>/<taskSlug>`
+- [x] Worktree path is `.worktrees/worker-<runID>-<taskSlug>`
+- [x] `Merge` checks out `baseBranch` and refuses dirty base tree
+- [x] `CleanupAll() (int, error)` removes `.worktrees/worker-*` and associated `worker/*` branches best-effort
+- [x] `NewOrchestrator` calls cleanup once and logs count when > 0
+- [x] Merge failures mark the task failed, emit a sanitized `merge_failed` event, and preserve the worktree/branch for manual recovery
+- [x] Base-repo git mutations (`Merge`, `Cleanup`, `CleanupAll`) are serialized by normalized repo root across `WorktreeManager` instances
+- [x] `runID` is strictly validated before git commands and worktree paths are containment-checked under `.worktrees/`
+- [x] Tests: `TestWorktreeCreate_UsesRunNamespace`, `TestMerge_ChecksOutBaseBranch`, `TestMerge_RefusesOnDirtyTree`, `TestCleanupAll_ReturnsCount`, `TestExecutePlan_MergeFailure_PreservesWorktree`, `TestMerge_ConflictAbortsCleanly`, `TestWorktreeManager_CrossInstanceSerialization`
 
 **Verify:**
 ```bash

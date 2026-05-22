@@ -74,13 +74,13 @@ This uses `make install` (build → `.new` → `mv` — never corrupts a running
 | `cmd/aurelia/` | Entrypoint, wiring, onboarding |
 | `internal/bridge/` | Go client for the TS Bridge process |
 | `internal/agents/` | Agent registry (load markdown definitions) |
-| `internal/session/` | Session store and token tracking |
+| `internal/session/` | PI session_file resume, cwd state, nudge buffers |
 | `internal/persona/` | Identity files, prompt assembly |
 | `internal/cron/` | Schedule store, scheduler, bridge-backed runtime |
 | `internal/telegram/` | Telegram bot handlers |
 | `internal/config/` | Config loading and validation |
 | `internal/runtime/` | Instance and project path resolution |
-| `bridge/` | TypeScript Bridge (Codex SDK wrapper) |
+| `bridge/` | TypeScript Bridge (PI SDK adapter) |
 | `pkg/stt/` | Speech-to-text |
 
 ## Versioning & Changelog

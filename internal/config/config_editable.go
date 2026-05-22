@@ -31,7 +31,7 @@ type EditableConfig struct {
 
 // Onboarded returns true if the config appears to be fully set up for use.
 func (c EditableConfig) Onboarded() bool {
-	return c.TelegramBotToken != "" && len(c.TelegramAllowedUserIDs) > 0 && c.LLMProvider != ""
+	return c.TelegramBotToken != "" && len(c.TelegramAllowedUserIDs) > 0 && (c.LLMProvider != "" || (c.LLMProvider == "" && c.LLMModel == ""))
 }
 
 func (c EditableConfig) LLMAPIKey(provider string) string {
@@ -129,7 +129,7 @@ func appConfigToEditable(cfg *AppConfig) *EditableConfig {
 // SaveEditable updates the user-editable config subset while preserving managed paths.
 func SaveEditable(r *runtime.PathResolver, editable EditableConfig) error {
 	cfg := editableToFileConfig(editable)
-	normalized := normalizeFileConfig(cfg, r)
+	normalized := normalizeFileConfig(cfg, r, editable.LLMProvider == "" && editable.LLMModel == "")
 	return writeConfigFile(r.AppConfig(), normalized)
 }
 

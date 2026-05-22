@@ -27,6 +27,33 @@ func TestValidate_FailedWorker(t *testing.T) {
 	}
 }
 
+func TestValidate_SetsCwd(t *testing.T) {
+	fb := newFakeBridge()
+	fb.SetDefault(&bridge.Event{
+		Type:    "result",
+		Content: `{"approved": true, "issues": [], "should_retry": false}`,
+	})
+	o := NewOrchestrator(fb, OrchestratorConfig{RepoRoot: "/repo/test"})
+
+	vr, err := o.Validate(
+		context.Background(),
+		Task{ID: "1", Prompt: "implement X"},
+		TaskResult{TaskID: "1", Success: true, Content: "done"},
+		"validate prompt",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !vr.Approved {
+		t.Error("expected approved")
+	}
+
+	req := fb.LastRequest()
+	if req.Options.Cwd != "/repo/test" {
+		t.Errorf("Validate bridge request Cwd = %q, want %q", req.Options.Cwd, "/repo/test")
+	}
+}
+
 func TestValidate_ApprovedByBridge(t *testing.T) {
 	fb := newFakeBridge()
 	fb.SetDefault(&bridge.Event{
@@ -112,6 +139,26 @@ func TestParseValidationResponse_Unparseable(t *testing.T) {
 	}
 	if !vr.ShouldRetry {
 		t.Error("should suggest retry for unparseable")
+	}
+}
+
+func TestConsolidate_SetsCwd(t *testing.T) {
+	fb := newFakeBridge()
+	fb.SetDefault(&bridge.Event{Type: "result", Content: "consolidated"})
+
+	o := NewOrchestrator(fb, OrchestratorConfig{RepoRoot: "/repo/consolidate"})
+
+	text, err := o.Consolidate(context.Background(), &Plan{}, nil, "consolidate prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "consolidated" {
+		t.Errorf("Consolidate returned %q, want %q", text, "consolidated")
+	}
+
+	req := fb.LastRequest()
+	if req.Options.Cwd != "/repo/consolidate" {
+		t.Errorf("Consolidate bridge request Cwd = %q, want %q", req.Options.Cwd, "/repo/consolidate")
 	}
 }
 
