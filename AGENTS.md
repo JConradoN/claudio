@@ -26,17 +26,65 @@ cd bridge && npx esbuild index.ts --bundle --platform=node --target=node18 --out
 cp bundle.js ../internal/bridge/bundle.js
 ```
 
+## Branch Policy
+
+**All implementations must be done in dedicated branches.** Never commit
+directly to `main`. Changes only reach `main` after:
+
+1. Implementation in a feature/fix branch
+2. Live validation on the daemon
+3. Explicit promotion by the user
+
+Branch lifecycle:
+```
+feature/xxx  →  stable/xxx  →  main
+  (impl)        (validation)    (release)
+```
+
+- **feature/*** — Active development. May be rebased, force-pushed, discarded.
+- **stable/*** — Validated and deployed. Only bug fixes during validation.
+  Merged to `main` when the user approves promotion.
+- **main** — Production. Only updated via merge from a `stable/*` branch.
+
 ## Workflow
 
 1. **Plan** — Understand the problem, break into atomic tasks
-2. **Review** — Question the plan before executing
-3. **Execute** — One atomic task at a time, test-first
+2. **Branch** — Create a `feature/<name>` branch from the latest `main`
+3. **Execute** — One atomic task at a time, test-first, commit to feature branch
 4. **Validate** — Run tests, verify completion criteria
-5. **Commit** — Conventional Commits: `type(scope): description`
-6. **Build & Restart daemon** — Rebuild binary and restart the daemon (see below)
-7. **Test live** — Send a test message in Telegram, verify the change works end-to-end
+5. **Deploy & Test live** — Rebuild, restart daemon, send a test message in
+   Telegram, verify the change works end-to-end
+6. **Promote to stable** — When feature is working live, merge into a
+   `stable/<name>` branch for final validation
+7. **User approval** — The user tests and approves
+8. **Merge to main** — Conventional Commits: `type(scope): description`
+9. **Push** — Push `main` to remote
 
-For trivial tasks, implement directly and validate.
+For trivial fixes (one file, no risk of regression), the user may skip the
+feature/stable branching and approve a direct commit to `main`.
+
+### Step 6-8: Promotion to main
+
+```bash
+# Create stable branch (first time)
+git checkout -b stable/<name> feature/<name>
+
+# Deploy from stable for live validation
+make deploy
+
+# After user approval, merge to main
+git checkout main
+git merge stable/<name> --no-ff
+
+# Update version and CHANGELOG (requires user approval)
+edit internal/version/version.go
+edit CHANGELOG.md
+git commit -m "chore(release): bump to vX.Y.Z"
+
+# Push
+git push origin main
+git push origin stable/<name>
+```
 
 ### Step 6: Build & Restart (mandatory after every commit)
 
@@ -57,6 +105,9 @@ This uses `make install` (build → `.new` → `mv` — never corrupts a running
 
 ## Rules
 
+- **Branch discipline**: All implementations in `feature/*` branches. Only
+  `stable/*` branches are deployed for live testing. Only user-approved
+  `stable/*` branches merge into `main`. Never commit directly to `main`.
 - Service layer for business logic — never in handlers or entrypoints
 - Errors treated explicitly — no silent swallowing
 - `context.Context` with timeout on external operations
