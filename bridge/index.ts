@@ -1150,9 +1150,8 @@ async function handleRequest(line: string): Promise<void> {
         const agentDir = piAgentDir() || getAgentDir();
         const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
         const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
-        const allModels = modelRegistry.getAll();
-        // Only show models from providers that have configured auth
-        const available = allModels.filter((m) => modelRegistry.hasConfiguredAuth(m));
+        // Only show models with configured auth (checks auth.json, env vars, and models.json apiKey fallback)
+        const available = await modelRegistry.getAvailable();
         const summary = available.map((m) => ({
           provider: m.provider,
           id: m.id,

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.5] - 2026-05-22
+
+### Fixed
+- Bridge `list-models` agora usa `ModelRegistry.getAvailable()` em vez de
+  `getAll().filter(hasConfiguredAuth)`. O método anterior só verificava
+  `auth.json`, omitindo provedores como Ollama cuja chave de API está definida
+  no próprio `models.json` (ex: `"apiKey": "ollama"`).
+
 ## [0.13.4] - 2026-05-22
 
 ### Added
