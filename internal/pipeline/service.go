@@ -141,6 +141,22 @@ func NewService(cfg Config) *Service {
 		}
 		s.resilient = NewResilientBridge(cfg.Bridge, rbCfg)
 		s.resilient.ContinuitySnapshot = s.continuitySnapshot
+		s.resilient.OnEvent = func(phase, level, message string) {
+			for _, state := range s.runLogStates {
+				// Match any active run for this bridge's events.
+				if state != nil && state.runID != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+					_ = s.runLog.RecordEvent(ctx, runlog.RunEvent{
+						RunID:   state.runID,
+						Phase:   phase,
+						Level:   level,
+						Message: message,
+					})
+					cancel()
+					return
+				}
+			}
+		}
 	}
 
 	if s.config != nil && s.config.SummaryInterval > 0 {

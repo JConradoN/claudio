@@ -214,4 +214,17 @@ func (f *fakeRunLogStore) Complete(_ context.Context, _ string, _ runlog.RunStat
 func (f *fakeRunLogStore) Latest(_ context.Context, _ int64, _ int) (*runlog.RunRecord, error) {
 	return nil, nil
 }
+func (f *fakeRunLogStore) RecordEvent(_ context.Context, _ runlog.RunEvent) error { return nil }
+func (f *fakeRunLogStore) ListEvents(_ context.Context, _ string) ([]runlog.RunEvent, error) {
+	return nil, nil
+}
+func (f *fakeRunLogStore) GetRun(_ context.Context, _ string) (*runlog.RunRecord, error) {
+	return nil, nil
+}
+func (f *fakeRunLogStore) ListRuns(_ context.Context, _ int64, _ int) ([]runlog.RunRecord, error) {
+	return nil, nil
+}
+func (f *fakeRunLogStore) Metrics(_ context.Context, _ runlog.MetricsFilter) (*runlog.MetricsResult, error) {
+	return nil, nil
+}
 func (f *fakeRunLogStore) Close() error { return nil }

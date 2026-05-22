@@ -37,6 +37,9 @@ const (
 	CmdMemoryCheckpoint
 	CmdUsers
 	CmdForgetMe
+	CmdDebugLast
+	CmdDebugRun
+	CmdDebugErrors
 )
 
 // MatchedCommand represents a message that was identified as a system command.
@@ -127,6 +130,20 @@ var commandRules = []commandRule{
 	{CmdForgetMe, []string{
 		"forget-me", "forget me", "apagar meus dados",
 		"deletar meus dados", "esquecer",
+	}, true},
+	// debug_last (exact match only)
+	{CmdDebugLast, []string{
+		"/debug last",
+		"ultima execucao", "última execução", "debug status",
+	}, true},
+	// debug_run (starts with prefix — handled in handler)
+	{CmdDebugRun, []string{
+		"/debug run",
+	}, false},
+	// debug_errors
+	{CmdDebugErrors, []string{
+		"/debug errors",
+		"ultimos erros", "últimos erros", "debug erros",
 	}, true},
 }
 
@@ -248,6 +265,24 @@ func (bc *BotController) handleCommand(c telebot.Context, cmd *MatchedCommand) e
 		reply, err = bc.cmdUsers(c)
 	case CmdForgetMe:
 		reply, err = bc.cmdForgetMe(c)
+	case CmdDebugLast:
+		if !bc.isOwner(c) {
+			reply = "Permissão negada. Comando apenas para o owner."
+			break
+		}
+		reply, err = bc.cmdDebugLast(chatID, threadID)
+	case CmdDebugRun:
+		if !bc.isOwner(c) {
+			reply = "Permissão negada. Comando apenas para o owner."
+			break
+		}
+		reply, err = bc.cmdDebugRun(chatID, threadID, cmd.Text)
+	case CmdDebugErrors:
+		if !bc.isOwner(c) {
+			reply = "Permissão negada. Comando apenas para o owner."
+			break
+		}
+		reply, err = bc.cmdDebugErrors()
 	default:
 		return fmt.Errorf("unknown command type: %d", cmd.Type)
 	}
@@ -588,7 +623,8 @@ func (bc *BotController) cmdStatus(chatID int64, threadID int, userID int64) (st
 }
 
 // statusRunLogSummary returns formatted lines describing the latest run state,
-// including status, checkpoint excerpt, and a "continua" hint when applicable.
+// including run_id, status, provider/model, duration, cost, and a checkpoint
+// excerpt. The output is concise and redacted.
 func statusRunLogSummary(rl runlog.Store, chatID int64, threadID int) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -621,22 +657,71 @@ func statusRunLogSummary(rl runlog.Store, chatID int64, threadID int) []string {
 	}
 
 	var lines []string
-	lines = append(lines, fmt.Sprintf("%s Última execução: **%s** (%s)", emoji, record.Status, when))
 
-	// Checkpoint excerpt (redacted, rune-safe truncation)
+	// Line 1: status + run_id + elapsed
+	rid := record.RunID
+	if len(rid) > 8 {
+		rid = rid[:8]
+	}
+	statusLine := fmt.Sprintf("%s Última execução: **%s** · `%s` (%s)", emoji, record.Status, rid, when)
+
+	// Append duration when available
+	if record.DurationMs > 0 {
+		dur := time.Duration(record.DurationMs) * time.Millisecond
+		statusLine += fmt.Sprintf(" · %s", dur.Round(time.Second))
+	}
+	lines = append(lines, statusLine)
+
+	// Line 2: provider/model when available
+	if record.Provider != "" || record.Model != "" {
+		modelLine := fmt.Sprintf("⚙️ Modelo: **%s/%s**", record.Provider, record.Model)
+		if record.UsedFallback {
+			modelLine += " ⚠️ fallback"
+		}
+		lines = append(lines, modelLine)
+	}
+
+	// Line 3: tokens/cost when available
+	if record.CostUSD > 0 || record.InputTokens > 0 {
+		lines = append(lines, fmt.Sprintf("💰 tokens: %d in / %d out · $%.4f",
+			record.InputTokens, record.OutputTokens, record.CostUSD))
+	}
+
+	// Error/timeout info for terminal failures
+	if record.Status == runlog.RunFailed || record.Status == runlog.RunTimedOut {
+		errMsg := record.Error
+		if record.TimeoutOrigin != "" {
+			errMsg = fmt.Sprintf("timeout: %s", record.TimeoutOrigin)
+		}
+		if errMsg != "" {
+			// Redact secrets but show the error class.
+			safeErr := statusRedactSecrets(errMsg)
+			runes := []rune(safeErr)
+			if len(runes) > 200 {
+				runes = runes[:200]
+				safeErr = string(runes) + "..."
+			}
+			lines = append(lines, fmt.Sprintf("❌ Erro: `%s`", safeErr))
+		}
+	}
+
+	// Agent name when available
+	if record.AgentName != "" {
+		lines = append(lines, fmt.Sprintf("🤖 Agent: **%s**", record.AgentName))
+	}
+
+	// Checkpoint excerpt (redacted, rune-safe truncation, max 200 chars)
 	if record.Checkpoint != "" {
 		excerpt := statusRedactSecrets(record.Checkpoint)
-		// Limit checkpoint display using rune-aware truncation to avoid
-		// splitting multi-byte UTF-8 characters.
 		runes := []rune(excerpt)
-		if len(runes) > 500 {
-			runes = runes[:500]
+		if len(runes) > 200 {
+			runes = runes[:200]
 			excerpt = string(runes) + "..."
 		}
 		lines = append(lines, fmt.Sprintf("📋 Checkpoint: `%s`", excerpt))
 	}
 
-	// Continuation hint for non-completed runs
+	// Continuation hint for non-completed runs (includes failed — retryable)
 	if record.Status != runlog.RunCompleted {
 		lines = append(lines, "💡 Digite **\"continua\"** para retomar de onde parou.")
 	}
@@ -1140,4 +1225,232 @@ func (bc *BotController) saveDefaultModel(provider, model string) error {
 	}
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Debug commands (owner only)
+// ---------------------------------------------------------------------------
+
+// cmdDebugLast returns a formatted summary of the latest run for a chat/thread.
+func (bc *BotController) cmdDebugLast(chatID int64, threadID int) (string, error) {
+	if bc.runLog == nil {
+		return "Observabilidade desativada (sem runlog).", nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	r, err := bc.runLog.Latest(ctx, chatID, threadID)
+	if err != nil {
+		return "", fmt.Errorf("buscar última execução: %w", err)
+	}
+	if r == nil {
+		return "Nenhuma execução encontrada para este chat.", nil
+	}
+
+	return formatTelegramRunSummary(r), nil
+}
+
+// cmdDebugRun returns a compact timeline for a specific run (by RunID prefix or full ID).
+func (bc *BotController) cmdDebugRun(chatID int64, threadID int, text string) (string, error) {
+	if bc.runLog == nil {
+		return "Observabilidade desativada (sem runlog).", nil
+	}
+
+	// Extract run_id from command text: "/debug run 01HX..." or "execucao 01HX..."
+	runID := extractRunID(text)
+	if runID == "" {
+		return "Uso: /debug run <run_id>\n\nUse /debug last para ver o último run_id.", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	r, err := bc.runLog.GetRun(ctx, runID)
+	if err != nil {
+		return "", fmt.Errorf("buscar execução: %w", err)
+	}
+	if r == nil {
+		return fmt.Sprintf("Execução %q não encontrada.", runID), nil
+	}
+
+	events, _ := bc.runLog.ListEvents(ctx, runID)
+	return formatTelegramRunDetail(r, events), nil
+}
+
+// cmdDebugErrors returns recent failed/timed-out runs for this chat.
+func (bc *BotController) cmdDebugErrors() (string, error) {
+	if bc.runLog == nil {
+		return "Observabilidade desativada (sem runlog).", nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	runs, err := bc.runLog.ListRuns(ctx, 0, 20)
+	if err != nil {
+		return "", fmt.Errorf("listar execuções: %w", err)
+	}
+
+	var failed []runlog.RunRecord
+	for _, r := range runs {
+		if r.Status == runlog.RunFailed || r.Status == runlog.RunTimedOut {
+			failed = append(failed, r)
+		}
+	}
+	if len(failed) == 0 {
+		return "Nenhuma execução com erro encontrada.", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("❌ Últimos %d erros:\n\n", len(failed)))
+	for _, r := range failed {
+		errMsg := r.Error
+		if r.TimeoutOrigin != "" {
+			errMsg = r.TimeoutOrigin
+		}
+		if errMsg == "" {
+			errMsg = "(sem detalhe)"
+		}
+		dur := time.Duration(r.DurationMs) * time.Millisecond
+		sb.WriteString(fmt.Sprintf("• run=%s status=%s dur=%s\n  erro: %s\n",
+			shortRunID(r.RunID), r.Status, dur.Round(time.Second), truncateTelegram(errMsg, 200)))
+	}
+	return sb.String(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+func shortRunID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func truncateTelegram(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "..."
+}
+
+// extractRunID extracts a run_id from a command text like "/debug run 01HX...".
+// Returns empty string if no valid-looking ID is found.
+func extractRunID(text string) string {
+	// Remove command prefix, keep the rest.
+	fields := strings.Fields(text)
+	for _, f := range fields {
+		if strings.HasPrefix(f, "run-") || len(f) >= 10 {
+			return f
+		}
+	}
+	// Fallback: return the last field only if it looks like a run ID.
+	if len(fields) > 0 {
+		last := fields[len(fields)-1]
+		// Skip known command words that are not run IDs.
+		switch last {
+		case "/debug", "debug", "run", "last", "errors":
+			return ""
+		}
+		return last
+	}
+	return ""
+}
+
+// formatTelegramRunSummary builds a concise /debug last output.
+func formatTelegramRunSummary(r *runlog.RunRecord) string {
+	var sb strings.Builder
+	sb.WriteString("🔎 Última execução\n")
+
+	sb.WriteString(fmt.Sprintf("run: %s · status: %s", shortRunID(r.RunID), r.Status))
+	if r.DurationMs > 0 {
+		dur := time.Duration(r.DurationMs) * time.Millisecond
+		sb.WriteString(fmt.Sprintf(" · %s", dur.Round(time.Second)))
+	}
+	sb.WriteString("\n")
+
+	if r.UserID > 0 || r.ChatID > 0 {
+		sb.WriteString(fmt.Sprintf("user: %d · chat: %d\n", r.UserID, r.ChatID))
+	}
+	if r.Provider != "" || r.Model != "" {
+		sb.WriteString(fmt.Sprintf("model: %s/%s\n", r.Provider, r.Model))
+	}
+	if r.CWD != "" {
+		sb.WriteString(fmt.Sprintf("cwd: %s\n", r.CWD))
+	}
+	if r.CostUSD > 0 || r.InputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("cost: $%.4f · tokens: %d in / %d out", r.CostUSD, r.InputTokens, r.OutputTokens))
+		if r.UsedFallback {
+			sb.WriteString(" ⚠️ fallback")
+		}
+		sb.WriteString("\n")
+	}
+	if r.Error != "" {
+		sb.WriteString(fmt.Sprintf("error: %s\n", truncateTelegram(r.Error, 150)))
+	}
+	if r.TimeoutOrigin != "" {
+		sb.WriteString(fmt.Sprintf("timeout: %s\n", r.TimeoutOrigin))
+	}
+	if r.EntryPoint != "" {
+		sb.WriteString(fmt.Sprintf("entrypoint: %s\n", r.EntryPoint))
+	}
+
+	return sb.String()
+}
+
+// formatTelegramRunDetail builds a detailed run view with timeline.
+func formatTelegramRunDetail(r *runlog.RunRecord, events []runlog.RunEvent) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📋 Execução %s\n\n", r.RunID))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", r.Status))
+	if r.EntryPoint != "" {
+		sb.WriteString(fmt.Sprintf("Entrypoint: %s\n", r.EntryPoint))
+	}
+	if r.AgentName != "" {
+		sb.WriteString(fmt.Sprintf("Agent: %s\n", r.AgentName))
+	}
+	sb.WriteString(fmt.Sprintf("Provider: %s\n", r.Provider))
+	sb.WriteString(fmt.Sprintf("Model: %s\n", r.Model))
+	if r.DurationMs > 0 {
+		dur := time.Duration(r.DurationMs) * time.Millisecond
+		sb.WriteString(fmt.Sprintf("Duração: %s\n", dur.Round(time.Millisecond)))
+	}
+	if r.InputTokens > 0 || r.OutputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("Tokens: %d in / %d out\n", r.InputTokens, r.OutputTokens))
+	}
+	if r.CostUSD > 0 {
+		sb.WriteString(fmt.Sprintf("Custo: $%.4f\n", r.CostUSD))
+	}
+	if r.Error != "" {
+		sb.WriteString(fmt.Sprintf("Erro: %s\n", truncateTelegram(r.Error, 200)))
+	}
+	if r.TimeoutOrigin != "" {
+		sb.WriteString(fmt.Sprintf("Timeout: %s\n", r.TimeoutOrigin))
+	}
+	if r.UsedFallback {
+		sb.WriteString("Fallback: sim\n")
+	}
+
+	if len(events) > 0 {
+		sb.WriteString("\nTimeline:\n")
+		for _, ev := range events {
+			t := time.Unix(ev.Timestamp, 0)
+			marker := "  "
+			switch ev.Level {
+			case "error":
+				marker = "❌"
+			case "warn":
+				marker = "⚠️"
+			}
+			sb.WriteString(fmt.Sprintf("%s %s %s", t.Format("15:04:05"), marker, ev.Phase))
+			if ev.Message != "" {
+				sb.WriteString(fmt.Sprintf(" %s", truncateTelegram(ev.Message, 100)))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
 }

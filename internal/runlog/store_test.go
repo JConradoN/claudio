@@ -359,6 +359,298 @@ func TestSQLiteStore_Reopen_PreservesData(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_RecordEventAndListEvents(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	runID := "test-run-events"
+
+	events := []RunEvent{
+		{RunID: runID, Timestamp: 1000, Phase: "telegram_received", Level: "info", Message: "message received"},
+		{RunID: runID, Timestamp: 1001, Phase: "bridge_request_started", Level: "info", Message: "starting bridge"},
+		{RunID: runID, Timestamp: 1002, Phase: "bridge_tool_use", Level: "info", Message: "Read file", MetadataJSON: `{"tool":"Read"}`},
+		{RunID: runID, Timestamp: 1003, Phase: "run_completed", Level: "info", Message: "done"},
+	}
+
+	for _, ev := range events {
+		if err := s.RecordEvent(ctx, ev); err != nil {
+			t.Fatalf("RecordEvent(%s): %v", ev.Phase, err)
+		}
+	}
+
+	got, err := s.ListEvents(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(got) != len(events) {
+		t.Fatalf("got %d events, want %d", len(got), len(events))
+	}
+
+	for i, ev := range got {
+		want := events[i]
+		if ev.RunID != want.RunID {
+			t.Errorf("event[%d] RunID = %q, want %q", i, ev.RunID, want.RunID)
+		}
+		if ev.Phase != want.Phase {
+			t.Errorf("event[%d] Phase = %q, want %q", i, ev.Phase, want.Phase)
+		}
+		if ev.Message != want.Message {
+			t.Errorf("event[%d] Message = %q, want %q", i, ev.Message, want.Message)
+		}
+		if ev.Level != want.Level {
+			t.Errorf("event[%d] Level = %q, want %q", i, ev.Level, want.Level)
+		}
+	}
+}
+
+func TestSQLiteStore_EventsOrderedByTimestamp(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	runID := "order-test"
+
+	// Insert out of order by id but timestamp should enforce order.
+	_ = s.RecordEvent(ctx, RunEvent{RunID: runID, Timestamp: 300, Phase: "phase-3"})
+	_ = s.RecordEvent(ctx, RunEvent{RunID: runID, Timestamp: 100, Phase: "phase-1"})
+	_ = s.RecordEvent(ctx, RunEvent{RunID: runID, Timestamp: 200, Phase: "phase-2"})
+
+	events, err := s.ListEvents(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3", len(events))
+	}
+	if events[0].Phase != "phase-1" {
+		t.Fatalf("events[0] = %q, want phase-1", events[0].Phase)
+	}
+	if events[1].Phase != "phase-2" {
+		t.Fatalf("events[1] = %q, want phase-2", events[1].Phase)
+	}
+	if events[2].Phase != "phase-3" {
+		t.Fatalf("events[2] = %q, want phase-3", events[2].Phase)
+	}
+}
+
+func TestSQLiteStore_GetRun(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	runID := uuid.NewString()
+	record := RunRecord{
+		RunID:     runID,
+		ChatID:    100,
+		ThreadID:  0,
+		RequestID: "req-1",
+		SessionID: "sess-abc",
+		CWD:       "/home/project",
+		Prompt:    "test getrun",
+		UserID:    42,
+		AgentName: "coder",
+		Provider:  "kimi",
+		Model:     "kimi-k2",
+	}
+	if err := s.Start(ctx, record); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	got, err := s.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetRun returned nil")
+	}
+	if got.RunID != runID {
+		t.Fatalf("RunID = %q, want %q", got.RunID, runID)
+	}
+	if got.ChatID != 100 {
+		t.Fatalf("ChatID = %d, want 100", got.ChatID)
+	}
+	if got.UserID != 42 {
+		t.Fatalf("UserID = %d, want 42", got.UserID)
+	}
+	if got.AgentName != "coder" {
+		t.Fatalf("AgentName = %q, want coder", got.AgentName)
+	}
+	if got.Provider != "kimi" {
+		t.Fatalf("Provider = %q, want kimi", got.Provider)
+	}
+	if got.Model != "kimi-k2" {
+		t.Fatalf("Model = %q, want kimi-k2", got.Model)
+	}
+}
+
+func TestSQLiteStore_GetRun_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	got, err := s.GetRun(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got != nil {
+		t.Fatal("expected nil for nonexistent run")
+	}
+}
+
+func TestSQLiteStore_ListRuns(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert runs for two different chats.
+	r1 := RunRecord{RunID: uuid.NewString(), ChatID: 100, ThreadID: 0, RequestID: "r1", Prompt: "first", UserID: 1, AgentName: "agent1"}
+	r2 := RunRecord{RunID: uuid.NewString(), ChatID: 100, ThreadID: 0, RequestID: "r2", Prompt: "second", UserID: 1, AgentName: "agent1"}
+	r3 := RunRecord{RunID: uuid.NewString(), ChatID: 200, ThreadID: 0, RequestID: "r3", Prompt: "other chat", UserID: 2, AgentName: "agent2"}
+
+	if err := s.Start(ctx, r1); err != nil {
+		t.Fatalf("Start r1: %v", err)
+	}
+	if err := s.Start(ctx, r2); err != nil {
+		t.Fatalf("Start r2: %v", err)
+	}
+	if err := s.Start(ctx, r3); err != nil {
+		t.Fatalf("Start r3: %v", err)
+	}
+
+	// List all (limit 10).
+	all, err := s.ListRuns(ctx, 0, 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("got %d runs, want 3", len(all))
+	}
+
+	// Filter by chat 100.
+	chatRuns, err := s.ListRuns(ctx, 100, 10)
+	if err != nil {
+		t.Fatalf("ListRuns chat=100: %v", err)
+	}
+	if len(chatRuns) != 2 {
+		t.Fatalf("got %d runs for chat 100, want 2", len(chatRuns))
+	}
+
+	// Filter by chat 200.
+	chat200Runs, err := s.ListRuns(ctx, 200, 10)
+	if err != nil {
+		t.Fatalf("ListRuns chat=200: %v", err)
+	}
+	if len(chat200Runs) != 1 {
+		t.Fatalf("got %d runs for chat 200, want 1", len(chat200Runs))
+	}
+	if chat200Runs[0].AgentName != "agent2" {
+		t.Fatalf("agent = %q, want agent2", chat200Runs[0].AgentName)
+	}
+}
+
+func TestSQLiteStore_Metrics(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	yesterday := now.Add(-24 * time.Hour)
+
+	// Seed runs with various statuses and extended fields.
+	runs := []RunRecord{
+		{RunID: uuid.NewString(), ChatID: 100, ThreadID: 0, RequestID: "r1", Prompt: "", Status: RunCompleted, StartedAt: now.Add(-10 * time.Minute), DurationMs: 5000, InputTokens: 100, OutputTokens: 20, CostUSD: 0.001, Provider: "kimi", Model: "kimi-k2", EntryPoint: "telegram", UsedFallback: false},
+		{RunID: uuid.NewString(), ChatID: 100, ThreadID: 0, RequestID: "r2", Prompt: "", Status: RunCompleted, StartedAt: now.Add(-5 * time.Minute), DurationMs: 3000, InputTokens: 200, OutputTokens: 50, CostUSD: 0.002, Provider: "kimi", Model: "kimi-k2", EntryPoint: "telegram", UsedFallback: false},
+		{RunID: uuid.NewString(), ChatID: 100, ThreadID: 0, RequestID: "r3", Prompt: "", Status: RunFailed, StartedAt: now.Add(-2 * time.Minute), DurationMs: 1000, InputTokens: 50, OutputTokens: 10, CostUSD: 0.0005, Provider: "anthropic", Model: "claude", EntryPoint: "telegram", UsedFallback: true},
+		{RunID: uuid.NewString(), ChatID: 200, ThreadID: 0, RequestID: "r4", Prompt: "", Status: RunTimedOut, StartedAt: yesterday, DurationMs: 60000, InputTokens: 500, OutputTokens: 100, CostUSD: 0.01, Provider: "kimi", Model: "kimi-k2", EntryPoint: "cron", UsedFallback: false},
+		{RunID: uuid.NewString(), ChatID: 200, ThreadID: 0, RequestID: "r5", Prompt: "", Status: RunRunning, StartedAt: now, DurationMs: 0, InputTokens: 0, OutputTokens: 0, CostUSD: 0, Provider: "", Model: "", EntryPoint: "telegram", UsedFallback: false},
+	}
+
+	for _, r := range runs {
+		if err := s.Start(ctx, r); err != nil {
+			t.Fatalf("Start %s: %v", r.RunID, err)
+		}
+		// Update status and extended fields after start.
+		if r.Status != RunRunning || r.DurationMs > 0 || r.InputTokens > 0 {
+			upd := RunUpdate{
+				RunID:       r.RunID,
+				Status:      &r.Status,
+				DurationMs:  &r.DurationMs,
+				InputTokens: &r.InputTokens,
+				OutputTokens: &r.OutputTokens,
+				CostUSD:     &r.CostUSD,
+				UsedFallback: &r.UsedFallback,
+			}
+			if r.EntryPoint != "" {
+				upd.EntryPoint = &r.EntryPoint
+			}
+			if r.Provider != "" {
+				upd.Provider = &r.Provider
+			}
+			if r.Model != "" {
+				upd.Model = &r.Model
+			}
+			if err := s.Update(ctx, upd); err != nil {
+				t.Fatalf("Update %s: %v", r.RunID, err)
+			}
+		}
+	}
+
+	// Query metrics for last hour (should include r1, r2, r3, r5 but not r4).
+	metrics, err := s.Metrics(ctx, MetricsFilter{
+		Since: now.Add(-1 * time.Hour),
+		Until: now.Add(1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Metrics: %v", err)
+	}
+
+	if metrics.RunsTotal != 4 {
+		t.Fatalf("RunsTotal = %d, want 4", metrics.RunsTotal)
+	}
+	if metrics.RunsCompleted != 2 {
+		t.Fatalf("RunsCompleted = %d, want 2", metrics.RunsCompleted)
+	}
+	if metrics.RunsFailed != 1 {
+		t.Fatalf("RunsFailed = %d, want 1", metrics.RunsFailed)
+	}
+	if metrics.RunsRunning != 1 {
+		t.Fatalf("RunsRunning = %d, want 1", metrics.RunsRunning)
+	}
+	if metrics.RunsTimedOut != 0 {
+		t.Fatalf("RunsTimedOut = %d, want 0 (yesterday's run excluded)", metrics.RunsTimedOut)
+	}
+	if metrics.FallbackCount != 1 {
+		t.Fatalf("FallbackCount = %d, want 1", metrics.FallbackCount)
+	}
+
+	// Tokens
+	if metrics.TokensInputTotal != 350 {
+		t.Fatalf("TokensInputTotal = %d, want 350", metrics.TokensInputTotal)
+	}
+	if metrics.TokensOutputTotal != 80 {
+		t.Fatalf("TokensOutputTotal = %d, want 80", metrics.TokensOutputTotal)
+	}
+
+	// Cost
+	if metrics.CostUSDTotal < 0.003 || metrics.CostUSDTotal > 0.004 {
+		t.Fatalf("CostUSDTotal = %.4f, want ~0.0035", metrics.CostUSDTotal)
+	}
+
+	// Provider breakdown should have 2 entries (kimi, anthropic).
+	if len(metrics.ProviderBreakdown) < 2 {
+		t.Fatalf("ProviderBreakdown = %+v, want at least 2 entries", metrics.ProviderBreakdown)
+	}
+
+	// Entrypoint breakdown
+	if len(metrics.EntrypointBreakdown) > 0 {
+		foundTelegram := false
+		for _, item := range metrics.EntrypointBreakdown {
+			if item.Key == "telegram" {
+				foundTelegram = true
+				break
+			}
+		}
+		if !foundTelegram {
+			t.Fatalf("EntrypointBreakdown missing 'telegram': %+v", metrics.EntrypointBreakdown)
+		}
+	}
+}
+
 func TestSQLiteStore_FilePermissions(t *testing.T) {
 	// Verify the runlog DB file is created with owner-only permissions.
 	// On Unix: assert 0600 for the .db file; check -wal and -shm if present.
