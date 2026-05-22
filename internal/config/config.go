@@ -410,7 +410,7 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 	for name, pc := range cfg.Providers {
 		normalized[NormalizeProvider(name)] = pc
 	}
-	return &AppConfig{
+	app := &AppConfig{
 		DefaultProvider:         cfg.DefaultProvider,
 		DefaultModel:            cfg.DefaultModel,
 		Providers:               normalized,
@@ -433,4 +433,70 @@ func toAppConfig(cfg fileConfig) *AppConfig {
 		SummaryInterval:         cfg.SummaryInterval,
 		DefaultOwnerUserID:      cfg.DefaultOwnerUserID,
 	}
+	applyEnvOverrides(app)
+	return app
+}
+
+func applyEnvOverrides(cfg *AppConfig) {
+	if cfg == nil {
+		return
+	}
+	if token := secretEnv("TELEGRAM_BOT_TOKEN"); token != "" {
+		cfg.TelegramBotToken = token
+	}
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]ProviderConfig{}
+	}
+	for _, provider := range knownEnvProviders() {
+		applyProviderEnvOverride(cfg, provider)
+	}
+	for provider := range cfg.Providers {
+		applyProviderEnvOverride(cfg, provider)
+	}
+}
+
+func knownEnvProviders() []string {
+	return []string{
+		"anthropic",
+		"google",
+		"openai",
+		"opencode-go",
+		"kimi",
+		"kimi-coding",
+		"openrouter",
+		"zai",
+		"alibaba",
+		"ollama",
+		"groq",
+	}
+}
+
+func applyProviderEnvOverride(cfg *AppConfig, provider string) {
+	key := secretEnv(providerAPIKeyEnv(provider))
+	if key == "" {
+		return
+	}
+	name := NormalizeProvider(provider)
+	providerConfig := cfg.Providers[name]
+	providerConfig.APIKey = key
+	cfg.Providers[name] = providerConfig
+}
+
+func providerAPIKeyEnv(provider string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(provider)) {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_") + "_API_KEY"
+}
+
+func secretEnv(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
 }

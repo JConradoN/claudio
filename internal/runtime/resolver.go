@@ -8,6 +8,7 @@ import (
 )
 
 const envKey = "AURELIA_HOME"
+const allowedCwdPrefixesEnv = "AURELIA_ALLOWED_CWD_PREFIXES"
 const defaultDir = ".aurelia"
 
 // PathResolver resolves and exposes all instance-directory paths.
@@ -136,7 +137,67 @@ func ResolveProjectCwd(path string) (string, error) {
 	if err := rejectSensitiveProjectCwd(resolved); err != nil {
 		return "", err
 	}
-	return filepath.Clean(resolved), nil
+	cleanResolved := filepath.Clean(resolved)
+	if err := validateAuthorizedProjectCwdPrefix(cleanResolved); err != nil {
+		return "", err
+	}
+	return cleanResolved, nil
+}
+
+func validateAuthorizedProjectCwdPrefix(cwd string) error {
+	clean := filepath.Clean(cwd)
+	for _, prefix := range authorizedProjectCwdPrefixes() {
+		if isPathWithinPrefix(clean, prefix) {
+			return nil
+		}
+	}
+	return fmt.Errorf("cwd %q is outside authorized project prefixes; set %s to allow this workspace", clean, allowedCwdPrefixesEnv)
+}
+
+func authorizedProjectCwdPrefixes() []string {
+	if raw := strings.TrimSpace(os.Getenv(allowedCwdPrefixesEnv)); raw != "" {
+		return cleanExistingPrefixes(filepath.SplitList(raw))
+	}
+	candidates := []string{os.TempDir(), "/Volumes", "/mnt", "/media"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, home)
+	}
+	return cleanExistingPrefixes(candidates)
+}
+
+func cleanExistingPrefixes(candidates []string) []string {
+	prefixes := make([]string, 0, len(candidates))
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		clean := filepath.Clean(abs)
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+			clean = filepath.Clean(resolved)
+		}
+		if seen[clean] {
+			continue
+		}
+		if info, err := os.Stat(clean); err == nil && info.IsDir() {
+			seen[clean] = true
+			prefixes = append(prefixes, clean)
+		}
+	}
+	return prefixes
+}
+
+func isPathWithinPrefix(path string, prefix string) bool {
+	rel, err := filepath.Rel(prefix, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func rejectSensitiveProjectCwd(cwd string) error {
