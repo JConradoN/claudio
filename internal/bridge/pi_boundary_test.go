@@ -195,3 +195,48 @@ func TestBridgeSessionFile_emitted(t *testing.T) {
 			"This field is critical for session persistence tracking.", target)
 	}
 }
+
+// TestBridgeListModels_resolveModelFilter verifies data-flow invariants in the
+// list-models handler: models from getAvailable() must be filtered through
+// resolveModel before being exposed as selectable.
+//
+// The assertions enforce:
+//  1. summary is NOT derived directly from available (which would skip filtering).
+//  2. resolveModel is called for each model inside the filter callback.
+//  3. A redacted diagnostic is logged when unresolvable models are excluded.
+//
+// Without this filter, models returned by getAvailable() that registry.find()
+// cannot resolve (due to provider/model name mapping differences) would be
+// shown as selectable but fail at query time with "model not found in PI registry".
+//
+// Regression test for the fix that restored model selection reliability
+// after the PI SDK integration (see bridge/index.ts list-models handler).
+func TestBridgeListModels_resolveModelFilter(t *testing.T) {
+	// INVARIANT 1: Summary must derive from filtered, NOT from available directly.
+	// This catches a regression where getAvailable() results are mapped to output
+	// while resolveModel filtering is only logged but not applied.
+	if activeCodeContains("const summary = available.map") {
+		t.Fatal("PI boundary violation: list-models output must derive from " +
+			"the filtered result, not directly from 'available'. " +
+			"Using 'const summary = available.map(...)' skips the resolveModel " +
+			"filter and can expose models that fail at query time " +
+			"with 'model not found in PI registry'.")
+	}
+
+	// INVARIANT 2: The filter callback must call resolveModel to validate each model.
+	// The pattern 'resolveModel(modelRegistry, m.provider, m.id' is specific to the
+	// filter context (the createPiSession call uses opts?.provider, opts?.model).
+	if !activeCodeContains("resolveModel(modelRegistry, m.provider, m.id") {
+		t.Fatal("PI boundary violation: list-models filter must call resolveModel " +
+			"for each model to verify it can be found at query time. " +
+			"Expected 'resolveModel(modelRegistry, m.provider, m.id)' " +
+			"inside the filter callback.")
+	}
+
+	// INVARIANT 3: Redacted diagnostic logged when models are excluded.
+	if !activeCodeContains("list-models: excluding unresolvable model") {
+		t.Fatal("PI boundary violation: list-models handler must log " +
+			"a redacted diagnostic when resolveModel filtering excludes a model. " +
+			"Expected 'redactedLog(`list-models: excluding unresolvable model ...`)'.")
+	}
+}

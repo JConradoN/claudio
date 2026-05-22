@@ -44,3 +44,12 @@
 ## Change pi-model-catalog-refresh (2026-05-22)
 - [anti-pattern] typed-nil-interface-guard
 - [pattern] telebot-callback-offline-bot
+
+## Change model-selection-regression-recovery (2026-05-22)
+- [process] runtime-baseline-before-fix
+- [anti-pattern] accessory-feature-core-regression
+- [anti-pattern] pi-model-registry-roundtrip
+- [anti-pattern] source-contract-test-limit
+
+## Change auth-symlink-daemon-credentials (2026-05-22)
+- [pattern] auth-symlink-instead-of-copy

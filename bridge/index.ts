@@ -1152,7 +1152,18 @@ async function handleRequest(line: string): Promise<void> {
         const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
         // Only show models with configured auth (checks auth.json, env vars, and models.json apiKey fallback)
         const available = await modelRegistry.getAvailable();
-        const summary = available.map((m) => ({
+        // Filter: only expose models that resolveModel can find at query time.
+        // This prevents the "model not found in PI registry" runtime error
+        // when getAvailable() returns models that registry.find() cannot resolve
+        // because of provider/model name mapping differences (see #220).
+        const filtered = available.filter((m) => {
+          const found = resolveModel(modelRegistry, m.provider, m.id);
+          if (!found) {
+            redactedLog(`list-models: excluding unresolvable model provider=${m.provider} model=${m.id}`);
+          }
+          return !!found;
+        });
+        const summary = filtered.map((m) => ({
           provider: m.provider,
           id: m.id,
           name: m.name ?? m.id,

@@ -94,6 +94,8 @@ entry text, wait for confirmation, then commit.
 
 Historical lessons from prior implementations live in `.opencode/lessons/learned/`. Check `lessons/index.md` before implementing changes in related areas.
 
+**Critical pattern: auth symlink:** The daemon's `~/.aurelia/pi-agent/auth.json` must be a symlink to `~/.pi/agent/auth.json` — never a copy. Stale credentials cause silent API hangs (model resolves but no events arrive). See `auth-symlink-instead-of-copy.md`.
+
 **Critical patterns from the 2026-05-20 code review remediation:**
 
 - **Goroutine recovery**: Every background goroutine launched by a package must have `defer recover()` at the top. If it panics, the daemon dies or leaks state. See `goroutine-recovery-mandatory.md`.
