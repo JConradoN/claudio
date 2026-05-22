@@ -63,7 +63,7 @@ The strategic differentiator is the future **Wiki Memory Gateway**: local-first,
 - Vision model fallback + Groq STT + bridge image format (PI SDK compatible)
 
 ### Recently completed (v0.11.0–v0.13.0)
-- **User Isolation MVP**: user profiles, owner gate, per-user persona/memory loading, user-scoped sessions, cron ownership, `/users`, `/forget-me`, migration CLI.
+- **User Isolation MVP + runtime hardening**: user profiles, owner gate, per-user persona/memory loading, user-scoped sessions/active runs/Bridge commands, cron ownership, `/users`, `/forgetme`, migration CLI.
 - **Delegate to PI SDK Native — core slice**: PI model resolution, PI context-file loading, PI compaction, `session_file` resume, Bridge-side session lifecycle (`steer`/`followUp`/`abort`).
 - **Security Guard-Rails**: CapabilityProfile governance, PI tool_call hooks in the Bridge, audit trail, fail-closed. 5 profiles: observe→privileged.
 - **Persistent Project Binding**: SQLite-backed `/cwd` that survives restart, topic→group fallback, explicit clear, pipeline integration.
@@ -74,7 +74,6 @@ The strategic differentiator is the future **Wiki Memory Gateway**: local-first,
 
 ### In progress
 - Closing the conceptual boundary: PI owns model/session/context/tool execution; Aurelia owns Telegram UX, identity/persona, persistence, scheduling, memory, project binding, policy/audit and orchestration.
-- User Isolation hardening: most runtime session APIs are user-scoped; remaining code-level gap is `CancelAllForUser` still issuing an unscoped bridge abort and stale spec checkboxes.
 - Agent registry boundary decision: keep Aurelia specialists as a product-layer feature for now; investigate PI-native parsing/discovery later via `agentsFilesOverride` rather than forcing a user-facing migration.
 - Orchestration Cycle: existing scaffold must be connected to validation, commit/PR, task-status updates and artifact manifests.
 - Memory/Wiki preparation: project memory scopes must become user×project private plus project-team shared before exposing Wiki MCP.
@@ -84,8 +83,8 @@ The strategic differentiator is the future **Wiki Memory Gateway**: local-first,
 Ver `.specs/project/ROADMAP.md` para o sequenciamento completo. Resumo:
 
 ```
-Sprint 0 → Delegate to PI SDK Native core ✅; remaining: docs/spec cleanup + agent registry boundary decision
-Sprint A → User Isolation MVP ✅; active session scoping mostly fixed; remaining: CancelAllForUser + cleanup/audit
+Sprint 0 → Delegate to PI SDK Native core ✅; remaining: agent registry boundary decision
+Sprint A → User Isolation MVP + runtime hardening ✅; remaining user×project memory moved to Sprint D
 Sprint B → Close Orchestration Cycle (conectar scaffold existente)
 Sprint C → Plan Mode Architecture explícito
 Sprint D → User-Scoped Project Memory

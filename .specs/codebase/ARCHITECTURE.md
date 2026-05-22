@@ -93,7 +93,7 @@
 ### Resilient Bridge & Active Run Tracking
 **Location:** `internal/pipeline/resilient_bridge.go`, `circuit_breaker.go`, `service.go`
 **Purpose:** Recover gracefully from PI failures (rate limits, dead processes, transient network errors) and avoid duplicate concurrent runs for the same chat
-**Implementation:** `ResilientBridge` wraps `bridge.Bridge` with retry-with-backoff and a per-error-class circuit breaker. `Service.activeSessions` tracks active work by `chatID:threadID:userID` and bridge-side commands (`abort`, `follow-up`, `steer`, `get-state`) carry user scope where wired. Remaining hardening: `CancelAllForUser` must stop broadcasting unscoped aborts.
+**Implementation:** `ResilientBridge` wraps `bridge.Bridge` with retry-with-backoff and a per-error-class circuit breaker. `Service.activeSessions` tracks active work by `chatID:threadID:userID`; `Cancel`, `WorkStatus`, `CancelAllForUser` and bridge-side commands (`abort`, `follow-up`, `steer`, `get-state`) carry user scope.
 
 ## Data Flow
 
