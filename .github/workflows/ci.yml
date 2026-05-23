@@ -29,6 +29,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@claudio.test"
+          git config --global user.name "CI"
+
       - name: Test
         run: go test ./...
 

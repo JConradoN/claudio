@@ -1378,34 +1378,34 @@ func formatTelegramRunSummary(r *runlog.RunRecord) string {
 	fmt.Fprintf(&sb, "run: %s · status: %s", shortRunID(r.RunID), r.Status)
 	if r.DurationMs > 0 {
 		dur := time.Duration(r.DurationMs) * time.Millisecond
-		sb.WriteString(fmt.Sprintf(" · %s", dur.Round(time.Second)))
+		fmt.Fprintf(&sb, " · %s", dur.Round(time.Second))
 	}
 	sb.WriteString("\n")
 
 	if r.UserID > 0 || r.ChatID > 0 {
-		sb.WriteString(fmt.Sprintf("user: %d · chat: %d\n", r.UserID, r.ChatID))
+		fmt.Fprintf(&sb, "user: %d · chat: %d\n", r.UserID, r.ChatID)
 	}
 	if r.Provider != "" || r.Model != "" {
-		sb.WriteString(fmt.Sprintf("model: %s/%s\n", r.Provider, r.Model))
+		fmt.Fprintf(&sb, "model: %s/%s\n", r.Provider, r.Model)
 	}
 	if r.CWD != "" {
-		sb.WriteString(fmt.Sprintf("cwd: %s\n", r.CWD))
+		fmt.Fprintf(&sb, "cwd: %s\n", r.CWD)
 	}
 	if r.CostUSD > 0 || r.InputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("cost: $%.4f · tokens: %d in / %d out", r.CostUSD, r.InputTokens, r.OutputTokens))
+		fmt.Fprintf(&sb, "cost: $%.4f · tokens: %d in / %d out", r.CostUSD, r.InputTokens, r.OutputTokens)
 		if r.UsedFallback {
 			sb.WriteString(" ⚠️ fallback")
 		}
 		sb.WriteString("\n")
 	}
 	if r.Error != "" {
-		sb.WriteString(fmt.Sprintf("error: %s\n", truncateTelegram(r.Error, 150)))
+		fmt.Fprintf(&sb, "error: %s\n", truncateTelegram(r.Error, 150))
 	}
 	if r.TimeoutOrigin != "" {
-		sb.WriteString(fmt.Sprintf("timeout: %s\n", r.TimeoutOrigin))
+		fmt.Fprintf(&sb, "timeout: %s\n", r.TimeoutOrigin)
 	}
 	if r.EntryPoint != "" {
-		sb.WriteString(fmt.Sprintf("entrypoint: %s\n", r.EntryPoint))
+		fmt.Fprintf(&sb, "entrypoint: %s\n", r.EntryPoint)
 	}
 
 	return sb.String()
