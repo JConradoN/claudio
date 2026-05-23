@@ -1312,7 +1312,7 @@ func (bc *BotController) cmdDebugErrors() (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("❌ Últimos %d erros:\n\n", len(failed)))
+	fmt.Fprintf(&sb, "❌ Últimos %d erros:\n\n", len(failed))
 	for _, r := range failed {
 		errMsg := r.Error
 		if r.TimeoutOrigin != "" {
@@ -1322,8 +1322,8 @@ func (bc *BotController) cmdDebugErrors() (string, error) {
 			errMsg = "(sem detalhe)"
 		}
 		dur := time.Duration(r.DurationMs) * time.Millisecond
-		sb.WriteString(fmt.Sprintf("• run=%s status=%s dur=%s\n  erro: %s\n",
-			shortRunID(r.RunID), r.Status, dur.Round(time.Second), truncateTelegram(errMsg, 200)))
+		fmt.Fprintf(&sb, "• run=%s status=%s dur=%s\n  erro: %s\n",
+			shortRunID(r.RunID), r.Status, dur.Round(time.Second), truncateTelegram(errMsg, 200))
 	}
 	return sb.String(), nil
 }
@@ -1375,7 +1375,7 @@ func formatTelegramRunSummary(r *runlog.RunRecord) string {
 	var sb strings.Builder
 	sb.WriteString("🔎 Última execução\n")
 
-	sb.WriteString(fmt.Sprintf("run: %s · status: %s", shortRunID(r.RunID), r.Status))
+	fmt.Fprintf(&sb, "run: %s · status: %s", shortRunID(r.RunID), r.Status)
 	if r.DurationMs > 0 {
 		dur := time.Duration(r.DurationMs) * time.Millisecond
 		sb.WriteString(fmt.Sprintf(" · %s", dur.Round(time.Second)))

@@ -684,7 +684,6 @@ func (s *Service) executeAsync(parentCtx context.Context, chatID int64, threadID
 				s.recordPipelineEvent(chatID, threadID, observability.NewErrorEvent("",
 					observability.PhaseBridgeProcessDeath, "bridge process exited during Execute"))
 			}
-			outcome = OutcomeProcessDeath
 		} else if errors.Is(err, context.Canceled) {
 			if handled := s.handleContextOutcome(parentCtx, ctx, chatID, threadID, userID, timeoutTracker); handled {
 				s.output.ConfirmMessage(chatID, messageID)
@@ -844,13 +843,6 @@ func timeoutDetails(trackers ...*runTimeoutTracker) (string, time.Duration) {
 		return timeoutOriginUnknown, 0
 	}
 	return trackers[0].snapshot()
-}
-
-func shortSessionID(sid string) string {
-	if len(sid) > 8 {
-		return sid[:8]
-	}
-	return sid
 }
 
 func sessionUserID(userID ...int64) int64 {
@@ -1142,15 +1134,6 @@ func (s *Service) recordUsage(chatID int64, threadID int, ev bridge.Event, userI
 	}
 	log.Printf("session usage: chat=%d thread=%d user=%d cost=$%.4f turns=%d input=%d output=%d",
 		chatID, threadID, userID, ev.CostUSD, ev.NumTurns, ev.InputTokens, ev.OutputTokens)
-}
-
-func (s *Service) flushDreamer(chatID int64, threadID int, userID int64) {
-	if s.dreamer == nil {
-		return
-	}
-	cwd := s.effectiveCwd(nil, chatID, threadID)
-	s.dreamer.FlushNudge(chatID, threadID, userID, cwd, s.nudgeBuffer)
-	s.InvalidateMemoryDirs(chatID, threadID, userID, cwd)
 }
 
 func (s *Service) tryExecutePlan(chatID int64, threadID int, messageID int, finalText string, userID int64) bool {
