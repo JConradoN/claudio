@@ -69,7 +69,7 @@ func (o *channelOutput) SendText(chatID int64, _ int, text string) (any, error) 
 	return nil, nil
 }
 
-func (o *channelOutput) ExecuteApprovedPlan(_ int64, _ int, _ *orchestrator.Plan) {}
+func (o *channelOutput) ExecuteApprovedPlan(_ int64, _ int, _ int, _ string, _ int64, _ *orchestrator.Plan) {}
 
 type noopProgress struct{}
 

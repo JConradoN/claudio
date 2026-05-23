@@ -30,7 +30,6 @@ func (a *app) startChatAPI() {
 		Agents:    a.agents,
 		Persona:   a.persona,
 		Sessions:  a.sessions,
-		Tracker:   a.tracker,
 		Resolver:  a.resolver,
 		MemoryDir: a.resolver.Memory(),
 		ExePath:   exePath,

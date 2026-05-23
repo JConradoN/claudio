@@ -40,7 +40,6 @@ type app struct {
 	continuity continuity.Store
 	bot        *telegram.BotController
 	sessions   *session.Store
-	tracker    *session.Tracker
 	scheduler  *cron.Scheduler
 	cronCtx    context.Context
 	cronCancel context.CancelFunc
@@ -361,7 +360,6 @@ func bootstrapApp() (*app, error) {
 		continuity:      continuityStore,
 		bot:             bot,
 		sessions:        sessions,
-		tracker:         tracker,
 		scheduler:       scheduler,
 		cronCtx:         cronCtx,
 		cronCancel:      cronCancel,

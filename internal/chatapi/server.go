@@ -32,7 +32,6 @@ type Config struct {
 	Agents       *agents.Registry
 	Persona      *persona.CanonicalIdentityService
 	Sessions     *session.Store
-	Tracker      *session.Tracker
 	Resolver     *runtime.PathResolver
 	MemoryDir    string
 	ExePath      string
@@ -64,7 +63,6 @@ func NewServer(port int, cfg Config) *Server {
 		Agents:       cfg.Agents,
 		Persona:      cfg.Persona,
 		Sessions:     cfg.Sessions,
-		Tracker:      cfg.Tracker,
 		Resolver:     cfg.Resolver,
 		MemoryDir:    cfg.MemoryDir,
 		ExePath:      cfg.ExePath,
