@@ -68,13 +68,6 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 	defer stopTyping()
 
 	text := strings.TrimSpace(caption)
-	if text == "" {
-		if len(photos) > 1 {
-			text = "Analise estas imagens."
-		} else {
-			text = "Analise esta imagem."
-		}
-	}
 
 	images, downloaded, partialMsg := bc.collectPhotoAttachments(photos)
 	defer func() { removeAll(downloaded) }()
@@ -88,6 +81,27 @@ func (bc *BotController) processPhotoInput(c telebot.Context, caption string, ph
 		// they don't wonder why their 4-photo album was analyzed as 3.
 		_ = SendContextText(c, partialMsg, &telebot.SendOptions{ThreadID: c.Message().ThreadID})
 	}
+
+	// Copy downloaded files to a persistent staging dir so the LLM can access
+	// them across multiple turns (the temp files in downloaded are cleaned up
+	// by the defer above after the first turn ends).
+	staged := stagePhotos(downloaded)
+
+	if len(staged) > 0 {
+		note := buildPhotoPathsNote(staged)
+		if text == "" {
+			text = note
+		} else {
+			text = text + "\n\n" + note
+		}
+	} else if text == "" {
+		if len(photos) > 1 {
+			text = "Analise estas imagens."
+		} else {
+			text = "Analise esta imagem."
+		}
+	}
+
 	return bc.processInputWithImages(c, text, images)
 }
 
@@ -127,6 +141,59 @@ func (bc *BotController) collectPhotoAttachments(photos []albumPhoto) ([]bridge.
 	}
 
 	return images, downloaded, buildPartialMsg(len(images), len(photos), downloadErr, tooLargeMsg)
+}
+
+const photoStagingDir = "/tmp/claudio-uploads"
+
+// stagePhotos copies downloaded temp files to a persistent staging directory
+// so the LLM can access them across multiple conversation turns.
+// The caller's temp files (src) are still cleaned up by the original defer;
+// the staged copies survive until the LLM explicitly deletes or moves them.
+func stagePhotos(srcs []string) []string {
+	if len(srcs) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(photoStagingDir, 0o750); err != nil {
+		log.Printf("stagePhotos: mkdir %s: %v", photoStagingDir, err)
+		return nil
+	}
+	var staged []string
+	for _, src := range srcs {
+		ext := filepath.Ext(src)
+		if ext == "" {
+			ext = ".jpg"
+		}
+		dst := filepath.Join(photoStagingDir, filepath.Base(src[:len(src)-len(filepath.Ext(src))]+ext))
+		data, err := os.ReadFile(src)
+		if err != nil {
+			log.Printf("stagePhotos: read %s: %v", src, err)
+			continue
+		}
+		if err := os.WriteFile(dst, data, 0o640); err != nil {
+			log.Printf("stagePhotos: write %s: %v", dst, err)
+			continue
+		}
+		staged = append(staged, dst)
+	}
+	return staged
+}
+
+// buildPhotoPathsNote returns a text note listing temp file paths so the LLM
+// can manipulate them via bash tools regardless of vision support.
+func buildPhotoPathsNote(paths []string) string {
+	var sb strings.Builder
+	if len(paths) == 1 {
+		sb.WriteString("[Imagem recebida e disponível em: ")
+		sb.WriteString(paths[0])
+	} else {
+		sb.WriteString("[Imagens recebidas e disponíveis em:")
+		for _, p := range paths {
+			sb.WriteString("\n  ")
+			sb.WriteString(p)
+		}
+	}
+	sb.WriteString("\nOs arquivos serão deletados ao fim do processamento — use ferramentas bash para mover/copiar antes disso.]")
+	return sb.String()
 }
 
 func buildPartialMsg(ok, total, downloadErr int, tooLargeMsg string) string {
@@ -425,13 +492,6 @@ func (bc *BotController) flushAlbumAndProcess(chatID int64, albumID string) {
 	defer stopTyping()
 
 	text := strings.TrimSpace(fa.caption)
-	if text == "" {
-		if len(fa.photos) > 1 {
-			text = "Analise estas imagens."
-		} else {
-			text = "Analise esta imagem."
-		}
-	}
 
 	images, downloaded, partialMsg := bc.collectPhotoAttachments(fa.photos)
 	defer func() { removeAll(downloaded) }()
@@ -444,6 +504,24 @@ func (bc *BotController) flushAlbumAndProcess(chatID int64, albumID string) {
 	if partialMsg != "" {
 		_ = SendTextWithThread(bc.bot, &telebot.Chat{ID: fa.chatID}, partialMsg, fa.threadID)
 	}
+
+	staged := stagePhotos(downloaded)
+
+	if len(staged) > 0 {
+		note := buildPhotoPathsNote(staged)
+		if text == "" {
+			text = note
+		} else {
+			text = text + "\n\n" + note
+		}
+	} else if text == "" {
+		if len(fa.photos) > 1 {
+			text = "Analise estas imagens."
+		} else {
+			text = "Analise esta imagem."
+		}
+	}
+
 	if err := bc.runPipeline(fa.chatID, fa.threadID, fa.messageID, text, images, fa.senderID); err != nil {
 		log.Printf("album: pipeline error for %s: %v", albumID, err)
 	}
