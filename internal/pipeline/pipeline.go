@@ -344,10 +344,15 @@ func (s *Service) processRun(input pipelineInput) {
 	req.Options.Images = input.images
 	s.applyVisionFallback(&req, input.images)
 
-	// Shortcut: Ollama vision — PI SDK não repassa imagens para Ollama via sendUserMessage.
-	// Quando há imagens e o provider é ollama, chama a API do Ollama diretamente.
+	// Two-step vision: Ollama descreve a imagem → pipeline normal (com WebSearch) verifica fatos.
+	// O PI SDK não repassa imagens para Ollama via sendUserMessage, então usamos a API diretamente
+	// no step 1 e injetamos a análise como contexto textual no step 2.
 	if len(input.images) > 0 && strings.EqualFold(req.Options.Provider, "ollama") {
-		if s.handleOllamaVision(input.chatID, input.threadID, input.messageID, userText, req.Options.Model, input.images) {
+		if visionAnalysis, ok := s.handleOllamaVision(input.chatID, input.threadID, input.messageID, userText, req.Options.Model, input.images); ok {
+			enriched := buildVisionTwoStepPrompt(userText, visionAnalysis)
+			req.Prompt = enriched
+			req.Options.Images = nil
+			s.executeAsync(ctx, input.chatID, input.threadID, input.messageID, req, enriched, input.userID)
 			return
 		}
 	}
@@ -379,10 +384,25 @@ func (s *Service) autoDetectProject(chatID int64, threadID int, userText string)
 	log.Printf("cwd: auto-detected %s for chat=%d thread=%d; not persisted, use /cwd %s to bind", detected, chatID, threadID, detected)
 }
 
+// buildVisionTwoStepPrompt monta o prompt enriquecido para o segundo step do two-step vision.
+// O pipeline normal recebe a análise da imagem como contexto e instrução de verificar fatos via WebSearch.
+func buildVisionTwoStepPrompt(originalText, visionAnalysis string) string {
+	userRequest := originalText
+	if userRequest == "" {
+		userRequest = "Descreva e analise a imagem."
+	}
+	return fmt.Sprintf(
+		"[ANÁLISE VISUAL DA IMAGEM — gerada pelo Ollama Vision]\n%s\n[FIM DA ANÁLISE VISUAL]\n\nPedido do usuário: %s\n\nInstrução: use a análise acima como contexto. Se ela mencionar fatos verificáveis (nomes de modelos de IA, versões de software, preços, empresas, eventos), use WebSearch para confirmar antes de afirmar. Corrija erros factuais encontrados.",
+		visionAnalysis,
+		userRequest,
+	)
+}
+
 // handleOllamaVision chama a API do Ollama diretamente para queries com imagens,
 // contornando o PI SDK que não repassa imagens para provedores não-Anthropic.
-// Retorna true se a query foi tratada com sucesso.
-func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, text, model string, images []bridge.ImageAttachment) bool {
+// Retorna (análise, true) em caso de sucesso; ("", false) em caso de erro.
+// Não envia a resposta — o caller é responsável pelo step 2.
+func (s *Service) handleOllamaVision(_ int64, _ int, _ int, text, model string, images []bridge.ImageAttachment) (string, bool) {
 	const ollamaURL = "http://localhost:11434/api/generate"
 
 	imgData := make([]string, 0, len(images))
@@ -392,12 +412,12 @@ func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, 
 		}
 	}
 	if len(imgData) == 0 {
-		return false
+		return "", false
 	}
 
 	prompt := text
 	if prompt == "" {
-		prompt = "Descreva esta imagem."
+		prompt = "Descreva esta imagem detalhadamente."
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -408,7 +428,7 @@ func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, 
 	})
 	if err != nil {
 		log.Printf("ollama vision: marshal error: %v", err)
-		return false
+		return "", false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -417,7 +437,7 @@ func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, 
 	resp, err := http.NewRequestWithContext(ctx, http.MethodPost, ollamaURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("ollama vision: request build error: %v", err)
-		return false
+		return "", false
 	}
 	resp.Header.Set("Content-Type", "application/json")
 
@@ -425,14 +445,14 @@ func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, 
 	httpResp, err := client.Do(resp)
 	if err != nil {
 		log.Printf("ollama vision: http error: %v", err)
-		return false
+		return "", false
 	}
 	defer httpResp.Body.Close()
 
 	raw, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		log.Printf("ollama vision: read error: %v", err)
-		return false
+		return "", false
 	}
 
 	var result struct {
@@ -441,17 +461,15 @@ func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, 
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		log.Printf("ollama vision: unmarshal error: %v", err)
-		return false
+		return "", false
 	}
 	if result.Error != "" {
 		log.Printf("ollama vision: model error: %s", result.Error)
-		return false
+		return "", false
 	}
 
-	log.Printf("ollama vision: ok, model=%s len=%d", model, len(result.Response))
-	_, _ = s.output.SendText(chatID, threadID, result.Response)
-	s.output.ConfirmMessage(chatID, messageID)
-	return true
+	log.Printf("ollama vision: step1 ok, model=%s len=%d — passando para pipeline normal", model, len(result.Response))
+	return result.Response, true
 }
 
 func (s *Service) applyVisionFallback(req *bridge.Request, images []bridge.ImageAttachment) {
