@@ -1,12 +1,15 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -341,6 +344,14 @@ func (s *Service) processRun(input pipelineInput) {
 	req.Options.Images = input.images
 	s.applyVisionFallback(&req, input.images)
 
+	// Shortcut: Ollama vision — PI SDK não repassa imagens para Ollama via sendUserMessage.
+	// Quando há imagens e o provider é ollama, chama a API do Ollama diretamente.
+	if len(input.images) > 0 && strings.EqualFold(req.Options.Provider, "ollama") {
+		if s.handleOllamaVision(input.chatID, input.threadID, input.messageID, userText, req.Options.Model, input.images) {
+			return
+		}
+	}
+
 	s.executeAsync(ctx, input.chatID, input.threadID, input.messageID, req, userText, input.userID)
 }
 
@@ -366,6 +377,81 @@ func (s *Service) autoDetectProject(chatID int64, threadID int, userText string)
 	}
 
 	log.Printf("cwd: auto-detected %s for chat=%d thread=%d; not persisted, use /cwd %s to bind", detected, chatID, threadID, detected)
+}
+
+// handleOllamaVision chama a API do Ollama diretamente para queries com imagens,
+// contornando o PI SDK que não repassa imagens para provedores não-Anthropic.
+// Retorna true se a query foi tratada com sucesso.
+func (s *Service) handleOllamaVision(chatID int64, threadID int, messageID int, text, model string, images []bridge.ImageAttachment) bool {
+	const ollamaURL = "http://localhost:11434/api/generate"
+
+	imgData := make([]string, 0, len(images))
+	for _, img := range images {
+		if img.Data != "" {
+			imgData = append(imgData, img.Data)
+		}
+	}
+	if len(imgData) == 0 {
+		return false
+	}
+
+	prompt := text
+	if prompt == "" {
+		prompt = "Descreva esta imagem."
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model":  model,
+		"prompt": prompt,
+		"images": imgData,
+		"stream": false,
+	})
+	if err != nil {
+		log.Printf("ollama vision: marshal error: %v", err)
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	resp, err := http.NewRequestWithContext(ctx, http.MethodPost, ollamaURL, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("ollama vision: request build error: %v", err)
+		return false
+	}
+	resp.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	httpResp, err := client.Do(resp)
+	if err != nil {
+		log.Printf("ollama vision: http error: %v", err)
+		return false
+	}
+	defer httpResp.Body.Close()
+
+	raw, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		log.Printf("ollama vision: read error: %v", err)
+		return false
+	}
+
+	var result struct {
+		Response string `json:"response"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		log.Printf("ollama vision: unmarshal error: %v", err)
+		return false
+	}
+	if result.Error != "" {
+		log.Printf("ollama vision: model error: %s", result.Error)
+		return false
+	}
+
+	log.Printf("ollama vision: ok, model=%s len=%d", model, len(result.Response))
+	_, _ = s.output.SendText(chatID, threadID, result.Response)
+	s.output.ConfirmMessage(chatID, messageID)
+	return true
 }
 
 func (s *Service) applyVisionFallback(req *bridge.Request, images []bridge.ImageAttachment) {

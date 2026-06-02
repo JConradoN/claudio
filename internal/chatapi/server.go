@@ -119,8 +119,9 @@ func (s *Server) chatID(sessionKey string) int64 {
 }
 
 type chatRequest struct {
-	Text       string `json:"text"`
-	SessionKey string `json:"session_key"`
+	Text       string                  `json:"text"`
+	SessionKey string                  `json:"session_key"`
+	Images     []bridge.ImageAttachment `json:"images,omitempty"`
 }
 
 type chatResponse struct {
@@ -148,7 +149,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer cleanup()
 
 	t0 := time.Now()
-	if err := s.pipeline.Process(chatID, 0, 0, req.Text, nil, s.ownerUserID); err != nil {
+	if err := s.pipeline.Process(chatID, 0, 0, req.Text, req.Images, s.ownerUserID); err != nil {
 		http.Error(w, "pipeline error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
