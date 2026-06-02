@@ -392,7 +392,7 @@ func buildVisionTwoStepPrompt(originalText, visionAnalysis string) string {
 		userRequest = "Descreva e analise a imagem."
 	}
 	return fmt.Sprintf(
-		"[ANÁLISE VISUAL DA IMAGEM — gerada pelo Ollama Vision]\n%s\n[FIM DA ANÁLISE VISUAL]\n\nPedido do usuário: %s\n\nInstrução: use a análise acima como contexto. Se ela mencionar fatos verificáveis (nomes de modelos de IA, versões de software, preços, empresas, eventos), use WebSearch para confirmar antes de afirmar. Corrija erros factuais encontrados.",
+		"[ANÁLISE VISUAL DA IMAGEM — gerada pelo Ollama Vision]\n%s\n[FIM DA ANÁLISE VISUAL]\n\nPedido do usuário: %s\n\nInstrução: use a análise acima como contexto. Verifique fatos pontuais se necessário (nomes de modelos, preços, versões). Responda de forma direta e concisa — sem relatório completo, sem seções longas. Máximo 3-4 parágrafos curtos.",
 		visionAnalysis,
 		userRequest,
 	)
