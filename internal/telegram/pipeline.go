@@ -166,7 +166,7 @@ func (o telegramPipelineOutput) SendText(chatID int64, threadID int, text string
 	if o.bc == nil || o.bc.bot == nil {
 		return nil, nil
 	}
-	return o.bc.bot.Send(&telebot.Chat{ID: chatID}, text, &telebot.SendOptions{ThreadID: threadID})
+	return nil, SendTextWithThread(o.bc.bot, &telebot.Chat{ID: chatID}, text, threadID)
 }
 
 func (o telegramPipelineOutput) DeleteMessage(message any) {
