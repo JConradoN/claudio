@@ -447,7 +447,7 @@ func (s *Service) handleOllamaVision(_ int64, _ int, _ int, text, model string, 
 		log.Printf("ollama vision: http error: %v", err)
 		return "", false
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	raw, err := io.ReadAll(httpResp.Body)
 	if err != nil {
