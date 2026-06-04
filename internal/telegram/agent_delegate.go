@@ -102,8 +102,8 @@ func (bc *BotController) runDelegatedTask(
 ) {
 	defer func() { _ = store.Close() }()
 
-	// Build prompt with shared context
-	prompt := buildDelegatePrompt(store, req)
+	// Build prompt with shared context + conversation history for this chat
+	prompt := buildDelegatePrompt(store, req, chatID)
 
 	_ = store.MarkRunning(taskID)
 
@@ -111,6 +111,11 @@ func (bc *BotController) runDelegatedTask(
 	defer cancel()
 
 	result := agentmesh.Run(ctx, req.agent, prompt)
+
+	// Persist this turn for continuity in future /claude calls
+	if err := store.SaveDelegateTurn(chatID, string(req.agent), req.task, result.Stdout); err != nil {
+		log.Printf("agentmesh: save delegate turn: %v", err)
+	}
 
 	// Determine final status
 	status := "done"
@@ -133,11 +138,17 @@ func (bc *BotController) runDelegatedTask(
 	}
 }
 
-// buildDelegatePrompt prepends shared context to the task prompt.
-func buildDelegatePrompt(store *agentmesh.Store, req agentDelegateRequest) string {
+// buildDelegatePrompt prepends shared context and per-chat conversation history
+// to the task prompt, giving the agent continuity between /claude calls.
+func buildDelegatePrompt(store *agentmesh.Store, req agentDelegateRequest, chatID int64) string {
 	ctx, err := store.LoadContext("", 8)
 	if err != nil {
 		log.Printf("agentmesh: load context: %v", err)
+	}
+
+	history, err := store.LoadDelegateTurns(chatID, 5)
+	if err != nil {
+		log.Printf("agentmesh: load delegate turns: %v", err)
 	}
 
 	var sb strings.Builder
@@ -145,6 +156,11 @@ func buildDelegatePrompt(store *agentmesh.Store, req agentDelegateRequest) strin
 		sb.WriteString("=== CONTEXTO COMPARTILHADO (agent-mesh fox-server) ===\n")
 		sb.WriteString(ctx)
 		sb.WriteString("=== FIM DO CONTEXTO ===\n\n")
+	}
+	if history != "" {
+		sb.WriteString("=== HISTÓRICO DESTA CONVERSA (últimas interações /claude) ===\n")
+		sb.WriteString(history)
+		sb.WriteString("=== FIM DO HISTÓRICO ===\n\n")
 	}
 	sb.WriteString("TAREFA:\n")
 	sb.WriteString(req.task)

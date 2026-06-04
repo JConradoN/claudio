@@ -79,6 +79,15 @@ func (s *Store) ensureSchema() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_audit_ts   ON audit_log(ts DESC);
 		CREATE INDEX IF NOT EXISTS idx_tasks_stat ON tasks(status, agent);
+		CREATE TABLE IF NOT EXISTS delegate_history (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id    INTEGER NOT NULL,
+			agent      TEXT    NOT NULL,
+			user_task  TEXT    NOT NULL,
+			result     TEXT    NOT NULL,
+			created_at TEXT    DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_delegate_chat ON delegate_history(chat_id, created_at DESC);
 	`)
 	if err != nil {
 		return fmt.Errorf("agent-mesh schema: %w", err)
@@ -225,6 +234,73 @@ func (s *Store) RecentTasksSummary(limit int) (string, error) {
 		return "(nenhuma task registrada)", nil
 	}
 	return buf.String(), rows.Err()
+}
+
+// SaveDelegateTurn persists a user→agent exchange for continuity between /claude calls.
+func (s *Store) SaveDelegateTurn(chatID int64, agent, userTask, result string) error {
+	if len(result) > 4000 {
+		result = result[:4000] + "…"
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO delegate_history (chat_id, agent, user_task, result, created_at)
+		VALUES (?, ?, ?, ?, datetime('now'))
+	`, chatID, agent, userTask, result)
+	if err != nil {
+		return fmt.Errorf("save delegate turn: %w", err)
+	}
+	// Keep only the last 20 turns per chat to avoid unbounded growth.
+	_, _ = s.db.Exec(`
+		DELETE FROM delegate_history
+		WHERE chat_id = ? AND id NOT IN (
+			SELECT id FROM delegate_history WHERE chat_id = ?
+			ORDER BY created_at DESC LIMIT 20
+		)
+	`, chatID, chatID)
+	return nil
+}
+
+// LoadDelegateTurns returns the last N turns for a chat as a prompt-ready string.
+func (s *Store) LoadDelegateTurns(chatID int64, limit int) (string, error) {
+	rows, err := s.db.Query(`
+		SELECT agent, user_task, result, created_at
+		FROM delegate_history
+		WHERE chat_id = ?
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, chatID, limit)
+	if err != nil {
+		return "", fmt.Errorf("load delegate turns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type turn struct {
+		agent, task, result, ts string
+	}
+	var turns []turn
+	for rows.Next() {
+		var t turn
+		if err := rows.Scan(&t.agent, &t.task, &t.result, &t.ts); err != nil {
+			continue
+		}
+		turns = append(turns, t)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(turns) == 0 {
+		return "", nil
+	}
+
+	// Reverse so oldest first (natural reading order)
+	for i, j := 0, len(turns)-1; i < j; i, j = i+1, j-1 {
+		turns[i], turns[j] = turns[j], turns[i]
+	}
+
+	var buf strings.Builder
+	for _, t := range turns {
+		fmt.Fprintf(&buf, "--- [%s] Usuário pediu:\n%s\n\n[%s] Resposta:\n%s\n\n", t.ts, t.task, t.agent, t.result)
+	}
+	return buf.String(), nil
 }
 
 // SharedMemorySummary returns a brief listing of all shared_memory keys.

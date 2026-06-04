@@ -13,8 +13,9 @@ const (
 	// DefaultTimeout is the maximum time to wait for a CLI agent to respond.
 	DefaultTimeout = 5 * time.Minute
 
-	// maxResultBytes caps how much output we store/display (Telegram limit).
-	maxResultBytes = 3800
+	// maxResultBytes caps how much output we store/display.
+	// The Telegram split (output.go) handles chunking at 3900 chars.
+	maxResultBytes = 32000
 )
 
 // AgentName identifies which CLI to invoke.
@@ -53,8 +54,16 @@ func (r ExecResult) TelegramText(agent AgentName) string {
 }
 
 // RunClaude invokes `claude -p "<prompt>"` and captures stdout.
+// --allowedTools pre-approves common file and shell operations so the agent
+// does not stall waiting for interactive confirmation in non-TTY mode.
+// --append-system-prompt ensures output goes to chat, not to disk, unless
+// the user explicitly asks to save to a path.
 func RunClaude(ctx context.Context, prompt string) ExecResult {
-	return runSubprocess(ctx, "claude", []string{"-p", prompt})
+	return runSubprocess(ctx, "claude", []string{
+		"-p", prompt,
+		"--allowedTools", "Read,Write,Edit,Bash,Grep,Glob",
+		"--append-system-prompt", "Output your response as plain text directly to stdout. Do NOT write files or save content to disk unless the user explicitly provides a file path to save to.",
+	})
 }
 
 // RunGemini invokes gemini via stdin to avoid OS arg-length limits.
